@@ -11,8 +11,8 @@ Erzeugt am 2026-11-16 (0x200-Archive) und 2026-11-16 abends (0x300, je 24 bzw. 5
 | `cpal.tsv.gz` | `client-dev/full/cpal.grf` | 45.555 | 0 | 0 |
 | `rdata.tsv.gz` | `0 OTHER CLIENTS/client-kro/rdata.grf` | 24.756 | 0 | 0 |
 | `data.tsv.gz` | `0 OTHER CLIENTS/client-kro/data.grf` (identisch mit `client-dev/full/data.grf`, byteweise verglichen) | 202.358 | 0 | 0 |
-| `data-kro-latest.tsv.gz` | `0 GRFs/data kro latest.grf` (**GRF 0x300**, Warpgate 2026-11-16) | 261.389 (261.359 Dateien + 30 Marker) | 0 | 0 |
-| `data-merged.tsv.gz` | `0 GRFs/data (merged kro+chris).grf` (**GRF 0x300**, kRO + Chris) | 406.675 (406.650 Dateien + 25 Marker) | 0 | 0 |
+| `data-kro-latest.tsv.gz` | `0 GRFs/data kro latest.grf` (**GRF 0x300**, Warpgate 2026-11-16) | 261.389 (davon 30 unkomprimiert gespeichert, Flags 0) | 0 | 0 |
+| `data-merged.tsv.gz` | `0 GRFs/data (merged kro+chris).grf` (**GRF 0x300**, kRO + Chris) | 406.675 (davon 25 unkomprimiert gespeichert, Flags 0) | 0 | 0 |
 
 `SHA256SUMS` enthält die SHA-256 der Quellarchive (Pfad relativ zu `RO/1 CLIENT-SIDE`), damit klar ist, welche Datei gemeint ist. Prüfen: `cd "RO/1 CLIENT-SIDE" && shasum -a 256 -c "0 GRFs/RustyGRF/tests/golden/SHA256SUMS"`.
 

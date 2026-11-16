@@ -122,8 +122,10 @@ fn info_ls_and_verify_on_a_0x300_archive() {
             v["files"].as_u64(),
             v["markers"].as_u64()
         ),
-        (Some(261_389), Some(261_359), Some(30))
+        // the 30 flags-0 entries are PNGs stored uncompressed, not empty markers
+        (Some(261_389), Some(261_389), Some(0))
     );
+    assert_eq!(v["raw"], 30);
     assert_eq!(v["table"]["key_block"], 0);
     assert!(
         v["file_size"].as_u64().unwrap() < u64::from(u32::MAX),

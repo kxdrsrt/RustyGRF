@@ -23,6 +23,7 @@ pub enum Severity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueKind {
     Markers,
+    RawEntries,
     SharedData,
     OutOfRange,
     Overlap,
@@ -49,6 +50,8 @@ pub struct VerifyReport {
     pub entries: usize,
     pub files: usize,
     pub markers: usize,
+    /// Files stored uncompressed (flags 0 with data); they are counted in `files`.
+    pub raw: usize,
     /// Entries whose content was decoded.
     pub decoded: usize,
     pub issues: Vec<Issue>,
@@ -94,13 +97,25 @@ pub fn verify<R: ReadAt>(
     };
     rep.markers = a.entries().iter().filter(|e| e.is_marker()).count();
     rep.files = rep.entries - rep.markers;
+    rep.raw = a.entries().iter().filter(|e| e.is_raw()).count();
+    if rep.raw > 0 {
+        rep.issues.push(Issue {
+            severity: Severity::Info,
+            kind: IssueKind::RawEntries,
+            entry: None,
+            message: format!(
+                "{} files are stored uncompressed (flags 0, as in the official archive)",
+                rep.raw
+            ),
+        });
+    }
     if rep.markers > 0 {
         rep.issues.push(Issue {
             severity: Severity::Info,
             kind: IssueKind::Markers,
             entry: None,
             message: format!(
-                "{} folder/empty marker entries (flags 0, size 0), not extracted",
+                "{} empty marker entries (flags 0, no data), not extracted",
                 rep.markers
             ),
         });

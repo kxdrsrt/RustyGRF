@@ -61,7 +61,26 @@ pub fn decode(stream: &[u8], size: usize, entry_flags: u8) -> Decoded {
             status: DecodeStatus::Encrypted,
         };
     }
-    if entry_flags & flags::FILE == 0 || (size == 0 && stream.is_empty()) {
+    if entry_flags & flags::FILE == 0 {
+        // flags 0: an empty marker, or a file stored uncompressed (measured, see Entry::is_raw)
+        let got = stream.len().min(size);
+        let status = match stream.len().cmp(&size) {
+            std::cmp::Ordering::Equal => DecodeStatus::Ok,
+            std::cmp::Ordering::Less => DecodeStatus::Truncated {
+                got,
+                expected: size,
+            },
+            std::cmp::Ordering::Greater => DecodeStatus::SizeMismatch {
+                got: stream.len(),
+                expected: size,
+            },
+        };
+        return Decoded {
+            data: stream[..got].to_vec(),
+            status,
+        };
+    }
+    if size == 0 && stream.is_empty() {
         return Decoded {
             data: Vec::new(),
             status: DecodeStatus::Ok,
@@ -307,6 +326,34 @@ mod tests {
                 expected: 5
             }
         ));
+    }
+
+    #[test]
+    fn flags_zero_entries_with_data_are_stored_uncompressed() {
+        // measured: the flags-0 entries of the 0x300 archives are PNGs with zsize == size
+        let d = decode(b"\x89PNG data", 9, 0);
+        assert_eq!(
+            (d.status, d.data),
+            (DecodeStatus::Ok, b"\x89PNG data".to_vec())
+        );
+        let short = decode(b"abc", 9, 0);
+        assert_eq!(
+            short.status,
+            DecodeStatus::Truncated {
+                got: 3,
+                expected: 9
+            }
+        );
+        assert_eq!(short.data, b"abc");
+        let long = decode(b"abcdef", 3, 0);
+        assert_eq!(
+            long.status,
+            DecodeStatus::SizeMismatch {
+                got: 6,
+                expected: 3
+            }
+        );
+        assert_eq!(long.data, b"abc");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use crate::archive::Archive;
 
+mod raw;
 mod repack;
 mod v300;
 use crate::codec::{DecodeStatus, tests_support};

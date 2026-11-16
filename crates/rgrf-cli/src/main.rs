@@ -204,7 +204,14 @@ fn open(path: &Path) -> Result<(Archive, u128)> {
 
 fn flags_text(e: &Entry) -> String {
     let mut s = String::new();
-    s.push(if e.is_file() { 'F' } else { '-' });
+    // F compressed file, R file stored uncompressed (flags 0 with data)
+    s.push(if e.is_file() {
+        'F'
+    } else if e.is_raw() {
+        'R'
+    } else {
+        '-'
+    });
     // H header crypted (0x02), D data crypted (0x04), G Gravity protected (0x80)
     s.push(if e.flags & 0x02 != 0 { 'H' } else { '-' });
     s.push(if e.flags & 0x04 != 0 {
@@ -220,6 +227,8 @@ fn flags_text(e: &Entry) -> String {
 fn entry_json(i: usize, e: &Entry, mode: NameMode) -> Value {
     let kind = if e.is_marker() {
         "marker"
+    } else if e.is_raw() {
+        "raw"
     } else if e.is_encrypted() {
         "encrypted"
     } else {
@@ -388,6 +397,7 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
     let (a, open_ms) = open(grf)?;
     let es = a.entries();
     let markers = es.iter().filter(|e| e.is_marker()).count();
+    let raw = es.iter().filter(|e| e.is_raw()).count();
     let encrypted = es.iter().filter(|e| e.is_encrypted()).count();
     let packed: u64 = es.iter().map(|e| u64::from(e.zsize)).sum();
     let unpacked: u64 = es.iter().map(|e| u64::from(e.size)).sum();
@@ -415,7 +425,7 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             "path": grf.display().to_string(),
             "file_size": a.file_len(),
             "version": format!("0x{:03x}", a.header().version),
-            "entries": es.len(), "files": es.len() - markers, "markers": markers,
+            "entries": es.len(), "files": es.len() - markers, "markers": markers, "raw": raw,
             "encrypted": encrypted, "shared_data_entries": shared,
             "packed_bytes": packed, "unpacked_bytes": unpacked,
             "table": {"offset": t.abs_offset, "packed": t.zsize, "unpacked": t.size, "key_block": t.key_block},
@@ -429,10 +439,11 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
         println!("File:       {} ({} bytes)", grf.display(), a.file_len());
         println!("Version:    0x{:03x}", a.header().version);
         println!(
-            "Entries:    {} ({} files, {} markers)",
+            "Entries:    {} ({} files, {} empty markers; {} files stored uncompressed)",
             es.len(),
             es.len() - markers,
-            markers
+            markers,
+            raw
         );
         println!("Content:    {packed} bytes packed, {unpacked} bytes unpacked (sum over entries)");
         println!(
@@ -635,7 +646,7 @@ fn verify_cmd(cli: &Cli, grf: &Path, no_decode: bool, all: bool) -> Result<i32> 
             .collect();
         print_json(&json!({
             "schema_version": SCHEMA_VERSION,
-            "entries": r.entries, "files": r.files, "markers": r.markers, "decoded": r.decoded,
+            "entries": r.entries, "files": r.files, "markers": r.markers, "raw": r.raw, "decoded": r.decoded,
             "errors": r.count(Severity::Error), "warnings": r.count(Severity::Warning),
             "infos": r.count(Severity::Info), "issues": issues,
             "seconds": started.elapsed().as_secs_f64(),
@@ -774,6 +785,7 @@ fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Res
             "entries": r.entries, "files": r.files, "markers": r.markers,
             "blocks": r.blocks, "shared_files": r.shared_files,
             "encrypted_blocks": r.encrypted_blocks, "damaged_blocks": r.damaged.len(),
+            "stored_blocks": r.stored_blocks,
             "kept_original": r.kept_original, "recompressed": r.recompressed,
             "source_file_bytes": r.source_file_len, "source_stream_bytes": r.source_stream_bytes,
             "output_file_bytes": r.output_file_len, "output_stream_bytes": r.output_stream_bytes,
@@ -794,9 +806,10 @@ fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Res
         );
         if !r.dry_run {
             println!(
-                "Streams:  kept original {}, re-encoded {}, copied unchanged {} encrypted + {} damaged",
+                "Streams:  kept original {}, re-encoded {}, copied unchanged: {} stored uncompressed, {} encrypted, {} damaged",
                 r.kept_original,
                 r.recompressed,
+                r.stored_blocks,
                 r.encrypted_blocks,
                 r.damaged.len()
             );

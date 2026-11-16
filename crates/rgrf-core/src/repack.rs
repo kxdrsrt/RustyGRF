@@ -81,6 +81,8 @@ pub struct RepackReport {
     pub shared_files: usize,
     /// Blocks copied unchanged because they are encrypted.
     pub encrypted_blocks: usize,
+    /// Blocks copied unchanged because the source stores them uncompressed (flags 0 with data).
+    pub stored_blocks: usize,
     /// Blocks copied unchanged because they are damaged (indices of their first entry).
     pub damaged: Vec<usize>,
     /// Blocks whose original stream was kept (same codec, not larger).
@@ -129,14 +131,34 @@ pub(crate) enum Expected {
     Nothing,
 }
 
+/// How a block ends up in the output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Encoded,
+    KeptOriginal,
+    Encrypted,
+    Damaged,
+    Stored,
+}
+
 pub(crate) struct Prepared {
     pub(crate) unit: usize,
+    kind: Kind,
     stream: Vec<u8>,
     /// `Some((zsize, aligned))` for blocks copied unchanged.
     raw: Option<(u32, u32)>,
     flags: u8,
-    kept: bool,
     pub(crate) expected: Expected,
+}
+
+#[derive(Default)]
+struct Stats {
+    kept: usize,
+    recompressed: usize,
+    encrypted: usize,
+    stored: usize,
+    stream_bytes: u64,
+    damaged: Vec<usize>,
 }
 
 /// What the writer thread reports per written block: unit, position, flags, expectation.
@@ -199,15 +221,18 @@ pub(crate) fn plan_units<R: ReadAt>(
             })
             .collect();
         let mut merged: Vec<Unit> = Vec::with_capacity(units.len());
-        let mut seen: HashMap<([u8; 32], u32), usize> = HashMap::new();
+        let mut seen: HashMap<([u8; 32], u32, bool), usize> = HashMap::new();
         for (mut u, h) in units.into_iter().zip(hashes) {
             u.hash = h?;
-            let size = src.entry(u.members[0])?.size;
+            let (size, raw) = {
+                let e = src.entry(u.members[0])?;
+                (e.size, e.is_raw())
+            };
             match u.hash {
-                Some(h) => match seen.get(&(h, size)) {
+                Some(h) => match seen.get(&(h, size, raw)) {
                     Some(&into) => merged[into].members.extend(u.members),
                     None => {
-                        seen.insert((h, size), merged.len());
+                        seen.insert((h, size, raw), merged.len());
                         merged.push(u);
                     }
                 },
@@ -239,10 +264,10 @@ pub(crate) fn prepare<R: ReadAt>(
         };
         return Ok(Prepared {
             unit: unit_id,
+            kind: Kind::Encrypted,
             stream: raw,
             raw: Some((e.zsize, e.zsize_aligned)),
             flags: e.flags,
-            kept: false,
             expected,
         });
     }
@@ -255,16 +280,21 @@ pub(crate) fn prepare<R: ReadAt>(
             Expected::Data(unit.hash.unwrap_or_else(|| sha(data)), class)
         }
     };
-    if !d.status.is_ok() {
-        // cannot be re-encoded faithfully: keep the stored bytes (and what the client would see)
+    if !d.status.is_ok() || e.is_raw() {
+        // Damaged: cannot be re-encoded faithfully, keep the stored bytes (and what the client
+        // would see). Stored uncompressed (flags 0): keep as the official archive has it.
         let raw = src.read_raw_aligned(rep)?;
         return Ok(Prepared {
             unit: unit_id,
+            kind: if d.status.is_ok() {
+                Kind::Stored
+            } else {
+                Kind::Damaged
+            },
             expected: expected(&d.data),
             stream: raw,
             raw: Some((e.zsize, e.zsize_aligned)),
             flags: e.flags,
-            kept: false,
         });
     }
     let mut stream = encode(opts.method, &d.data);
@@ -278,11 +308,15 @@ pub(crate) fn prepare<R: ReadAt>(
     }
     Ok(Prepared {
         unit: unit_id,
+        kind: if kept {
+            Kind::KeptOriginal
+        } else {
+            Kind::Encoded
+        },
         expected: expected(&d.data),
         stream,
         raw: None,
         flags: flags::FILE,
-        kept,
     })
 }
 
@@ -401,7 +435,7 @@ fn write_all<R: ReadAt>(
     let total = units.len() as u64;
 
     let (tx, rx) = mpsc::sync_channel::<Vec<Prepared>>(1);
-    let mut stats = (0usize, 0usize, 0usize, 0u64, Vec::<usize>::new()); // kept, recompressed, encrypted, stream bytes, damaged
+    let mut stats = Stats::default();
 
     let mut produced: Result<()> = Ok(());
     let written: Result<(Writer<BufWriter<File>>, Vec<Written>)> = std::thread::scope(|scope| {
@@ -431,14 +465,14 @@ fn write_all<R: ReadAt>(
             match batch {
                 Ok(batch) => {
                     for p in &batch {
-                        let first = units[p.unit].members[0];
-                        match p.raw {
-                            Some(_) if src.entries()[first].is_encrypted() => stats.2 += 1,
-                            Some(_) => stats.4.push(first),
-                            None if p.kept => stats.0 += 1,
-                            None => stats.1 += 1,
+                        match p.kind {
+                            Kind::Encoded => stats.recompressed += 1,
+                            Kind::KeptOriginal => stats.kept += 1,
+                            Kind::Encrypted => stats.encrypted += 1,
+                            Kind::Stored => stats.stored += 1,
+                            Kind::Damaged => stats.damaged.push(units[p.unit].members[0]),
                         }
-                        stats.3 += p.stream.len() as u64;
+                        stats.stream_bytes += p.stream.len() as u64;
                     }
                     if tx.send(batch).is_err() {
                         break; // the writer stopped; its error is returned below
@@ -500,11 +534,12 @@ fn write_all<R: ReadAt>(
     std::io::Write::flush(&mut out)?;
     drop(out);
 
-    report.kept_original = stats.0;
-    report.recompressed = stats.1;
-    report.encrypted_blocks = stats.2;
-    report.output_stream_bytes = stats.3;
-    report.damaged = stats.4;
+    report.kept_original = stats.kept;
+    report.recompressed = stats.recompressed;
+    report.encrypted_blocks = stats.encrypted;
+    report.stored_blocks = stats.stored;
+    report.output_stream_bytes = stats.stream_bytes;
+    report.damaged = stats.damaged;
     report.output_file_len = len;
 
     if opts.verify {
@@ -534,7 +569,10 @@ pub(crate) fn verify_output<R: ReadAt>(
         ));
     }
     for (i, (a, b)) in src.entries().iter().zip(out.entries()).enumerate() {
-        if a.name != b.name || a.size != b.size && !a.is_marker() || a.is_marker() != b.is_marker()
+        if a.name != b.name
+            || a.size != b.size && !a.is_marker()
+            || a.is_marker() != b.is_marker()
+            || a.is_raw() != b.is_raw()
         {
             return fail(format!("entry {i} differs in name, size or kind"));
         }

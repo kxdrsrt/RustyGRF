@@ -124,7 +124,7 @@ impl<R: ReadAt> Archive<R> {
     /// empty and encrypted entries.
     pub fn sniff_codec(&self, index: usize) -> Result<Option<codec::Codec>> {
         let e = self.entry(index)?;
-        if e.is_marker() || e.is_encrypted() || e.zsize == 0 {
+        if !e.is_file() || e.is_encrypted() || e.zsize == 0 {
             return Ok(None);
         }
         if e.abs_offset() >= self.file_len {
