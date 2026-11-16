@@ -4,8 +4,9 @@ Jede Runde ist eine **eigene, versionierte Datei**. Die jeweils neueste ist die 
 
 | Version | Datei | Inhalt | Status |
 |---|---|---|---|
-| **4** | [v4-2026-11-16-aktuell.md](v4-2026-11-16-aktuell.md) | nur offene Punkte (9) | **aktuell** |
-| 3 | [v3-2026-11-16-archiv.md](v3-2026-11-16-archiv.md) | alle 22 Punkte mit deinen Antworten, je Punkt mit Status ✅/🟡/🔶 | eingefroren |
+| **5** | [v5-2026-11-16-aktuell.md](v5-2026-11-16-aktuell.md) | keine offenen Fragen, Beschlüsse zu v4 | **aktuell** |
+| 4 | [v4-2026-11-16-archiv.md](v4-2026-11-16-archiv.md) | 9 offene Punkte, jetzt mit Antworten | eingefroren |
+| 3 | [v3-2026-11-16-archiv.md](v3-2026-11-16-archiv.md) | alle 22 Punkte mit Antworten, je Punkt Status ✅/🟡/🔶 | eingefroren |
 
 (Version 1 und 2 wurden nicht einzeln abgelegt; ihr Inhalt steckt in Version 3.)
 

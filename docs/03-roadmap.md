@@ -24,6 +24,14 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
   - Ordnermarker (Flags `0x00`, Größe 0) werden gelistet und mitgezählt (202.358), `verify` meldet sie nur als Hinweis. Verschlüsselte Einträge (Flags `0x03`, in `rdata.grf`: `msgstring_kr_s.lub`) werden gelistet, mit Warnung (Exit 2), nicht extrahiert.
   - Kern mit Fortschritts-Callback und Abbruch-Token (für CLI/MCP/GUI).
 
+**Ergebnis M1 (2026-11-16, Apple M5 Pro, Release-Build, Archive im Dateicache):**
+- [x] Eintragslisten von `cdata`, `core`, `cpal`, `rdata`, `data` (202.358) identisch mit den Golden Files aus GRF Editor (Pfad, `zsize`, `zsize_aligned`, `size`, Flags, Offset): 10 Tests in `crates/rgrf-core/tests/golden.rs`.
+- [x] CRC32 und MD5 **aller** Einträge der fünf Archive identisch mit GRF Editor (inkl. 4.576 LZMA-Einträge), `data` in 4,8 s. Gegenprobe (Vergleich umgedreht): alle 3.973 `cdata`-Einträge schlagen dann fehl, es wird also jeder Eintrag verglichen.
+- [x] Extraktion von `data.grf` (202.357 Dateien, 15,1 GiB) in 11 s; gegen den von GRF Editor entpackten Ordner `data-official`: **202.356 von 202.357 Dateien byteidentisch** (MD5), Namen nach Unicode-Normalisierung (NFC) und ohne Groß-/Kleinschreibung gleich. Abweichung: `worm_tail_damage.wav` (GRF Editor 1.407 Bytes, RustyGRF 1.403, siehe Format-Notizen); GRF Editor schreibt außerdem den Ordnermarker als leere Datei, RustyGRF überspringt Marker.
+- [x] `data.grf` öffnen: **32 ms** (Abnahme < 2 s). `verify` von `data.grf` (16 GB entpackt) in 3,0 s, Exit 2: eine Warnung (`worm_tail_damage.wav`, 1.403 von 1.410 Bytes), ein Hinweis (Marker). `rdata`: eine Warnung (verschlüsselter Eintrag). `cdata`, `core`, `cpal`: sauber, Exit 0.
+- [x] 53 Tests (Unit, synthetische Archive, Golden, CLI), `cargo fmt`, `cargo clippy -D warnings`, `cargo deny check` ohne Befund.
+- Nicht getestet: **Lauf unter Windows und Linux** (`cargo check` für `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` und `x86_64-unknown-linux-gnu` ist fehlerfrei, ausgeführt wurde nur auf macOS; Windows-Dateinamen mit unzulässigen Zeichen wie `?` sind nicht behandelt, siehe M5), große Archive über 4 GiB (0x300, M1b).
+
 ## M1b – GRF 0x300 lesen (vor M2)
 - Header "Event Horizon", 64-Bit-Offset, 21-Byte-Einträge (gemessen, siehe [02-format-notes.md](02-format-notes.md)).
 - **Abnahme:** `data kro latest.grf` (261.359 Dateien + 30 Ordnermarker) und `data (merged kro+chris).grf` (406.650 Dateien + 25 Marker) listen und prüfen; Eintragsliste und Hashes identisch mit den Golden Files aus der VM (GRF Editor liest 0x300).

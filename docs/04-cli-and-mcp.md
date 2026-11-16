@@ -2,14 +2,16 @@
 
 ## CLI `rgrf`
 
-Globale Optionen: `--json` (maschinenlesbar), `--names raw|cp949|utf8` (Anzeige, siehe [02-format-notes.md](02-format-notes.md)), `--quiet`, `--threads N`.
-Exit-Codes: `0` ok, `1` Fehler, `2` Warnungen (z. B. defekter Eintrag toleriert), `3` Prüfung fehlgeschlagen.
+Globale Optionen: `--json` (maschinenlesbar, Feld `schema_version`), `--names cp1252|cp949|utf8|raw` (Anzeige und Dateinamen beim Extrahieren, Standard `cp1252` wie GRF Editor, siehe [02-format-notes.md](02-format-notes.md)), `--quiet`, `--threads N`.
+Exit-Codes: `0` ok, `1` Fehler, `2` Warnungen (z. B. defekter Eintrag toleriert, verschlüsselter Eintrag übersprungen), `3` Prüfung fehlgeschlagen (`verify` fand Fehler).
+
+**Stand M1 (umgesetzt und getestet):** `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `*`/`?` sind eine Teilzeichenkette (ohne Groß-/Kleinschreibung, `/` = `\`), mit Platzhaltern ein Glob; reguläre Ausdrücke gibt es noch nicht. `info --codecs` zählt zlib/LZMA (liest ein Byte je Eintrag). `extract` überschreibt nie: Standard bricht bei vorhandenem Ziel ab (`--on-collision skip|rename`, `--overwrite`), verweigert `..`/absolute Pfade und Symlink-Ausbrüche, legt Ordner in Archivreihenfolge an (reproduzierbare Schreibweise auf case-insensitiven Dateisystemen), schreibt beschädigte Einträge mit dem wiederherstellbaren Teil (Warnung, Exit 2) und überspringt Marker und verschlüsselte Einträge.
 
 | Befehl | Zweck |
 |---|---|
 | `rgrf info <grf>` | Version, Größe, Anzahl Einträge, Kompressionsmethoden, Warnungen |
-| `rgrf ls <grf> [pattern] [--long]` | Einträge auflisten (Glob/Regex, Größe, Hash) |
-| `rgrf find <grf> <pattern>` | Suchen (Name, Endung) |
+| `rgrf ls <grf> [pattern] [--long]` | Einträge auflisten (Glob oder Teilzeichenkette, Größen, Flags, Offset) |
+| `rgrf find <grf> [pattern] [--ext spr,act]` | Suchen (Name, Endung), Ausgabe wie `ls --long` |
 | `rgrf cat <grf> <pfad>` | Eintrag auf stdout |
 | `rgrf extract <grf> <ziel> [pattern]` | Entpacken (parallel, mit Namenmodus) |
 | `rgrf verify <grf>` | Tabelle, Offsets, Überlappungen, Dekompression, Größen, Duplikate |
