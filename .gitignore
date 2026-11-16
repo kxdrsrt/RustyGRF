@@ -1,0 +1,19 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Lokale Cargo-Konfiguration (Bauverzeichnis ausserhalb des Projekts)
+/.cargo/
+
+# Testdaten (gross, nicht ins Repo)
+*.grf
+*.gpf
+*.thor
+*.grf.bak
+/testdata/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
