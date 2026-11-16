@@ -535,6 +535,85 @@ fn directory_spelling_follows_archive_order_not_thread_timing() {
     }
 }
 
+#[test]
+fn duplicate_targets_are_written_in_archive_order_not_thread_timing() {
+    let mut entries: Vec<T> = (0..40)
+        .map(|i| file(&format!("data\\other{i}.txt"), b"o"))
+        .collect();
+    entries.insert(5, file("data\\dup.txt", b"first"));
+    entries.insert(30, file("DATA\\Dup.TXT", b"second"));
+    let g = open(&entries);
+    let ctl = Control::default();
+    let dup = |dir: &std::path::Path| {
+        let mut found = Vec::new();
+        for e in std::fs::read_dir(dir.join("data")).unwrap() {
+            let name = e.unwrap().file_name().to_string_lossy().to_lowercase();
+            if name.starts_with("dup") {
+                found.push(name);
+            }
+        }
+        found.sort();
+        found
+    };
+    for round in 0..4 {
+        let dir = tmpdir(&format!("dupr{round}"));
+        let rename = ExtractOptions {
+            on_collision: OnCollision::Rename,
+            ..ExtractOptions::default()
+        };
+        let r = extract(&g, &all(&g), &dir, &rename, &ctl).unwrap();
+        assert_eq!(r.renamed, 1);
+        assert_eq!(std::fs::read(dir.join("data/dup.txt")).unwrap(), b"first");
+        assert_eq!(dup(&dir).len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = tmpdir(&format!("dupo{round}"));
+        let over = ExtractOptions {
+            overwrite: true,
+            ..ExtractOptions::default()
+        };
+        extract(&g, &all(&g), &dir, &over, &ctl).unwrap();
+        assert_eq!(
+            std::fs::read(dir.join("data/dup.txt")).unwrap(),
+            b"second",
+            "last wins"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = tmpdir(&format!("dups{round}"));
+        let skip = ExtractOptions {
+            on_collision: OnCollision::Skip,
+            ..ExtractOptions::default()
+        };
+        let r = extract(&g, &all(&g), &dir, &skip, &ctl).unwrap();
+        assert_eq!(r.skipped_collisions, 1);
+        assert_eq!(std::fs::read(dir.join("data/dup.txt")).unwrap(), b"first");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn entries_claiming_huge_sizes_are_refused_without_decoding() {
+    let mut e = file("data\\bomb.bin", b"tiny");
+    e.size = u32::MAX; // table claims 4 GiB
+    let mut g = open(&[e, file("data\\ok.bin", b"fine")]);
+    let d = g.read(0).unwrap();
+    assert!(
+        matches!(d.status, DecodeStatus::Corrupt(ref m) if m.contains("exceeds the limit")),
+        "{:?}",
+        d.status
+    );
+    assert!(d.data.is_empty());
+    assert_eq!(g.read(1).unwrap().data, b"fine");
+    g.set_max_entry_size(2);
+    assert!(matches!(
+        g.read(1).unwrap().status,
+        DecodeStatus::Corrupt(_)
+    ));
+    let rep = verify(&g, VerifyOptions::default(), &Control::default()).unwrap();
+    assert_eq!(rep.exit_code(), 3);
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_leading_out_of_the_destination_is_refused() {
@@ -552,6 +631,46 @@ fn symlink_leading_out_of_the_destination_is_refused() {
     .unwrap_err();
     assert!(matches!(err, Error::UnsafePath(_)), "{err:?}");
     assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_never_let_directories_or_files_appear_outside() {
+    let g = open(&[file("data\\newdir\\deeper\\a.txt", b"x")]);
+    let dir = tmpdir("symlink-deep");
+    let outside = tmpdir("symlink-deep-outside");
+    std::os::unix::fs::symlink(&outside, dir.join("data")).unwrap();
+    let err = extract(
+        &g,
+        &[0],
+        &dir,
+        &ExtractOptions::default(),
+        &Control::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::UnsafePath(_)), "{err:?}");
+    assert!(
+        std::fs::read_dir(&outside).unwrap().next().is_none(),
+        "no directory may be created outside of the destination"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // a symlink sitting at the final path must not be written through, even with --overwrite
+    let g = open(&[file("data\\a.txt", b"payload")]);
+    let dir = tmpdir("symlink-final");
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    let victim = outside.join("victim.txt");
+    std::fs::write(&victim, b"keep").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.join("data/a.txt")).unwrap();
+    let over = ExtractOptions {
+        overwrite: true,
+        ..ExtractOptions::default()
+    };
+    let err = extract(&g, &[0], &dir, &over, &Control::default()).unwrap_err();
+    assert!(matches!(err, Error::UnsafePath(_)), "{err:?}");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(outside).unwrap();
 }

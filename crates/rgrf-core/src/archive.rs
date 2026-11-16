@@ -8,6 +8,10 @@ use crate::error::{Error, Result};
 use crate::io::ReadAt;
 use crate::name::{GrfPath, NameMode, glob_match};
 
+/// Default limit for the decoded size of one entry (the largest real entry measured is 21 MB).
+/// Protects against archives whose table claims huge sizes; see [`Archive::set_max_entry_size`].
+pub const DEFAULT_MAX_ENTRY_SIZE: u64 = 1 << 30;
+
 /// An opened GRF 0x200. Reading is positional, so one `Archive` can be shared between threads.
 pub struct Archive<R: ReadAt = File> {
     src: R,
@@ -15,6 +19,7 @@ pub struct Archive<R: ReadAt = File> {
     table: TableInfo,
     entries: Vec<Entry>,
     file_len: u64,
+    max_entry_size: u64,
 }
 
 impl Archive<File> {
@@ -32,7 +37,13 @@ impl<R: ReadAt> Archive<R> {
             table: c.table,
             entries: c.entries,
             file_len: c.file_len,
+            max_entry_size: DEFAULT_MAX_ENTRY_SIZE,
         })
+    }
+
+    /// Entries whose declared or stored size exceeds this are not decoded (status `Corrupt`).
+    pub fn set_max_entry_size(&mut self, bytes: u64) {
+        self.max_entry_size = bytes;
     }
 
     pub fn header(&self) -> &Header {
@@ -106,6 +117,15 @@ impl<R: ReadAt> Archive<R> {
     /// Decoded content with a status; damaged entries yield the recoverable part.
     pub fn read(&self, index: usize) -> Result<Decoded> {
         let e = self.entry(index)?;
+        if u64::from(e.size).max(u64::from(e.zsize)) > self.max_entry_size {
+            return Ok(Decoded {
+                data: Vec::new(),
+                status: codec::DecodeStatus::Corrupt(format!(
+                    "entry of {} bytes ({} stored) exceeds the limit of {} bytes",
+                    e.size, e.zsize, self.max_entry_size
+                )),
+            });
+        }
         let raw = self.read_raw(index)?;
         Ok(codec::decode(&raw, e.size as usize, e.flags))
     }

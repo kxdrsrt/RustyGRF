@@ -1,7 +1,7 @@
 //! Extraction to a directory: safe paths, no silent overwriting, tolerant of damaged entries.
 
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -90,6 +90,23 @@ enum Outcome {
     SkippedCollision,
 }
 
+/// The deepest existing ancestor of `dir` must already lie inside `root`, otherwise
+/// `create_dir_all` could create directories outside of it through a symlink.
+fn ensure_inside(root: &Path, dir: &Path) -> Result<()> {
+    let mut probe = dir;
+    while fs::symlink_metadata(probe).is_err() {
+        match probe.parent() {
+            Some(p) => probe = p,
+            None => return Err(Error::UnsafePath(dir.display().to_string())),
+        }
+    }
+    if fs::canonicalize(probe)?.starts_with(root) {
+        Ok(())
+    } else {
+        Err(Error::UnsafePath(dir.display().to_string()))
+    }
+}
+
 fn write_file(target: &Path, data: &[u8], opts: &ExtractOptions) -> Result<Outcome> {
     let mut candidate = target.to_path_buf();
     let mut attempt = 0u32;
@@ -97,6 +114,10 @@ fn write_file(target: &Path, data: &[u8], opts: &ExtractOptions) -> Result<Outco
         let mut open = OpenOptions::new();
         open.write(true);
         if opts.overwrite {
+            // never write through a symlink that already sits at the target
+            if fs::symlink_metadata(&candidate).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(Error::UnsafePath(candidate.display().to_string()));
+            }
             open.create(true).truncate(true);
         } else {
             open.create_new(true);
@@ -157,6 +178,7 @@ pub fn extract<R: ReadAt>(
     for target in targets.iter().flatten() {
         let parent = target.parent().unwrap_or(&root);
         if made.insert(parent) {
+            ensure_inside(&root, parent)?;
             fs::create_dir_all(parent)?;
             // refuse to write through a symlink that leads out of the destination
             if !fs::canonicalize(parent)?.starts_with(&root) {
@@ -165,44 +187,69 @@ pub fn extract<R: ReadAt>(
         }
     }
 
-    let results: Vec<Result<(usize, ExtractReport)>> = indices
+    // Entries that end up in the same file (duplicate or case-colliding paths) are written one
+    // after the other in archive order, so which one wins never depends on thread timing.
+    let mut group_of: HashMap<String, usize> = HashMap::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (pos, target) in targets.iter().enumerate() {
+        let Some(target) = target else {
+            groups.push(vec![pos]);
+            continue;
+        };
+        let g = *group_of
+            .entry(target.to_string_lossy().to_lowercase())
+            .or_insert_with(|| {
+                groups.push(Vec::new());
+                groups.len() - 1
+            });
+        groups[g].push(pos);
+    }
+
+    let work = |pos: usize, r: &mut ExtractReport| -> Result<()> {
+        if failed.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        ctl.check()?;
+        let i = indices[pos];
+        let e = a.entry(i)?;
+        let Some(target) = &targets[pos] else {
+            if e.is_marker() {
+                r.skipped_markers += 1;
+            } else {
+                r.skipped_encrypted += 1;
+            }
+            return Ok(());
+        };
+        let d = a.read(i)?;
+        match write_file(target, &d.data, opts)? {
+            Outcome::Written { bytes, renamed } => {
+                r.written += 1;
+                r.bytes += bytes;
+                r.renamed += usize::from(renamed);
+            }
+            Outcome::SkippedCollision => r.skipped_collisions += 1,
+        }
+        if !d.status.is_ok() {
+            r.damaged.push(Damaged {
+                index: i,
+                status: d.status,
+            });
+        }
+        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+        if n.is_multiple_of(256) || n == total {
+            ctl.report(n, total);
+        }
+        Ok(())
+    };
+
+    let results: Vec<Result<ExtractReport>> = groups
         .par_iter()
-        .zip(targets.par_iter())
-        .map(|(&i, target)| {
-            if failed.load(Ordering::Relaxed) {
-                return Err(Error::Cancelled);
-            }
-            ctl.check()?;
+        .map(|group| {
             let mut r = ExtractReport::default();
-            let e = a.entry(i)?;
-            let Some(target) = target else {
-                if e.is_marker() {
-                    r.skipped_markers += 1;
-                } else {
-                    r.skipped_encrypted += 1;
-                }
-                return Ok((i, r));
-            };
-            let d = a.read(i)?;
-            match write_file(target, &d.data, opts)? {
-                Outcome::Written { bytes, renamed } => {
-                    r.written += 1;
-                    r.bytes += bytes;
-                    r.renamed += usize::from(renamed);
-                }
-                Outcome::SkippedCollision => r.skipped_collisions += 1,
+            for &pos in group {
+                work(pos, &mut r)?;
             }
-            if !d.status.is_ok() {
-                r.damaged.push(Damaged {
-                    index: i,
-                    status: d.status,
-                });
-            }
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n.is_multiple_of(256) || n == total {
-                ctl.report(n, total);
-            }
-            Ok((i, r))
+            Ok(r)
         })
         .map(|r| {
             if r.is_err() {
@@ -219,7 +266,7 @@ pub fn extract<R: ReadAt>(
     let mut first_err = None;
     for r in results {
         match r {
-            Ok((_, p)) => {
+            Ok(p) => {
                 report.written += p.written;
                 report.bytes += p.bytes;
                 report.skipped_markers += p.skipped_markers;

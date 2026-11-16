@@ -108,18 +108,28 @@ impl GrfPath {
     }
 
     /// Key for comparing paths like the client does: ASCII case-insensitive, `/` equals `\`.
-    /// (Case folding of non-ASCII bytes is not done; the client's exact rule is still to be verified.)
+    /// Double-byte characters (lead byte 0x81-0xFE plus a valid CP949 trail byte) are kept as they
+    /// are, so the trail bytes of Korean characters are not case-folded. The client's exact rule is
+    /// not verified (only 9 of 281,303 real names are affected, and none differ by trail case).
     pub fn key(&self) -> Vec<u8> {
-        self.0
-            .iter()
-            .map(|&b| {
-                if b == b'/' {
+        let b = &self.0;
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            let is_trail = |x: u8| matches!(x, 0x41..=0x5A | 0x61..=0x7A | 0x81..=0xFE);
+            if b[i] >= 0x81 && i + 1 < b.len() && is_trail(b[i + 1]) {
+                out.extend_from_slice(&b[i..i + 2]);
+                i += 2;
+            } else {
+                out.push(if b[i] == b'/' {
                     b'\\'
                 } else {
-                    b.to_ascii_lowercase()
-                }
-            })
-            .collect()
+                    b[i].to_ascii_lowercase()
+                });
+                i += 1;
+            }
+        }
+        out
     }
 
     pub fn file_name_bytes(&self) -> &[u8] {
@@ -255,6 +265,17 @@ mod tests {
         let c = GrfPath::new(vec![b'd', 0xC0]);
         let d = GrfPath::new(vec![b'D', 0xE0]);
         assert_ne!(c.key(), d.key(), "non-ASCII bytes are not folded");
+    }
+
+    #[test]
+    fn key_does_not_fold_trail_bytes_of_double_byte_characters() {
+        let upper_trail = GrfPath::new(vec![b'd', 0xB0, 0x41, b'x']);
+        let lower_trail = GrfPath::new(vec![b'd', 0xB0, 0x61, b'x']);
+        assert_ne!(upper_trail.key(), lower_trail.key());
+        // a separator after a high byte is still a separator
+        let slash = GrfPath::new(vec![b'a', 0xC0, b'/', b'b']);
+        let back = GrfPath::new(vec![b'a', 0xC0, b'\\', b'B']);
+        assert_eq!(slash.key(), back.key());
     }
 
     #[test]
