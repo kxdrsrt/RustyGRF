@@ -3,13 +3,16 @@
 pub mod archive;
 pub mod codec;
 pub mod container;
+pub mod encode;
 pub mod error;
 pub mod extract;
 pub mod hash;
 pub mod io;
 pub mod name;
 pub mod progress;
+pub mod repack;
 pub mod verify;
+pub mod writer;
 
 #[cfg(test)]
 mod synthetic_tests;

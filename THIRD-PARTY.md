@@ -5,7 +5,9 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 | Crate | Version | Lizenz | Zweck | Aufgenommen (Meilenstein) |
 |---|---|---|---|---|
 | `flate2` | 1.1.11 | MIT OR Apache-2.0 | zlib (Dateitabelle, Einträge), Rust-Backend `miniz_oxide` | M1 |
-| `lzma-rust2` | 0.25.0 | Apache-2.0 | LZMA-Einträge lesen (nur `std`); `encoder` nur als Test-Abhängigkeit, später M2 | M1 |
+| `lzma-rust2` | 0.25.0 | Apache-2.0 | LZMA-Einträge lesen (M1) und kodieren (M2, Feature `encoder`) | M1/M2 |
+| `zopfli` | 0.8.4 | Apache-2.0 | zlib-kompatible Kompression mit höherem Aufwand (`--method zopfli`) | M2 |
+| `sha2` | 0.11.1 | MIT OR Apache-2.0 | SHA-256 für Inhalts-Dedupe und Rückprüfung beim Repack | M2 |
 | `crc32fast` | 1.5.5 | MIT OR Apache-2.0 | CRC32 | M1 |
 | `md-5` | 0.11.0 | MIT OR Apache-2.0 | MD5 | M1 |
 | `rayon` | 1.12.0 | MIT OR Apache-2.0 | parallele Verarbeitung | M1 |

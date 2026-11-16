@@ -217,3 +217,65 @@ fn extract_pattern_never_overwrites_and_reports() {
     assert_eq!(json(&o)["skipped_collisions"], 1);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn repack_cdata_to_lzma_and_back_keeps_every_hash() {
+    let Some(grf) = testdata("client-dev/full/cdata.grf") else {
+        return;
+    };
+    let dir = tmpdir("repack");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("lzma.grf").to_string_lossy().into_owned();
+
+    let o = rgrf(&[
+        "repack", &grf, "-o", &out, "--method", "lzma", "--format", "0x300", "--json",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(
+        (v["verified"].clone(), v["format"].clone()),
+        (true.into(), "0x300".into())
+    );
+    assert!(
+        v["output_file_bytes"].as_u64().unwrap() < 14_000_000,
+        "LZMA shrinks cdata to about 13 MB"
+    );
+
+    // codecs and hashes seen by a separate run of the CLI
+    let info = json(&rgrf(&["info", &out, "--codecs", "--json"]));
+    assert_eq!(
+        (info["version"].clone(), info["codecs"]["zlib"].clone()),
+        ("0x300".into(), 0.into())
+    );
+    let hashes = |p: &str| {
+        let o = rgrf(&["hash", p]);
+        let mut lines: Vec<String> = String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines.sort();
+        lines
+    };
+    assert_eq!(
+        hashes(&grf),
+        hashes(&out),
+        "same content hashes as the source"
+    );
+
+    // the source must never be touched, and existing outputs are not replaced
+    let o = rgrf(&["repack", &grf, "-o", &grf]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("must not be the source"));
+    let o = rgrf(&["repack", &grf, "-o", &out]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
+
+    let o = rgrf(&["repack", &grf, "-o", &out, "--dry-run", "--json"]);
+    assert_eq!(json(&o)["dry_run"], true);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -29,6 +29,12 @@ pub enum Error {
     UnsafePath(String),
     #[error("target already exists: {0}")]
     TargetExists(String),
+    #[error("{0}")]
+    TooLarge(String),
+    #[error("cannot repack: {0}")]
+    Unsupported(String),
+    #[error("verification of the written archive failed: {0}")]
+    VerifyFailed(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

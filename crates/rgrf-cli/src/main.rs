@@ -12,11 +12,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 use rgrf_core::codec::Codec;
+use rgrf_core::encode::Method;
 use rgrf_core::extract::{ExtractOptions, OnCollision, extract};
 use rgrf_core::hash::Digest;
 use rgrf_core::name::hex;
 use rgrf_core::progress::{Control, Progress};
+use rgrf_core::repack::{Dedupe, RepackOptions, repack};
 use rgrf_core::verify::{Severity, VerifyOptions, verify};
+use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, Entry, GrfPath, NameMode};
 use serde_json::{Value, json};
 
@@ -96,11 +99,67 @@ enum Cmd {
         #[arg(long)]
         all: bool,
     },
+    /// Write a new archive with another compression, format or deduplication (content unchanged)
+    Repack {
+        grf: PathBuf,
+        /// Output archive (written to a temporary file first, never over the source)
+        #[arg(short, long)]
+        output: PathBuf,
+        /// zlib (default, every client), zopfli (zlib-compatible, smaller, slow) or lzma (only
+        /// with the LZMA-capable cps.dll in the client)
+        #[arg(long, value_enum, default_value = "zlib")]
+        method: MethodArg,
+        /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
+        #[arg(long)]
+        level: Option<u32>,
+        /// 0x200 (32-bit offsets, max 4 GiB) or 0x300 (default: same as the source)
+        #[arg(long, value_parser = parse_format)]
+        format: Option<Format>,
+        /// Pad streams to a multiple of 8 (default: yes for 0x200, no for 0x300, as in real archives)
+        #[arg(long, conflicts_with = "no_align")]
+        align: bool,
+        #[arg(long)]
+        no_align: bool,
+        /// none: no sharing; source: keep the sharing of the source (default); content: share
+        /// blocks of identical content
+        #[arg(long, value_enum, default_value = "source")]
+        dedupe: DedupeArg,
+        /// Always use the new stream, never keep the original stream of the same codec
+        #[arg(long)]
+        recompress_all: bool,
+        /// Skip decoding the written archive for comparison (not recommended)
+        #[arg(long)]
+        no_verify: bool,
+        /// Replace an existing output file
+        #[arg(long)]
+        overwrite: bool,
+        /// Only plan, write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// CRC32 and MD5 of the decoded content per entry
     Hash {
         grf: PathBuf,
         pattern: Option<String>,
     },
+}
+
+fn parse_format(s: &str) -> Result<Format, String> {
+    Format::parse(s).ok_or_else(|| format!("unknown format '{s}' (0x200 or 0x300)"))
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum MethodArg {
+    Zlib,
+    Zopfli,
+    Lzma,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum DedupeArg {
+    None,
+    Source,
+    Content,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -269,6 +328,59 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Repack {
+            grf,
+            output,
+            method,
+            level,
+            format,
+            align,
+            no_align,
+            dedupe,
+            recompress_all,
+            no_verify,
+            overwrite,
+            dry_run,
+        } => {
+            let method = match method {
+                MethodArg::Zlib => Method::Zlib {
+                    level: level.unwrap_or(9),
+                },
+                MethodArg::Zopfli => Method::Zopfli {
+                    iterations: u64::from(level.unwrap_or(10)),
+                },
+                MethodArg::Lzma => Method::Lzma {
+                    preset: level.unwrap_or(9),
+                },
+            };
+            if let Method::Zlib { level } | Method::Lzma { preset: level } = method
+                && level > 9
+            {
+                bail!("--level must be 0-9 for zlib and lzma");
+            }
+            let opts = RepackOptions {
+                method,
+                format: *format,
+                align: if *align {
+                    Some(true)
+                } else if *no_align {
+                    Some(false)
+                } else {
+                    None
+                },
+                dedupe: match dedupe {
+                    DedupeArg::None => Dedupe::None,
+                    DedupeArg::Source => Dedupe::Source,
+                    DedupeArg::Content => Dedupe::Content,
+                },
+                recompress_all: *recompress_all,
+                verify: !*no_verify,
+                overwrite: *overwrite,
+                dry_run: *dry_run,
+                max_file_len: None,
+            };
+            repack_cmd(cli, grf, output, &opts)
+        }
     }
 }
 
@@ -621,4 +733,102 @@ fn hash_cmd(cli: &Cli, grf: &Path, pattern: Option<&str>) -> Result<i32> {
     }
     out.flush()?;
     Ok(if warnings { 2 } else { 0 })
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Result<i32> {
+    if same_file(grf, output) {
+        bail!("the output must not be the source archive");
+    }
+    let (a, _) = open(grf)?;
+    let meter = Meter::new(cli);
+    let cb = meter.callback();
+    let ctl = Control {
+        cancel: None,
+        progress: Some(&cb),
+    };
+    let started = Instant::now();
+    let r = repack(&a, output, opts, &ctl);
+    meter.done();
+    let r = r?;
+    let secs = started.elapsed().as_secs_f64();
+    let warn = !r.damaged.is_empty() || r.encrypted_blocks > 0;
+    let pct = |from: u64, to: u64| {
+        if from == 0 {
+            0.0
+        } else {
+            (to as f64 / from as f64 - 1.0) * 100.0
+        }
+    };
+    if cli.json {
+        print_json(&json!({
+            "schema_version": SCHEMA_VERSION,
+            "dry_run": r.dry_run, "output": output.display().to_string(),
+            "format": format!("0x{:03x}", r.format),
+            "entries": r.entries, "files": r.files, "markers": r.markers,
+            "blocks": r.blocks, "shared_files": r.shared_files,
+            "encrypted_blocks": r.encrypted_blocks, "damaged_blocks": r.damaged.len(),
+            "kept_original": r.kept_original, "recompressed": r.recompressed,
+            "source_file_bytes": r.source_file_len, "source_stream_bytes": r.source_stream_bytes,
+            "output_file_bytes": r.output_file_len, "output_stream_bytes": r.output_stream_bytes,
+            "verified": r.verified, "seconds": secs,
+        }))?;
+    } else {
+        println!(
+            "{} {} -> {} (0x{:03x}) in {:.1}s",
+            if r.dry_run { "Plan for" } else { "Repacked" },
+            grf.display(),
+            output.display(),
+            r.format,
+            secs
+        );
+        println!(
+            "Entries:  {} ({} files, {} markers); data blocks {}, files sharing a block {}",
+            r.entries, r.files, r.markers, r.blocks, r.shared_files
+        );
+        if !r.dry_run {
+            println!(
+                "Streams:  kept original {}, re-encoded {}, copied unchanged {} encrypted + {} damaged",
+                r.kept_original,
+                r.recompressed,
+                r.encrypted_blocks,
+                r.damaged.len()
+            );
+            println!(
+                "Size:     file {} -> {} bytes ({:+.1}%), streams {} -> {} bytes ({:+.1}%)",
+                r.source_file_len,
+                r.output_file_len,
+                pct(r.source_file_len, r.output_file_len),
+                r.source_stream_bytes,
+                r.output_stream_bytes,
+                pct(r.source_stream_bytes, r.output_stream_bytes)
+            );
+            println!(
+                "Checked:  {}",
+                if r.verified {
+                    "every entry decoded and compared with the source"
+                } else {
+                    "no (skipped)"
+                }
+            );
+        } else {
+            println!(
+                "Source streams to carry over: {} bytes in {} blocks",
+                r.source_stream_bytes, r.blocks
+            );
+        }
+        for &i in &r.damaged {
+            eprintln!(
+                "warning: {}: damaged stream copied unchanged",
+                a.entries()[i].name.display(cli.names)
+            );
+        }
+    }
+    Ok(if warn { 2 } else { 0 })
 }

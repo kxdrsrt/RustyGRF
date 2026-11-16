@@ -94,6 +94,32 @@ impl<R: ReadAt> Archive<R> {
         Ok(buf)
     }
 
+    /// Like [`Archive::read_raw`] but includes the alignment padding (`zsize_aligned` bytes, as far
+    /// as they lie inside the file). Needed to copy encrypted entries unchanged.
+    pub fn read_raw_aligned(&self, index: usize) -> Result<Vec<u8>> {
+        let e = self.entry(index)?;
+        let want = u64::from(e.zsize_aligned.max(e.zsize));
+        let len = if e.abs_offset() + want <= self.file_len {
+            want
+        } else {
+            u64::from(e.zsize)
+        };
+        if e.zsize == 0 {
+            return Ok(Vec::new());
+        }
+        if e.abs_offset() + len > self.file_len {
+            return Err(Error::EntryOutOfRange {
+                index,
+                offset: e.abs_offset(),
+                size: len,
+                file_size: self.file_len,
+            });
+        }
+        let mut buf = vec![0u8; len as usize];
+        self.src.read_exact_at(&mut buf, e.abs_offset())?;
+        Ok(buf)
+    }
+
     /// Codec of an entry from the first byte of its stream (one tiny read); `None` for markers,
     /// empty and encrypted entries.
     pub fn sniff_codec(&self, index: usize) -> Result<Option<codec::Codec>> {

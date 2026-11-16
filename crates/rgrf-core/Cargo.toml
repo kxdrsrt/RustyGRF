@@ -14,10 +14,9 @@ workspace = true
 crc32fast = "1.5.5"
 encoding_rs = "0.8.44"
 flate2 = "1.1.11"
-lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std"] }
+lzma-rust2 = { version = "0.25.0", default-features = false, features = ["encoder", "std"] }
 md-5 = "0.11.0"
 rayon = "1.12.0"
+sha2 = "0.11.1"
 thiserror = "2.0.21"
-
-[dev-dependencies]
-lzma-rust2 = { version = "0.25.0", default-features = false, features = ["std", "encoder"] }
+zopfli = { version = "0.8.4", default-features = false, features = ["std", "zlib"] }
