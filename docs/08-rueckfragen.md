@@ -1,6 +1,6 @@
 # 08 – Rückfragen, offene Punkte, Widersprüche
 
-**Version 2** · 2026-11-16 · Status: alle 20 Punkte beantwortet. Offen bleiben nur Zuarbeit in der VM (8), Bestätigung der Auslegung von 20 (vor M4) und Messungen in späteren Meilensteinen (15).
+**Version 3** · 2026-11-16 · Status: alle 20 Punkte beantwortet und umgesetzt. Offen bleiben nur Golden Files für 0x300 (M1b) und die Messung in Punkt 15 (M3).
 Arbeit an M0/M1 darf beginnen.
 
 Pflege: Jede Änderung erhöht die Version und erhält einen Eintrag im Änderungsprotokoll unten. Antworten werden **in dieser Datei** unter "Antwort" eingetragen (Datum), nicht gelöscht. Beschlossene Punkte wandern bei Bedarf in die passenden Dokumente (`01`–`07`).
@@ -17,11 +17,11 @@ Kennzeichnung: **gemessen** / **gelesen** (Quelle) / **vermutet**. Empfehlung = 
 | 5 | Namensprüfung "RustyGRF" | Prüfung | M0 | frei laut Inhaber |
 | 6 | Lizenztabelle (Erlaubnis Tokeiburu) | Doku | nein | geklärt |
 | 7 | Git: Verhalten im Dotfiles-Repo | Hinweis/Frage | nein | **erledigt** (lokal, kein Remote) |
-| 8 | Golden Files: Umfang und Format | Zuarbeit VM | **M1-Abnahme** | Skript da, **Lauf in VM offen** |
+| 8 | Golden Files: Umfang und Format | Zuarbeit VM | **M1-Abnahme** | **erledigt** (5 Archive; 0x300 folgt zu M1b) |
 | 9 | GRF 0x300 im Umfang von M1? | Widerspruch | **M1** | **entschieden** (M1b) |
 | 10 | Neue kRO-`data.grf` fehlt in `0 GRFs/` | Widerspruch | nein | aufgelöst (`data kro latest.grf`) |
 | 11 | Leerer Eintrag (`flags 0x00`) in `data.grf` | Frage | M1 | **entschieden**, Ordnermarker gemessen |
-| 12 | Eintrag mit Flags `0x03` in `rdata.grf` (Verschlüsselung) | Frage | M1 | **entschieden**, gemessen |
+| 12 | Eintrag mit Flags `0x03` in `rdata.grf` (Verschlüsselung) | Frage | M1 | **entschieden**, gemessen, **neu bewertet (siehe dort)** |
 | 13 | Zählung Merge: 205.609 oder 205.610? | Widerspruch | M3 | aufgelöst |
 | 14 | Dateinamen auf macOS-Dateisystem (APFS) | Risiko/Frage | M1/M2 | **entschieden** |
 | 15 | `DATA.INI`-Reihenfolge (0- oder 1-basiert) | offen aus Doku | M3 | Soll-Prio klar, Index messen (M3) |
@@ -29,7 +29,9 @@ Kennzeichnung: **gemessen** / **gelesen** (Quelle) / **vermutet**. Empfehlung = 
 | 17 | GUI-Technik Tauri 2 | Bestätigung | M7 | Kernschnittstelle ja, GUI offen |
 | 18 | Modellwahl und Review-Punkte | Prozess | nein | **entschieden** |
 | 19 | LZMA-Parameter und Quellenlizenz (`curio-r`) | Frage | M2 | **entschieden** |
-| 20 | MCP-Sicherheitsmodell (`rgrf-mcp`) | Entscheidung | M4 | Auslegung **vor M4 bestätigen** |
+| 20 | MCP-Sicherheitsmodell (`rgrf-mcp`) | Entscheidung | M4 | **entschieden** (Lesen überall, Schreiben nur freigegeben) |
+| 21 | LZMA schon in M1 (Lesen) | Widerspruch | **M1** | Empfehlung ja, wartet |
+| 22 | `worm_tail_damage.wav` als Referenz | Frage | M1 | Empfehlung (b), wartet |
 
 ---
 
@@ -99,6 +101,7 @@ Kennzeichnung: **gemessen** / **gelesen** (Quelle) / **vermutet**. Empfehlung = 
 **Empfehlung:** zuerst `cdata`, `core`, `cpal` + `rdata`; `data.grf` danach. `GrfCL` hat keinen Listen-Export, ich schreibe dafür ein kleines PowerShell-Skript (in der VM zu starten) und gebe es dir zum Prüfen. Zusätzlich je Archiv `shasum -a 256` der GRF-Datei, um sicherzustellen, dass VM und Mac dieselbe Datei meinen.
 **Antwort (2026-11-16):** Empfehlung übernommen. **Erledigt:** `tools/golden/Export-GrfGolden.ps1` (TSV: `path_display`, `path_utf8_hex`, `zsize`, `zsize_aligned`, `size`, `flags`, `offset`, `crc32`, `md5`, `error`). **Ungetestet** (GRF.dll läuft nur unter Windows). **Zuarbeit für dich in der VM** (32-Bit-PowerShell, Arbeitsverzeichnis nicht auf `Z:`-UNC, Ausgabe nach `tests/golden/`):
 `powershell -File Export-GrfGolden.ps1 -Grf <GRF> -Out <name>.tsv` für zuerst `cdata`, `core`, `cpal` (`client-dev/full/`) und `rdata` (`0 OTHER CLIENTS/client-kro/`), danach `data` (`client-kro/data.grf`, 202.358), später `data kro latest.grf` und die Merge-GRF (0x300). Zusätzlich `shasum -a 256` (Mac) der jeweiligen GRF in `tests/golden/SHA256SUMS`, damit VM und Mac dieselbe Datei meinen. Wenn das Skript scheitert, schick mir die Meldung.
+**Erledigt (2026-11-16, später):** Ich habe die VM selbst gesteuert (`prlctl exec`, siehe unten) und alle fünf Golden Files erzeugt: `cdata`, `core`, `cpal`, `rdata`, `data` (202.358 Einträge, 0 Fehler), dazu `SHA256SUMS`. Sie liegen als `tests/golden/*.tsv.gz` (12 MB). Abgleich mit meinem Python-Parser: alle Felder und Namen identisch (außer dem Ordnermarker). Das Skript musste korrigiert werden (LZMA-Modus setzen, ordinale Sortierung). Details und Besonderheiten: `tests/golden/README.md`. Offen: 0x300-Archive (`data kro latest.grf`, Merge-GRF) für M1b.
 
 ### 9. GRF 0x300 im Umfang von M1? [blockiert]
 **Widerspruch:** `02-format-notes.md`/`03-roadmap.md`: kRO-`data.grf` ist 0x200, 0x300 erst M6, Details "zu prüfen". `09-neue-grfs-2026-11-16.md` (gemessen): neue kRO-`data.grf` und `data (merged kro+chris).grf` sind **0x300** ("Event Horizon", 64-Bit-Offset, kein Seed, 4 Reserve-Bytes vor der Tabelle); der Parser in `grftable.py` wurde dafür angepasst.
@@ -131,6 +134,7 @@ Kennzeichnung: **gemessen** / **gelesen** (Quelle) / **vermutet**. Empfehlung = 
 - C) DES-Entschlüsselung schon in M1 einbauen
 **Empfehlung:** A. Zuerst messen, um welchen Eintrag es geht und ob er wirklich verschlüsselt ist (die Bedeutung von `0x03` ist nur Annahme).
 **Antwort (2026-11-16):** Empfehlung übernommen (A). **Zu deiner Rückfrage:** Das neue Warpgate-`data.grf` hat kein `rdata.grf` mehr, richtig. Die alte `rdata.grf` (Oktober 2024, `0 OTHER CLIENTS/client-kro/`) ist aber weiter vorhanden und bleibt **reine Testdatei** für M1/M3 (24.756 Einträge). **Gemessen:** Der Flag-`0x03`-Eintrag ist `data\luafiles514\lua files\msgstring_kr_s.lub` (10.464 B, entpackt 33.224 B), die ersten Bytes sind `28 9c d5 cc …` (**nicht** `78` und nicht `00`), das passt zu DES-Verschlüsselung (Annahme, nicht bewiesen). Verhalten in v1: listen, Warnung, nicht extrahieren (Exit-Code 2).
+**Neu gemessen (Golden File):** GRF Editor nennt das Flag `FileAndHeaderCrypted` und entpackt den Eintrag (CRC32 `5c688728`). Da `msgstring_kr_s.lub` der einzige Fall ist und die Entschlüsselung (DES nur Header, vermutet) klein ist, **Vorschlag: in M1 nur listen und warnen, Entschlüsselung als Option in M6**. Gib Bescheid, wenn du sie früher willst.
 
 ---
 
@@ -185,13 +189,27 @@ Kennzeichnung: **gemessen** / **gelesen** (Quelle) / **vermutet**. Empfehlung = 
 **Frage:** Lesen nur in erlaubten Ordnern (ebenfalls `--allow-read`), oder darf das Lesen überall erfolgen?
 **Empfehlung:** auch Lesen nur in erlaubten Wurzeln (Standard: Ordner aus dem Aufruf). Betrifft erst M4.
 **Antwort (2026-11-16):** "überall". **Meine Auslegung (bitte vor M4 bestätigen):** Lesen darf überall erfolgen, **Schreiben nur in `--allow-write`-Ordnern** (Sicherheitsmodell aus `04-cli-and-mcp.md` bleibt für Schreiben). Falls du "überall" auch auf Schreiben beziehst, sag Bescheid; das wäre ein Sicherheitsrisiko, ich würde davon abraten.
+**Entscheidung (2026-11-16, auf "mach es wie du am besten denkst"):** Lesen überall (nur lesend, keine Archive werden verändert), **Schreiben nur in Ordnern, die per `--allow-write` freigegeben sind**, Standard ist nur Lesen. Zusätzlich: nie in `client-dev/full/` oder neben dem Quellarchiv schreiben, wenn der Zielordner nicht ausdrücklich freigegeben ist; Pfade werden kanonisiert (keine `..`, keine Symlink-Ausbrüche).
+
+### 21. Neu: LZMA schon in M1 (Widerspruch zur Roadmap)
+**Stand (gemessen 2026-11-16, Golden Files + Rohbytes):** `core.grf` hat 4.391 von 4.661 Einträgen mit LZMA (`00 5d 00 00 30 00 00`), `cdata.grf` 185 von 3.973. `02-format-notes.md`/`03-roadmap.md` sahen LZMA erst in M2 (Schreiben). Die Abnahme von M1 verlangt aber identische Hashes für `core` und `cdata`, das geht nur mit einem LZMA-**Lesen**. Ob die LZMA-Einträge aus dem Original-Client stammen oder aus einem Repack im Dev-Client, ist ungeklärt (Dateidatum `core.grf` 2024-10-27).
+**Frage:** LZMA-Dekodierung in M1 aufnehmen (Lesen), Kodierung bleibt M2?
+**Empfehlung:** ja. Lesen ist klein (Crate nach Lizenzprüfung, z. B. `lzma-rs` oder `liblzma`; Eintrag in `THIRD-PARTY.md`). Ich prüfe die Crates mit Context7/docs.rs.
+**Antwort:** (offen, ich fahre nach Empfehlung fort, sobald du nichts anderes sagst)
+
+### 22. Neu: `worm_tail_damage.wav` ist als Hash-Referenz ungeeignet
+**Stand (gemessen):** Stream ist 11 Bytes zu kurz (Stored-Block). GRF Editor liefert **leere Daten ohne Fehler** (CRC `00000000`), ein tolerantes Dekodieren 1.403 Bytes.
+**Frage:** Soll RustyGRF (a) nur melden (Warnung, Exit 2, kein Inhalt) oder (b) die 1.403 Bytes liefern und melden?
+**Empfehlung:** (b) für `cat`/`extract` (wie der Client, Teilinhalt), mit Warnung; im Golden-Test wird dieser Eintrag ausgenommen und separat geprüft.
+**Antwort:** (offen, ich fahre nach Empfehlung fort)
 
 ---
 
 ## Hinweise zu MCP-Servern (Stand 2026-11-16)
 | Server | Für | Stand in meiner Session |
 |---|---|---|
-| `context7` (`.vscode/mcp.json`, zusätzlich Nutzerebene) | Crate-APIs (`rmcp`, `clap`, `zopfli`, LZMA-Crates) | **konfiguriert** (Nutzerebene seit 2026-11-16), in meiner laufenden Session noch nicht geladen (siehe 2) |
+| `context7` (`.vscode/mcp.json`, zusätzlich Nutzerebene) | Crate-APIs (`rmcp`, `clap`, `zopfli`, LZMA-Crates) | **läuft** (Tools `resolve-library-id`, `query-docs` in meiner Session verfügbar, geprüft 2026-11-16) |
+| Parallels | VM steuern | **kein MCP nötig**: `prlctl` (`/usr/local/bin/prlctl`) reicht. `prlctl exec "Tiny 11 Pro" …` läuft als SYSTEM; `Z:` ist dort nicht gemappt, daher UNC `\\Mac\Home\…`. Skript: `tools/golden/run-in-vm.sh` |
 | `github` (`.vscode/mcp.json`) | Issues/PRs/Actions, erst wenn Repo auf GitHub liegt | ein allgemeiner `github-mcp-server` ist vorhanden; ob es der aus `mcp.json` ist, ist unklar. Anmeldung nicht nötig bis Repo-Freigabe |
 | Playwright / integrierter Browser | GUI-Tests, erst ab M7 | nicht nötig |
 | eigener `rgrf-mcp` | ab M4 | existiert noch nicht |
@@ -200,4 +218,5 @@ Kennzeichnung: **gemessen** / **gelesen** (Quelle) / **vermutet**. Empfehlung = 
 | Version | Datum | Änderung |
 |---|---|---|
 | 1 | 2026-11-16 | Erste Sammlung (20 Punkte) |
+| 3 | 2026-11-16 | Golden Files (5 Archive) in der VM erzeugt und geprüft; Punkte 8, 12, 20 aktualisiert; neue Punkte 21 (LZMA in M1) und 22 (`worm_tail_damage.wav`) |
 | 2 | 2026-11-16 | Antworten eingetragen; Rust, Nextest, Deny installiert; Context7 in Nutzer-Konfigurationen; Gerüst, Lizenz, Golden-Skript angelegt; neue Messungen zu Punkt 10–12 |

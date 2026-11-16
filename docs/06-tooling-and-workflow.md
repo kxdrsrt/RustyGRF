@@ -26,7 +26,9 @@ Praktisch: Mit Sonnet 5.5 starten und bei einem Fehlschlag oder Fehlentscheid an
 | Referenz (GRF Editor/`GrfCL`) | nicht verfügbar, stattdessen **Golden Files** (Hashlisten) | verfügbar |
 | Dev-Client-Test | nein | ja |
 
-Golden Files einmalig in der VM erzeugen (Eintragsliste mit Pfad, Größen, CRC32/MD5 für `cdata`, `core`, `cpal`, `data`, `rdata`) und im Repo unter `tests/golden/` ablegen.
+**VM-Steuerung vom Mac aus:** kein Parallels-MCP nötig, `prlctl` genügt (`prlctl exec "Tiny 11 Pro" …`, läuft als SYSTEM; Pfade über `\\Mac\Home\…` statt `Z:`; Beispiel `tools/golden/run-in-vm.sh`). Die Golden Files sind erzeugt (siehe `tests/golden/README.md`).
+
+Golden Files (erledigt 2026-11-16, bei neuen Archiven wiederholen) (Eintragsliste mit Pfad, Größen, CRC32/MD5 für `cdata`, `core`, `cpal`, `data`, `rdata`) und im Repo unter `tests/golden/` ablegen.
 
 ## Vorher auf dem Rechner
 **macOS (Stand 16.11.2026, installiert):** Rust 1.100.0 stable (`~/.cargo/bin`, per `--no-modify-path`, nicht im Shell-PATH: `. "$HOME/.cargo/env"`), rustfmt, clippy, cargo-nextest, cargo-deny. Bauverzeichnis `~/build/rustygrf` über die lokale, nicht versionierte `.cargo/config.toml`. Node (Homebrew) ist da, wird erst für die GUI gebraucht.

@@ -11,7 +11,7 @@
     zsize         komprimierte Groesse
     zsize_aligned ausgerichtete komprimierte Groesse
     size          unkomprimierte Groesse
-    flags         EntryType als Zahl:Name (GRF-Editor-intern, kann Zusatzbits enthalten)
+    flags         Dateiflag (unteres Byte, wie im Archiv):EntryType-Name laut GRF Editor (z. B. 1:File, LzmaCompressed)
     offset        FileExactOffset (absolut in der Datei)
     crc32, md5    ueber die entpackten Daten (leer bei Ordnermarker oder Fehler)
     error         Text, falls Entpacken fehlschlug (z. B. worm_tail_damage.wav)
@@ -41,6 +41,8 @@ public static class RgrfCrc32 {
 '@
 }
 
+# Wie lzmaverify.ps1: sonst scheitert GetDecompressedData() bei LZMA-Eintraegen (erstes Byte 0x00)
+[GRF.Core.Compression]::CompressionAlgorithm = [GRF.Core.Compression]::LzmaCompression
 $g = New-Object GRF.Core.GrfHolder
 $g.Open($Grf)
 $md5 = [Security.Cryptography.MD5]::Create()
@@ -59,9 +61,11 @@ foreach ($e in $g.FileTable.Entries) {
 	$hex = ([BitConverter]::ToString($utf8.GetBytes($name)) -replace '-', '').ToLower()
 	$rows.Add([pscustomobject]@{
 		p = $name; hex = $hex; z = $e.SizeCompressed; za = $e.SizeCompressedAlignment; s = $e.SizeDecompressed
-		f = ('{0}:{1}' -f [int]$e.Flags, $e.Flags); o = $e.FileExactOffset; crc = $crc; md5 = $hash; err = $err })
+		f = ('{0}:{1}' -f ([int]$e.Flags -band 0xFF), $e.Flags); o = $e.FileExactOffset; crc = $crc; md5 = $hash; err = $err })
 }
-$rows = $rows | Sort-Object -Property p -CaseSensitive
+$arr = $rows.ToArray()
+[Array]::Sort($arr, [Comparison[object]]{ param($a, $b) [string]::CompareOrdinal($a.p, $b.p) })
+$rows = $arr
 $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine("path_display`tpath_utf8_hex`tzsize`tzsize_aligned`tsize`tflags`toffset`tcrc32`tmd5`terror")
 foreach ($r in $rows) { [void]$sb.AppendLine(($r.p, $r.hex, $r.z, $r.za, $r.s, $r.f, $r.o, $r.crc, $r.md5, $r.err) -join "`t") }

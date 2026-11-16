@@ -11,10 +11,11 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - [x] Toolchain-Entscheidung: Rust stable, Edition 2024, keine MSRV; Hauptplattform macOS, Windows-ARM64-VM für Windows-Builds und Referenztests.
 - [x] Workspace-Gerüst (`rgrf-core`, `rgrf-cli`, `rgrf-mcp`), `deny.toml`, `NOTICE`, `THIRD-PARTY.md`; fmt/clippy/nextest/deny grün.
 - [x] Lokales Git-Repo (kein Remote, kein Push bis zur Freigabe).
-- [ ] Golden Files (Eintragslisten + Hashes) in der Windows-VM erzeugen und unter `tests/golden/` ablegen: Skript `tools/golden/Export-GrfGolden.ps1` liegt bereit (ungetestet), **Lauf in der VM steht aus**.
+- [x] Golden Files für `cdata`, `core`, `cpal`, `rdata`, `data` in der Windows-VM erzeugt (2026-11-16, `tools/golden/run-in-vm.sh`) und gegen den Python-Parser geprüft, siehe `tests/golden/README.md`. 0x300-Archive folgen zu M1b.
 
 ## M1 – Lesen und Prüfen (`rgrf info|ls|find|cat|extract|verify`)
 - 0x200 öffnen, Tabelle lesen, Einträge auflisten, einzeln und gesamt extrahieren.
+- **Dekodieren von zlib und LZMA** (Lesen): `core.grf` hat 4.391 und `cdata.grf` 185 LZMA-Einträge (gemessen), siehe [02-format-notes.md](02-format-notes.md). Kodieren bleibt M2.
 - **Abnahme:**
   - Eintragsliste (Pfad, Größen, Flags) für `cdata.grf`, `core.grf`, `cpal.grf`, `data.grf` (202.358 Einträge) identisch mit GRF Editor/`GrfCL`.
   - Hashes (CRC32, MD5) aller Einträge identisch mit den extrahierten Dateien aus `data-official`.
