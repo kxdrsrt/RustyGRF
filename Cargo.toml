@@ -6,7 +6,7 @@ members = ["crates/rgrf-core", "crates/rgrf-cli", "crates/rgrf-mcp"]
 version = "0.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-authors = ["RustyGRF contributors"]
+authors = ["The RustyGRF Authors"]
 publish = false
 
 [workspace.lints.rust]
@@ -18,3 +18,7 @@ all = { level = "deny", priority = -1 }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Dependencies (zlib, LZMA, MD5) optimized even in debug builds, otherwise tests on real archives crawl.
+[profile.dev.package."*"]
+opt-level = 3
