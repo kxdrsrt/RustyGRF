@@ -13,12 +13,15 @@ use rayon::prelude::*;
 use rgrf_core::hash::Digest;
 use rgrf_core::{Archive, DecodeStatus, NameMode};
 
-const ARCHIVES: [(&str, &str); 5] = [
+const ARCHIVES: [(&str, &str); 7] = [
     ("cdata", "client-dev/full/cdata.grf"),
     ("core", "client-dev/full/core.grf"),
     ("cpal", "client-dev/full/cpal.grf"),
     ("rdata", "0 OTHER CLIENTS/client-kro/rdata.grf"),
     ("data", "0 OTHER CLIENTS/client-kro/data.grf"),
+    // GRF 0x300 (Event Horizon), 3.8 GB and 5.7 GB
+    ("data-kro-latest", "0 GRFs/data kro latest.grf"),
+    ("data-merged", "0 GRFs/data (merged kro+chris).grf"),
 ];
 
 struct Row {
@@ -201,4 +204,28 @@ fn data_hashes() {
         return;
     }
     check_hashes("data");
+}
+#[test]
+fn data_kro_latest_table() {
+    check_table("data-kro-latest");
+}
+#[test]
+fn data_merged_table() {
+    check_table("data-merged");
+}
+#[test]
+fn data_kro_latest_hashes() {
+    if std::env::var_os("RGRF_GOLDEN_FULL").is_none() {
+        eprintln!("SKIPPED data_kro_latest_hashes: set RGRF_GOLDEN_FULL=1 (hashes 4 GB)");
+        return;
+    }
+    check_hashes("data-kro-latest");
+}
+#[test]
+fn data_merged_hashes() {
+    if std::env::var_os("RGRF_GOLDEN_FULL").is_none() {
+        eprintln!("SKIPPED data_merged_hashes: set RGRF_GOLDEN_FULL=1 (hashes 6 GB)");
+        return;
+    }
+    check_hashes("data-merged");
 }

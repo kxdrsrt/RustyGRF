@@ -2,7 +2,7 @@
 
 Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/GPF/Thor), inspiriert von Tokeiburus **GRF Editor**.
 
-**Status:** M0 (Grundlagen) und **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash` läuft auf allen Test-Archiven und stimmt mit GRF Editor überein (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). Nächster Schritt: M1b (GRF 0x300 lesen). Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 5, keine offenen Punkte).
+**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash` läuft auf allen Test-Archiven und stimmt mit GRF Editor überein (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). Nächster Schritt: M2 (Bauen und Neu-Komprimieren). Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 5, keine offenen Punkte).
 
 **Lizenz:** `MIT OR Apache-2.0`. **Inspiration/Credits:** GRF Editor und ActEditor von Tokeiburu (mit seiner Erlaubnis; RustyGRF ist kein Fork), LessGRF von Curiosity. Siehe `NOTICE`.
 

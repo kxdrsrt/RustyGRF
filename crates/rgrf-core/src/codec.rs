@@ -55,7 +55,7 @@ pub fn sniff(stream: &[u8]) -> Option<Codec> {
 const FIRST_CHUNK: usize = 1 << 20;
 
 pub fn decode(stream: &[u8], size: usize, entry_flags: u8) -> Decoded {
-    if entry_flags & (flags::MIXED_CRYPT | flags::HEADER_CRYPT) != 0 {
+    if entry_flags & flags::ANY_CRYPT != 0 {
         return Decoded {
             data: Vec::new(),
             status: DecodeStatus::Encrypted,

@@ -1,6 +1,8 @@
 //! Tests on small archives built in memory (cases real archives do not contain).
 
 use crate::archive::Archive;
+
+mod v300;
 use crate::codec::{DecodeStatus, tests_support};
 use crate::container::flags;
 use crate::error::Error;
@@ -24,7 +26,7 @@ struct T {
     stream: Stream,
     flags: u8,
     share_with: Option<usize>,
-    offset: Option<u32>,
+    offset: Option<u64>,
     aligned: Option<u32>,
 }
 
@@ -50,9 +52,29 @@ fn marker(name: &str) -> T {
 }
 
 fn build(entries: &[T]) -> Vec<u8> {
+    build_with(entries, Layout::V200)
+}
+
+#[derive(Clone, Copy)]
+enum Layout {
+    V200,
+    /// 0x300: 64-bit offsets, 12-byte table prefix, optional key block behind the table.
+    V300 {
+        key_block: usize,
+    },
+}
+
+fn build_with(entries: &[T], layout: Layout) -> Vec<u8> {
+    let (header, data, tail) = build_parts(entries, layout);
+    [header, data, tail].concat()
+}
+
+/// Header (46 bytes), data area, and everything after it (table block and key block).
+fn build_parts(entries: &[T], layout: Layout) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let v300 = matches!(layout, Layout::V300 { .. });
     let mut data = Vec::new();
     let mut table = Vec::new();
-    let mut placed: Vec<(u32, u32, u32)> = Vec::new(); // offset, zsize, aligned
+    let mut placed: Vec<(u64, u32, u32)> = Vec::new(); // offset, zsize, aligned
     for t in entries {
         let (offset, zsize, aligned) = if let Some(j) = t.share_with {
             placed[j]
@@ -62,7 +84,7 @@ fn build(entries: &[T]) -> Vec<u8> {
                 Stream::Lzma(d) => tests_support::lzma_stream(d),
                 Stream::Literal(b) => b.clone(),
             };
-            let offset = data.len() as u32;
+            let offset = data.len() as u64;
             let aligned = (stream.len() as u32).div_ceil(8) * 8;
             data.extend_from_slice(&stream);
             data.resize(data.len() + (aligned as usize - stream.len()), 0);
@@ -75,21 +97,42 @@ fn build(entries: &[T]) -> Vec<u8> {
         table.extend_from_slice(&t.aligned.unwrap_or(aligned).to_le_bytes());
         table.extend_from_slice(&t.size.to_le_bytes());
         table.push(t.flags);
-        table.extend_from_slice(&t.offset.unwrap_or(offset).to_le_bytes());
+        let off = t.offset.unwrap_or(offset);
+        if v300 {
+            table.extend_from_slice(&off.to_le_bytes());
+        } else {
+            table.extend_from_slice(&(off as u32).to_le_bytes());
+        }
     }
     let packed = tests_support::zlib(&table);
     let mut out = Vec::new();
-    out.extend_from_slice(b"Master of Magic\0");
+    if v300 {
+        out.extend_from_slice(b"Event Horizon\0c\0");
+    } else {
+        out.extend_from_slice(b"Master of Magic\0");
+    }
     out.extend((1..=14u8).collect::<Vec<_>>());
-    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&(entries.len() as u32 + 7).to_le_bytes());
-    out.extend_from_slice(&0x200u32.to_le_bytes());
-    out.extend_from_slice(&data);
+    if v300 {
+        out.extend_from_slice(&(data.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x300u32.to_le_bytes());
+    } else {
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u32 + 7).to_le_bytes());
+        out.extend_from_slice(&0x200u32.to_le_bytes());
+    }
+    let header = std::mem::take(&mut out);
+    if let Layout::V300 { key_block } = layout {
+        out.extend_from_slice(&(key_block as u32).to_le_bytes());
+    }
     out.extend_from_slice(&(packed.len() as u32).to_le_bytes());
     out.extend_from_slice(&(table.len() as u32).to_le_bytes());
     out.extend_from_slice(&packed);
-    out
+    if let Layout::V300 { key_block } = layout {
+        out.extend(std::iter::repeat_n(0xAB, key_block));
+    }
+    (header, data, out)
 }
 
 fn open(entries: &[T]) -> Archive<Vec<u8>> {
@@ -171,11 +214,11 @@ fn rejects_non_grf_unsupported_and_damaged_containers() {
         Archive::from_source(bad_magic),
         Err(Error::NotGrf(_))
     ));
-    let mut v300 = good.clone();
-    v300[42..46].copy_from_slice(&0x300u32.to_le_bytes());
+    let mut v103 = good.clone();
+    v103[42..46].copy_from_slice(&0x103u32.to_le_bytes());
     assert!(matches!(
-        Archive::from_source(v300),
-        Err(Error::UnsupportedVersion(0x300))
+        Archive::from_source(v103),
+        Err(Error::UnsupportedVersion(0x103))
     ));
     assert!(matches!(
         Archive::from_source(good[..good.len() - 4].to_vec()),
@@ -289,7 +332,7 @@ fn out_of_range_overlap_duplicates_alignment_encrypted_and_sharing() {
     let mut shared = file("data\\shared", &s);
     shared.share_with = Some(0);
     let mut enc = file("data\\enc", &s);
-    enc.flags = flags::FILE | flags::MIXED_CRYPT | flags::HEADER_CRYPT;
+    enc.flags = flags::FILE | flags::HEADER_CRYPT | flags::DATA_CRYPT;
     let mut misaligned = file("data\\mis", &s);
     misaligned.aligned = Some(1);
     let dup = file("DATA/A", &s);

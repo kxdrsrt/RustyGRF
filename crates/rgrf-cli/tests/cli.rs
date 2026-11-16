@@ -110,6 +110,45 @@ fn info_ls_find_cat_hash_on_cdata() {
 }
 
 #[test]
+fn info_ls_and_verify_on_a_0x300_archive() {
+    let Some(grf) = testdata("0 GRFs/data kro latest.grf") else {
+        return;
+    };
+    let v = json(&rgrf(&["info", &grf, "--json"]));
+    assert_eq!(v["version"], "0x300");
+    assert_eq!(
+        (
+            v["entries"].as_u64(),
+            v["files"].as_u64(),
+            v["markers"].as_u64()
+        ),
+        (Some(261_389), Some(261_359), Some(30))
+    );
+    assert_eq!(v["table"]["key_block"], 0);
+    assert!(
+        v["file_size"].as_u64().unwrap() < u64::from(u32::MAX),
+        "file is just below 4 GiB"
+    );
+    assert!(v["table"]["offset"].as_u64().unwrap() > u64::from(u32::MAX) / 2);
+
+    let o = rgrf(&["ls", &grf, "06guild_r.gat", "--json"]);
+    assert_eq!(json(&o)["count"], 1);
+
+    let o = rgrf(&["verify", &grf, "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let v = json(&o);
+    assert_eq!(
+        (v["errors"].as_u64(), v["warnings"].as_u64()),
+        (Some(0), Some(0))
+    );
+}
+
+#[test]
 fn verify_exit_codes_clean_and_with_warning() {
     if let Some(grf) = testdata("client-dev/full/cdata.grf") {
         let o = rgrf(&["verify", &grf, "--json"]);

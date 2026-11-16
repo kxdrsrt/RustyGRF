@@ -32,6 +32,7 @@ pub enum IssueKind {
     SizeMismatch,
     Corrupt,
     Encrypted,
+    KeyBlock,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +106,18 @@ pub fn verify<R: ReadAt>(
         });
     }
 
+    if a.table_info().key_block > 0 {
+        rep.issues.push(Issue {
+            severity: Severity::Info,
+            kind: IssueKind::KeyBlock,
+            entry: None,
+            message: format!(
+                "protected archive: key block of {} bytes behind the file table (entries with flag 0x80 cannot be decoded yet)",
+                a.table_info().key_block
+            ),
+        });
+    }
+
     let unreadable = check_structure(a, &mut rep);
 
     if opts.decode {
@@ -173,20 +186,23 @@ fn status_issue(index: usize, s: &DecodeStatus) -> Option<Issue> {
 fn check_structure<R: ReadAt>(a: &Archive<R>, rep: &mut VerifyReport) -> HashMap<usize, ()> {
     let file_len = a.file_len();
     let t = a.table_info();
-    let table_end = t.abs_offset + 8 + u64::from(t.zsize);
+    let table_end = t.end();
     let mut unreadable = HashMap::new();
     // (start, end) -> first entry index, to find shared data blocks and overlaps
     let mut spans: Vec<(u64, u64, usize)> = Vec::new();
 
     for (i, e) in a.entries().iter().enumerate() {
-        if e.zsize_aligned != e.zsize.div_ceil(8).saturating_mul(8) {
+        // Both forms occur in real archives: rounded up to 8 (official 0x200, GRF Editor with
+        // alignment) and equal to `zsize` (kRO 0x300, no alignment). Anything else is wrong.
+        let rounded = e.zsize.div_ceil(8).saturating_mul(8);
+        if e.zsize_aligned != e.zsize && e.zsize_aligned != rounded {
             rep.issues.push(Issue {
                 severity: Severity::Warning,
                 kind: IssueKind::Alignment,
                 entry: Some(i),
                 message: format!(
-                    "aligned size {} is not {} rounded up to 8",
-                    e.zsize_aligned, e.zsize
+                    "aligned size {} is neither {} nor {} rounded up to 8",
+                    e.zsize_aligned, e.zsize, e.zsize
                 ),
             });
         }

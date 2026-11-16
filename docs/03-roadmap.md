@@ -14,7 +14,7 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - [x] Golden Files für `cdata`, `core`, `cpal`, `rdata`, `data` in der Windows-VM erzeugt (2026-11-16, `tools/golden/run-in-vm.sh`) und gegen den Python-Parser geprüft, siehe `tests/golden/README.md`. 0x300-Archive folgen zu M1b.
 
 ## M1 – Lesen und Prüfen (`rgrf info|ls|find|cat|extract|verify`)
-- 0x200 öffnen, Tabelle lesen, Einträge auflisten, einzeln und gesamt extrahieren.
+- 0x200 öffnen, Tabelle lesen, Einträge auflisten, einzeln und gesamt extrahieren. (0x300 folgt in M1b, ist aber im selben Code umgesetzt.)
 - **Dekodieren von zlib und LZMA** (Lesen): `core.grf` hat 4.391 und `cdata.grf` 185 LZMA-Einträge (gemessen), siehe [02-format-notes.md](02-format-notes.md). Kodieren bleibt M2.
 - **Abnahme:**
   - Eintragsliste (Pfad, Größen, Flags) für `cdata.grf`, `core.grf`, `cpal.grf`, `data.grf` (202.358 Einträge) identisch mit GRF Editor/`GrfCL`.
@@ -37,6 +37,14 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 ## M1b – GRF 0x300 lesen (vor M2)
 - Header "Event Horizon", 64-Bit-Offset, 21-Byte-Einträge (gemessen, siehe [02-format-notes.md](02-format-notes.md)).
 - **Abnahme:** `data kro latest.grf` (261.359 Dateien + 30 Ordnermarker) und `data (merged kro+chris).grf` (406.650 Dateien + 25 Marker) listen und prüfen; Eintragsliste und Hashes identisch mit den Golden Files aus der VM (GRF Editor liest 0x300).
+
+**Ergebnis M1b (2026-11-16, Apple M5 Pro, Release-Build):**
+- [x] Beide 0x300-Archive: Eintragstabelle (Pfad, Größen, Flags, Offset) **und CRC32/MD5 aller Dateien** identisch mit GRF Editor (261.359 bzw. 406.650 Dateien; `data kro latest.grf` 10 s, Merge-GRF 15 s im Golden-Test).
+- [x] Öffnen: 30 ms (3,8 GB) bzw. 56 ms (5,7 GB). `rgrf verify`: 0 Fehler, 0 Warnungen in 5,7 s bzw. 5,8 s; Hinweise: Marker (30/25) und gemeinsame Datenblöcke (79.764/69.853).
+- [x] Synthetische Tests: 64-Bit-Offsets und Tabelle jenseits 4 GiB (Sparse-Quelle), Schlüsselblock (Grenzen, `end()`), Gravity-Flag `0x80` als verschlüsselt, Seed-Regel von GRF Editor, absurde Offsets ohne Panic.
+- [x] `verify` akzeptiert `zsize_aligned` = `zsize` oder aufgerundet auf 8 (gemessen: beide Formen kommen vor).
+- Nicht getestet: ein 0x300-Archiv **mit** Schlüsselblock oder Einträgen mit Flag `0x80` (keines vorhanden; ältere und neuere kRO-Patches sollen sie nutzen, siehe `RO/docs/grf-research`), Entschlüsselung (M6).
+- Extrahieren der 0x300-Archive nicht gegen einen Referenzordner verglichen (keiner vorhanden); die Hashes aller Einträge sind aber identisch, und die Extraktion nutzt denselben Lesepfad wie `hash`.
 
 ## M2 – Bauen und Neu-Komprimieren (`rgrf build|repack`)
 - Aus Verzeichnis bauen, bestehende GRF neu komprimieren: zlib, Zopfli, LZMA.

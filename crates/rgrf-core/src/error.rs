@@ -8,7 +8,7 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("not a GRF archive: {0}")]
     NotGrf(String),
-    #[error("unsupported GRF version 0x{0:03x} (supported: 0x200)")]
+    #[error("unsupported GRF version 0x{0:03x} (supported: 0x200, 0x300)")]
     UnsupportedVersion(u32),
     #[error("corrupt file table: {0}")]
     CorruptTable(String),

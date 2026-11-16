@@ -146,8 +146,15 @@ fn open(path: &Path) -> Result<(Archive, u128)> {
 fn flags_text(e: &Entry) -> String {
     let mut s = String::new();
     s.push(if e.is_file() { 'F' } else { '-' });
-    s.push(if e.flags & 0x02 != 0 { 'M' } else { '-' });
-    s.push(if e.flags & 0x04 != 0 { 'H' } else { '-' });
+    // H header crypted (0x02), D data crypted (0x04), G Gravity protected (0x80)
+    s.push(if e.flags & 0x02 != 0 { 'H' } else { '-' });
+    s.push(if e.flags & 0x04 != 0 {
+        'D'
+    } else if e.flags & 0x80 != 0 {
+        'G'
+    } else {
+        '-'
+    });
     s
 }
 
@@ -299,7 +306,7 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             "entries": es.len(), "files": es.len() - markers, "markers": markers,
             "encrypted": encrypted, "shared_data_entries": shared,
             "packed_bytes": packed, "unpacked_bytes": unpacked,
-            "table": {"offset": t.abs_offset, "packed": t.zsize, "unpacked": t.size},
+            "table": {"offset": t.abs_offset, "packed": t.zsize, "unpacked": t.size, "key_block": t.key_block},
             "open_ms": open_ms,
         });
         if let Some((z, l)) = counts {
@@ -320,6 +327,9 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             "Table:      at {}, {} bytes packed, {} unpacked",
             t.abs_offset, t.zsize, t.size
         );
+        if t.key_block > 0 {
+            println!("Key block:  {} bytes (protected archive)", t.key_block);
+        }
         println!("Encrypted:  {encrypted}");
         println!("Shared:     {shared} entries share data with another entry");
         if let Some((z, l)) = counts {
