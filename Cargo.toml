@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/rgrf-core", "crates/rgrf-cli", "crates/rgrf-mcp"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["RustyGRF contributors"]
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

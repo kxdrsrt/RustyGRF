@@ -1,0 +1,16 @@
+RustyGRF
+Lizenz: MIT OR Apache-2.0 (siehe LICENSE-MIT, LICENSE-APACHE).
+
+Inspiration und Dank
+  RustyGRF ist von GRF Editor und ActEditor von Tokeiburu inspiriert
+  (https://github.com/Tokeiburu). Es ist kein Fork und enthaelt (Stand M0)
+  keinen daraus uebernommenen Code. Tokeiburu hat die Portierung/Nutzung
+  der Formatkenntnisse erlaubt (siehe docs/05-licensing.md).
+  Wird spaeter Code abgeleitet, steht die Herkunft im Dateikopf.
+
+Weitere Inspiration
+  - LessGRF / cps.dll-LZMA-Erweiterung von Curiosity (curio-r/rag-cps-dll):
+    Das Eintragsformat wird aus Beobachtung an Referenzdateien nachgebaut.
+
+Dieses Projekt enthaelt keine Spieldaten von Gravity/Ragnarok Online.
+Drittbibliotheken: siehe THIRD-PARTY.md.

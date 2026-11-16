@@ -1,0 +1,11 @@
+[package]
+name = "rgrf-core"
+description = "RustyGRF core library: GRF container, codecs, names, verification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

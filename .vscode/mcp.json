@@ -1,0 +1,18 @@
+{
+  // MCP-Server nur für dieses Projekt (Workspace). Beim ersten Start fragt VS Code nach Vertrauen.
+  // Siehe docs/06-tooling-and-workflow.md.
+  "servers": {
+    // Aktuelle Doku zu Rust-Crates (rmcp, clap, zopfli, ...). Remote, braucht kein Node.
+    // Prompt-Hinweis: im Chat "use context7" bzw. die Bibliothek nennen.
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    // Issues, Pull Requests, Actions. Anmeldung per OAuth im Browser beim ersten Einsatz.
+    // Erst nötig, wenn das Repo auf GitHub liegt.
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "rgrf-mcp"
+description = "RustyGRF MCP server (stdio)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rgrf-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rgrf-core = { path = "../rgrf-core" }
+
+[lints]
+workspace = true
