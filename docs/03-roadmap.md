@@ -128,7 +128,7 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 - **Abnahme je Format:** Vergleich mit Ausgaben von GRF Editor/ActEditor an festen Beispieldateien.
 
 ## M8 – App (GUI) mit Icon und Installern
-Nach M7, auf `rgrf-core` aufgesetzt (Entscheidung zu Tauri 2 steht noch zur Bestätigung, siehe [07-ui-ux.md](07-ui-ux.md)).
+Nach M7, auf `rgrf-core` aufgesetzt (Entscheidung D15: Tauri 2, siehe [07-ui-ux.md](07-ui-ux.md)).
 - Fenster mit Archivliste, Suche, Vorschau, Bauen/Zusammenführen mit Fortschritt und Abbruch; Dark/Light folgt dem System.
 - **App-Icon und Marke:** eigenes Icon (Vektor, alle Größen), Name „RustyGRF“; die Gestaltung stimmen wir ab, bevor ich sie baue (Icon-Entwurf kann ich erzeugen).
 - **Verpackung:** macOS `.app`/`.dmg`, Windows `.msi` oder `.exe`-Installer, Linux AppImage/`.deb`. Signierung und Notarisierung (Apple Developer Account, Windows-Zertifikat) brauchen Konten und Geld; ohne sie warnen die Systeme beim ersten Start.
