@@ -115,7 +115,15 @@ pub(crate) fn run(
                 produced = Err(e);
                 break;
             }
-            let batch: Result<Vec<Prepared>> = range.clone().into_par_iter().map(prepare).collect();
+            // checking per unit lets a cancel stop a batch of slow encodes (Zopfli) at once
+            let batch: Result<Vec<Prepared>> = range
+                .clone()
+                .into_par_iter()
+                .map(|u| {
+                    ctl.check()?;
+                    prepare(u)
+                })
+                .collect();
             match batch {
                 Ok(batch) => {
                     on_batch(&batch);

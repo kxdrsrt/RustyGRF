@@ -389,7 +389,11 @@ dependencies = [
 name = "rgrf-mcp"
 version = "0.0.0"
 dependencies = [
+ "clap",
+ "encoding_rs",
+ "rayon",
  "rgrf-core",
+ "serde_json",
 ]
 
 [[package]]

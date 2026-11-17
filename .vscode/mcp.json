@@ -13,6 +13,14 @@
     "github": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/"
+    },
+    // RustyGRF selbst: Archive untersuchen, vergleichen und bauen. Zuerst bauen:
+    //   cargo build --release   (Ergebnis in ~/build/rustygrf/release/rgrf-mcp)
+    // Lesen geht überall; Schreiben (extract, build, repack, merge, patch) nur in ~/build/rgrf-out.
+    "rustygrf": {
+      "type": "stdio",
+      "command": "${userHome}/build/rustygrf/release/rgrf-mcp",
+      "args": ["--allow-write", "${userHome}/build/rgrf-out"]
     }
   }
 }

@@ -67,6 +67,11 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - **Abnahme:** `merge data.grf rdata.grf` ergibt 205.610 Einträge (202.358 + 3.252 neue) = 205.609 Dateien + 1 leerer Marker; für jeden Pfad gewinnt `rdata`; Gegenprobe mit entpackten Ordnern. Priorität bei mehreren Archiven: eigene Custom-GRFs zuerst, `data.grf` zuletzt (Index-Zählung des Clients wird in der VM gemessen).
 
 ## M4 – MCP-Server (`rgrf-mcp`)
+**Stand 2026-11-17: umgesetzt** (Tools, Sicherheitsmodell und Grenzen: [04-cli-and-mcp.md](04-cli-and-mcp.md)).
+- 11 Tools: 6 lesende (`grf_info`, `grf_list` mit Suche, `grf_read_text`, `grf_read_summary`, `grf_verify`, `grf_diff`) und 5 schreibende (`grf_extract`, `grf_build`, `grf_repack`, `grf_merge`, `grf_patch`, nur mit `--allow-write`). Eigenes schlankes JSON-RPC über stdio statt `rmcp`.
+- **Gemessen am echten Archiv** (Merge-GRF, 406.675 Einträge, über stdio wie ein Client): `grf_info` mit Codec-Zählung 0,74 s (405.746 LZMA, 904 zlib), `grf_list` 0,14 s, `grf_read_text` auf `cdata.grf` unter 10 ms, `grf_diff` gegen `data kro latest` 28 s mit demselben Ergebnis wie `rgrf diff` (145.286 nur links, 2.001 unterschiedlich), `grf_verify` 23 s ohne Fehler; ein Schreibversuch außerhalb des Schreibordners wurde abgelehnt.
+- Tests (Server 9 Unit + 8 Integration + 3 mit der echten Binärdatei): Protokoll (Aushandeln der Version, Ping, unbekannte Methode/Tool, Fehler bei Argumenten, Parse-Fehler), jedes Tool, Seiten, Kodierungen (UTF-8, cp949, abgeschnittenes Zeichen), Pfadgrenzen (außerhalb, `..`, Symlink-Ausbruch, vorhandene Datei, Ausgabe = Eingabe, Lesebeschränkung), `dry_run`, Abbruch (Kern: Prüfung der Abbruchmarke je Eintrag, sonst griff er erst nach einem ganzen Stapel), Fortschritt, sauberes Ende bei EOF.
+- **Nicht getestet:** der Betrieb in einem echten Agenten-Client (VS Code/Copilot); der Server ist dort als `rustygrf` in `.vscode/mcp.json` eingetragen, nach `cargo build --release` startbar. Parallele Anfragen (ein Aufruf nach dem anderen).
 - Tools aus [04-cli-and-mcp.md](04-cli-and-mcp.md), Sicherheitsmodell (Schreiben nur in erlaubten Ordnern).
 - **Abnahme:** Ein KI-Agent kann ohne Shell-Zugriff ein Archiv untersuchen, zwei vergleichen und ein Testarchiv bauen; alle Tools haben JSON-Schemas und Tests.
 

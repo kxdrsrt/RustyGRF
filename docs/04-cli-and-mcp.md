@@ -31,25 +31,32 @@ Verhalten:
 
 ## MCP-Server `rgrf-mcp`
 
-Transport: stdio. Tools (Beispiele, Namen mit Präfix `grf_`):
+**Umgesetzt (M4).** Transport stdio (zeilenweises JSON-RPC 2.0, MCP-Version 2025-06-18; ältere 2025-03-26 und 2024-11-05 werden ausgehandelt), nur Tools. Start: `rgrf-mcp [--allow-write <ordner>]… [--allow-read <ordner>]…`. Eingebunden in `.vscode/mcp.json` als `rustygrf` (Schreibordner `~/build/rgrf-out`). Das offizielle Rust-SDK (`rmcp`, mit tokio) wird bewusst nicht genutzt: das Protokoll für reine Tools ist klein, und so bleiben die Abhängigkeiten gering.
 
 | Tool | Eingabe | Ausgabe |
 |---|---|---|
-| `grf_open_info` | `path` | Info wie `rgrf info` |
-| `grf_list` | `path`, `pattern?`, `limit?`, `offset?` | Einträge (seitenweise, damit 200.000 Einträge nicht überfluten) |
-| `grf_search` | `path`, `query`, `ext?` | Treffer |
-| `grf_read_text` | `path`, `entry`, `max_bytes?` | Text-Dateien (Lua, TXT), Kodierung wählbar |
-| `grf_read_binary_summary` | `path`, `entry` | Größe, Hash, Typ, Hex-Ausschnitt |
-| `grf_extract` | `path`, `entries/pattern`, `dest` | geschriebene Dateien (nur in erlaubten Ordnern) |
-| `grf_verify` | `path` | Prüfbericht |
-| `grf_diff` | `a`, `b` | Unterschiede |
-| `grf_build` | `source_dir`, `out`, `method`, `level` | Bauergebnis |
-| `grf_merge` | `base`, `overlay`, `out` | Ergebnis |
+| `grf_info` | `path`, `codecs?` | Version, Größe, Einträge, Marker, verschlüsselt, geteilte Daten, Codecs |
+| `grf_list` | `path`, `pattern?`, `ext?[]`, `offset?`, `limit?` (Standard 100, max. 1000), `names?` | Einträge seitenweise, `truncated`, `next_offset`; Suche = `pattern`/`ext` (Teilzeichenkette oder Glob, `/` = `\`) |
+| `grf_read_text` | `path`, `entry`, `max_bytes?` (65.536, max. 1 MiB), `encoding?` (auto, utf8, cp949, cp1252) | Text und verwendete Kodierung; Binärdaten werden abgelehnt |
+| `grf_read_summary` | `path`, `entry` | Größe, CRC32, MD5, Dateityp (SPR, ACT, RSW, GND, GAT, RSM, BMP, PNG, JPEG, WAV, Ogg, Lua, XML, Text), 64 Byte Hex |
+| `grf_verify` | `path`, `decode?`, `max_issues?` | Zähler und Befunde (Fehler, Warnungen, Hinweise) |
+| `grf_diff` | `a`, `b`, `limit?` | nur in A, nur in B, anderer Inhalt (je Gruppe `count`, `paths`, `truncated`) |
+| `grf_extract` | `path`, `dest`, `pattern?`, `on_collision?`, `overwrite?` | geschriebene Dateien; **schreibend** |
+| `grf_build` | `source_dir`, `output`, `method?`, `level?`, `format?`, `dedupe?`, `overwrite?`, `dry_run?` | Bauergebnis; **schreibend** |
+| `grf_repack` | `path`, `output`, `method?`, `level?`, `format?`, `dedupe?`, `overwrite?`, `dry_run?` | Ergebnis; **schreibend** |
+| `grf_merge` | `paths[]` (erstes gewinnt), `output`, wie `grf_repack` | Ergebnis und je Quelle: Dateien / übernommen / überschrieben; **schreibend** |
+| `grf_patch` | `old`, `new`, `output`, wie `grf_repack` | Ergebnis mit `added`, `changed`, `removed_in_new`; **schreibend** |
 
-Sicherheit:
-- **Nur Lesen als Standard.** Schreibende Tools sind nur aktiv, wenn der Server mit `--allow-write <ordner>` gestartet wird.
-- Alle Pfade werden gegen erlaubte Wurzeln geprüft (kein `..`, keine Symlink-Ausbrüche).
-- Keine Archive überschreiben ohne ausdrücklichen Parameter; immer erst in temporäre Datei.
-- Große Ergebnisse werden gekürzt und mit `truncated: true` markiert.
+Jedes Ergebnis kommt als `structuredContent` (JSON-Objekt) und als Text. Fehler einer Anfrage (Archiv fehlt, Pfad nicht erlaubt, falsches Argument) kommen als `isError: true` mit klarer Meldung, damit der Agent sich korrigieren kann; ein unbekanntes Tool oder eine unbekannte Methode ist ein JSON-RPC-Fehler. Argumente werden gegen dieselbe Tabelle geprüft, aus der das JSON-Schema erzeugt wird (unbekannte, fehlende, falsch typisierte Argumente werden abgelehnt).
 
-Typische Anfragen an den Agenten: "Welche Dateien aus `rdata` überschreiben `data`?", "Baue `cdata` mit LZMA und vergleiche die Größe", "Suche in `data` alle Dateien mit `job4`".
+Sicherheit (umgesetzt und getestet):
+- **Nur Lesen als Standard.** Die fünf schreibenden Tools werden nur angeboten (und angenommen), wenn mindestens ein `--allow-write` gegeben ist.
+- Schreiben nur unterhalb der erlaubten Ordner; `..` wird abgelehnt, Symlinks werden vor der Prüfung aufgelöst (kein Ausbruch über Ordner- oder Datei-Symlinks), ein Symlink als Ziel wird abgelehnt.
+- Vorhandene Dateien werden nur mit `overwrite=true` ersetzt, Ordner nie; eine Ausgabe darf nie eines ihrer Eingabearchive sein; alle Schreibbefehle gehen über temporäre Datei, Rückprüfung und Umbenennen.
+- Lesen geht überall (Entscheidung zu Punkt 20); `--allow-read` beschränkt es auf die genannten Ordner (plus Schreibordner).
+- Fremde Archive: Einträge über 256 MiB werden nicht dekodiert, jede Antwort ist begrenzt (Seiten, `max_bytes`, `limit`) und mit `truncated` markiert; ein Absturz in einem Tool wird abgefangen und als Fehler gemeldet.
+- Abbruch: `notifications/cancelled` stoppt einen laufenden Aufruf (gemessen: Zopfli-Build mit 150 Dateien wird in unter 4 s beendet, keine halbe Datei, keine temporäre Datei bleibt), er bekommt dann keine Antwort. Fortschritt kommt als `notifications/progress`, wenn der Client einen `progressToken` mitschickt.
+
+Grenzen: Ein Aufruf läuft, bevor der nächste bearbeitet wird (ein Client kann während `grf_build` nicht gleichzeitig `grf_list` abfragen); sehr lange Aufrufe (Merge der 5,7-GB-Archive, Zopfli) können Zeitlimits mancher Clients überschreiten, Fortschrittsmeldungen helfen dort. Eine Eingabe pro Zeile; die Länge einer Zeile ist nicht begrenzt (der Client ist vertrauenswürdig, nur die Archive nicht).
+
+Typische Anfragen an den Agenten: "Welche Dateien aus `rdata` überschreiben `data`?" (`grf_diff`), "Baue `cdata` mit LZMA und vergleiche die Größe" (`grf_build`, `grf_info`), "Suche in `data` alle Dateien mit `job4`" (`grf_list`).

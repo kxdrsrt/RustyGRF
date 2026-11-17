@@ -11,8 +11,16 @@ publish.workspace = true
 name = "rgrf-mcp"
 path = "src/main.rs"
 
+[lib]
+name = "rgrf_mcp"
+path = "src/lib.rs"
+
 [dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+encoding_rs = "0.8.44"
+rayon = "1.12.0"
 rgrf-core = { path = "../rgrf-core" }
+serde_json = "1.0.154"
 
 [lints]
 workspace = true
