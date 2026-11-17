@@ -69,7 +69,7 @@ Tabelle              [zsize u32][size u32][zlib-komprimierte Tabelle]
 
 ## Archive im Client
 - `GPF` = identisches Format, nur andere Endung (Patches).
-- `DATA.INI` bestimmt die Ladereihenfolge (Wiki: "0 = höchste Priorität", das kRO-Beispiel ist 1-basiert; offen). Der Client benötigt einen gehexten Exe für mehrere GRFs.
+- `DATA.INI` bestimmt die Ladereihenfolge (**gemessen** am 2018er Client, Indizes 1–7: der niedrigste Index gewinnt, Archive schlagen lose Dateien; ob ein Index 0 zählt, ist nicht gemessen). Der Client benötigt einen gehexten Exe für mehrere GRFs.
 - `rdata.grf` überschreibt `data.grf` bei gleichem Pfad (kRO: 21.504 von 24.756 Einträgen; gemessen).
 - Thor-Dateien (`.thor`) haben ein verwandtes Format, nicht im Umfang von Version 1.
 
