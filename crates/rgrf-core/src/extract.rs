@@ -51,6 +51,32 @@ pub struct ExtractReport {
     pub damaged: Vec<Damaged>,
 }
 
+/// Names Windows cannot store as written: reserved characters, a trailing dot or space (Win32
+/// silently drops them), and device names such as `nul` (data written there disappears).
+pub(crate) fn invalid_on_windows(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default().trim_end();
+    let numbered = match stem.as_bytes() {
+        [a, b, c, b'1'..=b'9'] => {
+            let prefix = [
+                a.to_ascii_lowercase(),
+                b.to_ascii_lowercase(),
+                c.to_ascii_lowercase(),
+            ];
+            prefix == *b"com" || prefix == *b"lpt"
+        }
+        _ => false,
+    };
+    let device = numbered
+        || matches!(
+            stem.to_ascii_lowercase().as_str(),
+            "con" | "prn" | "aux" | "nul" | "conin$" | "conout$"
+        );
+    part.chars()
+        .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || c < ' ')
+        || part.ends_with(['.', ' '])
+        || device
+}
+
 /// Turns archive path bytes into a relative path below the destination, or refuses.
 pub fn safe_relative_path(name: &GrfPath, mode: NameMode) -> Result<PathBuf> {
     let text = name.display(mode);
@@ -60,7 +86,7 @@ pub fn safe_relative_path(name: &GrfPath, mode: NameMode) -> Result<PathBuf> {
             || part == "."
             || part == ".."
             || part.contains('\0')
-            || (cfg!(windows) && part.contains(':'));
+            || (cfg!(windows) && invalid_on_windows(part));
         if bad {
             return Err(Error::UnsafePath(name.display(NameMode::Raw)));
         }
@@ -161,16 +187,40 @@ pub fn extract<R: ReadAt>(
     let failed = AtomicBool::new(false);
 
     // Fail on unsafe paths before anything is written.
-    let targets: Vec<Option<PathBuf>> = indices
+    let mut targets: Vec<Option<PathBuf>> = indices
         .iter()
         .map(|&i| {
             let e = a.entry(i)?;
             if e.is_marker() || e.is_encrypted() {
                 return Ok(None);
             }
-            safe_relative_path(&e.name, opts.names).map(|p| Some(root.join(p)))
+            safe_relative_path(&e.name, opts.names).map(Some)
         })
         .collect::<Result<_>>()?;
+
+    // The first spelling of every folder and file name wins, as on case-insensitive file systems
+    // (the client does not care about case either). Doing it ourselves gives the same tree on
+    // Linux, where `data/` and `DATA/` would otherwise become two folders.
+    let mut spelling: HashMap<String, std::ffi::OsString> = HashMap::new();
+    for rel in targets.iter_mut().flatten() {
+        let mut key = String::new();
+        let mut unified = PathBuf::new();
+        for part in rel.components() {
+            let part = part.as_os_str();
+            key.push('/');
+            key.push_str(&part.to_string_lossy().to_lowercase());
+            unified.push(
+                spelling
+                    .entry(key.clone())
+                    .or_insert_with(|| part.to_owned()),
+            );
+        }
+        *rel = unified;
+    }
+    let targets: Vec<Option<PathBuf>> = targets
+        .into_iter()
+        .map(|t| t.map(|rel| root.join(rel)))
+        .collect();
 
     // Create directories one by one in archive order: on case-insensitive file systems the first
     // spelling wins, so the result must not depend on thread timing.

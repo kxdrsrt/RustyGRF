@@ -130,7 +130,10 @@ fn absolute(path: &str) -> Result<PathBuf, String> {
         return Err("empty path".into());
     }
     let p = Path::new(path);
-    if p.components().any(|c| c == Component::ParentDir) {
+    // by text as well: in `\\?\` paths (Windows) `..` is not a parent component for std
+    if path.split(['/', '\\']).any(|c| c == "..")
+        || p.components().any(|c| c == Component::ParentDir)
+    {
         return Err(format!("{path}: '..' is not allowed in paths"));
     }
     if p.is_absolute() {

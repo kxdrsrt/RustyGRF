@@ -640,6 +640,79 @@ fn duplicate_targets_are_written_in_archive_order_not_thread_timing() {
 }
 
 #[test]
+fn names_that_differ_only_in_case_end_up_in_one_tree_on_every_file_system() {
+    let g = open(&[
+        file("data\\Sprite\\a.spr", b"1"),
+        file("DATA\\sprite\\b.spr", b"2"),
+        file("Data\\SPRITE\\A.SPR", b"3"),
+    ]);
+    let dir = tmpdir("onetree");
+    let opts = ExtractOptions {
+        on_collision: OnCollision::Rename,
+        ..ExtractOptions::default()
+    };
+    let r = extract(&g, &all(&g), &dir, &opts, &Control::default()).unwrap();
+    assert_eq!((r.written, r.renamed), (3, 1));
+    let names = |p: &std::path::Path| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(p)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(&dir), ["data"], "the first spelling wins");
+    assert_eq!(names(&dir.join("data")), ["Sprite"]);
+    assert_eq!(
+        names(&dir.join("data/Sprite")),
+        ["a.spr", "a~1.spr", "b.spr"]
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn windows_file_name_rules() {
+    use crate::extract::invalid_on_windows as bad;
+    for n in [
+        "a?b",
+        "a*",
+        "x:y",
+        "q\"r",
+        "a|b",
+        "<a>",
+        "name.",
+        "name ",
+        "nul",
+        "NUL.txt",
+        "Con",
+        "aux.tar.gz",
+        "com1",
+        "LPT9.log",
+        "a\u{1}b",
+    ] {
+        assert!(bad(n), "{n} must be refused");
+    }
+    for n in [
+        "data",
+        "nulls.txt",
+        "console",
+        "com0",
+        "com10",
+        "lpt",
+        "a.b",
+        ".hidden",
+        "한글",
+        "É",
+        "ÉÉ",
+        "éé1",
+        "abé",
+        "co\u{e9}1",
+    ] {
+        assert!(!bad(n), "{n} is fine");
+    }
+}
+
+#[test]
 fn entries_claiming_huge_sizes_are_refused_without_decoding() {
     let mut e = file("data\\bomb.bin", b"tiny");
     e.size = u32::MAX; // table claims 4 GiB

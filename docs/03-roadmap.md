@@ -76,8 +76,23 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - **Abnahme:** Ein KI-Agent kann ohne Shell-Zugriff ein Archiv untersuchen, zwei vergleichen und ein Testarchiv bauen; alle Tools haben JSON-Schemas und Tests.
 
 ## M5 – Plattformen und Release
-- CI für Windows, macOS, Linux (x64/ARM64), Binärdateien als Release, kurze Anleitung.
-- **Abnahme:** Dieselben Tests laufen auf allen drei Systemen; Ergebnisse (Hashes) sind identisch.
+**Stand 2026-11-17: Tests auf vier Plattformen bestanden; Release-Binärdateien und CI-Lauf stehen aus (brauchen den GitHub-Push).**
+- **Gemessen, alle mit denselben echten Archiven** (`RGRF_REQUIRE_TESTDATA=1 RGRF_GOLDEN_FULL=1`; sieben Archive, über 950.000 Einträge, CRC32/MD5 gegen GRF Editor; CLI-Rundläufe `extract`/`build`/`repack` mit `cdata`):
+
+| System | Ausführung | Ergebnis |
+|---|---|---|
+| macOS ARM64 | nativ (`cargo nextest`) | 135 Tests bestanden |
+| Linux ARM64 | Docker `rust:1` (Rust 1.100.0), Quellen und Archive nur lesend eingebunden | alle bestanden (Core 91, Golden 14, CLI 10, MCP 9 + 8 + 3) |
+| Windows ARM64 | Kreuz-Bau mit `cargo-xwin` auf dem Mac, ausgeführt in der Parallels-VM | alle bestanden (Core 88, Golden 14, CLI 10, MCP 8 + 3) |
+| Windows x64 | wie oben, in der ARM64-VM unter Emulation | alle bestanden (gleiche Zahlen) |
+
+Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf allen vier Systemen identisch mit GRF Editor. Core-Tests sind unter Windows weniger (Symlink-Tests nur unter Unix). Skripte: `tools/cross/`.
+- **Beim Test gefunden und behoben** (Mac-Tests hatten es nicht gezeigt):
+  1. **Linux:** `extract` legte bei Archivpfaden, die sich nur in der Groß-/Kleinschreibung unterscheiden, auf case-sensitiven Dateisystemen zwei Bäume an (`data/` und `DATA/`). Jetzt gilt für jede Pfadkomponente die erste Schreibweise in Archivreihenfolge, auf jedem System; Kollisionen laufen über `--on-collision`. (Wie viele Pfade der echten Archive davon betroffen sind, habe ich nicht gezählt. Test: `names_that_differ_only_in_case_end_up_in_one_tree_on_every_file_system`.)
+  2. **Windows:** `canonicalize` liefert `\?\`-Pfade, in denen std `..` nicht als Elternverweis erkennt. Der MCP-Server prüft `..` jetzt zusätzlich im Text (der Pfad war schon vorher abgelehnt, aber über die falsche Prüfung).
+  3. **Windows:** Namen, die Windows nicht speichern kann (`? * < > | " :`, Steuerzeichen, Punkt/Leerzeichen am Ende, Gerätenamen wie `nul`, `con`, `com1`), werden beim Extrahieren vorab abgelehnt statt mitten im Lauf zu scheitern oder Daten ins Gerät zu schreiben. Prüfung an allen sechs Test-Archiven: 0 solche Namen in 683.000 Einträgen. Dabei fing der Echtdaten-Test einen eigenen Fehler (Panic beim Zerschneiden eines Mehrbyte-Zeichens); behoben, Test mit Mehrbyte-Namen ergänzt.
+- **Vorbereitet, nicht ausgeführt:** `.github/workflows/ci.yml` (fmt, clippy, Tests auf Linux x64/ARM64, macOS ARM64, Windows x64/ARM64, `cargo-deny`, Release-Binärdateien als Artefakte). Es lief nie, weil das Repo nicht auf GitHub liegt; Fehler darin sind daher möglich.
+- **Nicht getestet:** Linux x64 und macOS x64 (nur ARM64), natives Bauen unter Windows (nur Kreuz-Bau), Windows-Dateisystem-Grenzen wie lange Pfade über 260 Zeichen, Extrahieren auf ein NTFS-Laufwerk in großem Umfang (nur `cdata` getestet), Signierung/Notarisierung der Binärdateien, Release-Veröffentlichung.
 
 ## M6 – Entscheidung: Verschlüsselung, 0x300, Thor
 - Nach Bedarf. Voraussetzungen: Format-Details belegen, Tests mit echten Archiven, Konflikt mit der einen `cps.dll` im Client beachten.

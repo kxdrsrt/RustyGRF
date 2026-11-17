@@ -2,7 +2,7 @@
 
 Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/GPF/Thor), inspiriert von Tokeiburus **GRF Editor**.
 
-**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)**, **M2 (`build`, `repack`)** und **M3 (`diff`, `merge`, `patch`)** und **M4 (MCP-Server `rgrf-mcp`, 11 Tools)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash|build|repack|diff|merge|patch` läuft auf allen Test-Archiven; Lesen stimmt mit GRF Editor überein, geschriebene Archive liest GRF Editor ohne Abweichung und die LZMA-Variante läuft im Dev-Client (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). Nächster Schritt: M5 (Plattformen und Release) bzw. nach deiner Wahl (Punkt 33 in den Rückfragen). Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 7).
+**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)**, **M2 (`build`, `repack`)** und **M3 (`diff`, `merge`, `patch`)** und **M4 (MCP-Server `rgrf-mcp`, 11 Tools)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash|build|repack|diff|merge|patch` läuft auf allen Test-Archiven; Lesen stimmt mit GRF Editor überein, geschriebene Archive liest GRF Editor ohne Abweichung und die LZMA-Variante läuft im Dev-Client (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). **M5 (Plattformen)**: Tests bestanden auf macOS ARM64, Linux ARM64, Windows ARM64 und x64; CI-Konfiguration liegt bereit, läuft erst nach dem GitHub-Push. Nächster Schritt: Punkt 34 in den Rückfragen. Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 7).
 
 **Lizenz:** `MIT OR Apache-2.0`. **Inspiration/Credits:** GRF Editor und ActEditor von Tokeiburu (mit seiner Erlaubnis; RustyGRF ist kein Fork), LessGRF von Curiosity. Siehe `NOTICE`.
 
@@ -27,8 +27,21 @@ Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/
 | [docs/05-licensing.md](docs/05-licensing.md) | Erlaubnis von Tokeiburu, Lizenz, Clean-Room-Regeln |
 | [docs/06-tooling-and-workflow.md](docs/06-tooling-and-workflow.md) | Modellwahl, Voraussetzungen auf dem Rechner, MCPs (Context7 u. a.), Arbeitsweise |
 | [docs/07-ui-ux.md](docs/07-ui-ux.md) | GUI-Technik (Tauri), UX-Prinzipien, Hauptansicht, Design Tokens |
-| [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v6) |
+| [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v7) |
 | [docs/MASTERPROMPT.md](docs/MASTERPROMPT.md) | Prompt für eine neue Session, um sofort loszulegen |
 
 ## Verwandte Recherche
 `RO/docs/grf-research/` (LZMA, data vs rdata, Messwerte, Roh-Transkripte der Forum-Threads).
+
+## Schnellstart
+```sh
+cargo build --release                      # Ergebnis in target/ (oder dem Verzeichnis aus .cargo/config.toml)
+rgrf info  data.grf                        # Version, Größe, Einträge
+rgrf ls    data.grf "*.lub" --long         # suchen/auflisten
+rgrf verify data.grf                       # Tabelle prüfen, jeden Eintrag dekodieren
+rgrf extract data.grf ./out "data/sprite*" # entpacken (überschreibt nie ohne --overwrite)
+rgrf build ./out -o neu.grf --method lzma --dedupe   # GRF aus Ordner (Ordner = Archivwurzel)
+rgrf merge custom.grf data.grf -o merged.grf         # das ERSTE Archiv gewinnt (wie DATA.INI)
+rgrf diff a.grf b.grf                      # Unterschiede nach Pfad und Inhalt
+```
+Alle Befehle: [docs/04-cli-and-mcp.md](docs/04-cli-and-mcp.md). Standard-Kompression ist zlib (jeder Client); LZMA nur mit LZMA-fähiger `cps.dll`, Zopfli nur ausdrücklich.

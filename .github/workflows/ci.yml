@@ -1,0 +1,69 @@
+# Läuft erst, wenn das Repo auf GitHub liegt (noch kein Push). Bisher wurden dieselben Tests lokal
+# ausgeführt: macOS ARM64, Linux ARM64 (Docker), Windows ARM64 und x64 (VM, siehe docs/03-roadmap.md, M5).
+# Die Tests mit echten Archiven (RGRF_TESTDATA) werden hier übersprungen: Spieldaten liegen nicht im Repo.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x64, os: ubuntu-latest }
+          - { name: Linux ARM64, os: ubuntu-24.04-arm }
+          - { name: macOS ARM64, os: macos-latest }
+          - { name: Windows x64, os: windows-latest }
+          - { name: Windows ARM64, os: windows-11-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  deny:
+    name: cargo-deny (Lizenzen, Sicherheitshinweise)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  release-binaries:
+    name: Binärdateien (${{ matrix.target }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked -p rgrf-cli -p rgrf-mcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustygrf-${{ matrix.target }}
+          path: |
+            target/release/rgrf
+            target/release/rgrf-mcp
+            target/release/rgrf.exe
+            target/release/rgrf-mcp.exe
+          if-no-files-found: error
