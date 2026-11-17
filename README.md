@@ -2,7 +2,7 @@
 
 Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/GPF/Thor), inspiriert von Tokeiburus **GRF Editor**.
 
-**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash` läuft auf allen Test-Archiven und stimmt mit GRF Editor überein (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). Nächster Schritt: M2 (Bauen und Neu-Komprimieren). Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 5, keine offenen Punkte).
+**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash` läuft auf allen Test-Archiven und stimmt mit GRF Editor überein (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). Nächster Schritt: M2 (Bauen und Neu-Komprimieren). Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 6, 4 offene Punkte).
 
 **Lizenz:** `MIT OR Apache-2.0`. **Inspiration/Credits:** GRF Editor und ActEditor von Tokeiburu (mit seiner Erlaubnis; RustyGRF ist kein Fork), LessGRF von Curiosity. Siehe `NOTICE`.
 
@@ -27,7 +27,7 @@ Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/
 | [docs/05-licensing.md](docs/05-licensing.md) | Erlaubnis von Tokeiburu, Lizenz, Clean-Room-Regeln |
 | [docs/06-tooling-and-workflow.md](docs/06-tooling-and-workflow.md) | Modellwahl, Voraussetzungen auf dem Rechner, MCPs (Context7 u. a.), Arbeitsweise |
 | [docs/07-ui-ux.md](docs/07-ui-ux.md) | GUI-Technik (Tauri), UX-Prinzipien, Hauptansicht, Design Tokens |
-| [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v5) |
+| [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v6) |
 | [docs/MASTERPROMPT.md](docs/MASTERPROMPT.md) | Prompt für eine neue Session, um sofort loszulegen |
 
 ## Verwandte Recherche

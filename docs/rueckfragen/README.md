@@ -4,7 +4,8 @@ Jede Runde ist eine **eigene, versionierte Datei**. Die jeweils neueste ist die 
 
 | Version | Datei | Inhalt | Status |
 |---|---|---|---|
-| **5** | [v5-2026-11-16-aktuell.md](v5-2026-11-16-aktuell.md) | keine offenen Fragen, Beschlüsse zu v4 | **aktuell** |
+| **6** | [v6-2026-11-17-aktuell.md](v6-2026-11-17-aktuell.md) | M2-Ergebnisse, Fehler „Flags 0“, Beschlüsse D1–D7, offene Punkte 27–30 | **aktuell** |
+| 5 | [v5-2026-11-16-archiv.md](v5-2026-11-16-archiv.md) | keine offenen Fragen, Beschlüsse zu v4 | eingefroren |
 | 4 | [v4-2026-11-16-archiv.md](v4-2026-11-16-archiv.md) | 9 offene Punkte, jetzt mit Antworten | eingefroren |
 | 3 | [v3-2026-11-16-archiv.md](v3-2026-11-16-archiv.md) | alle 22 Punkte mit Antworten, je Punkt Status ✅/🟡/🔶 | eingefroren |
 

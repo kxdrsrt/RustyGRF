@@ -18,8 +18,8 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 | `rgrf extract <grf> <ziel> [pattern]` | Entpacken (parallel, mit Namenmodus) |
 | `rgrf verify <grf>` | Tabelle, Offsets, Überlappungen, Dekompression, Größen, Duplikate |
 | `rgrf hash <grf> [pattern]` | CRC32/MD5 je Eintrag |
+| `rgrf repack <grf> -o <grf>` | **umgesetzt (M2):** neu komprimieren/umformatieren, Inhalt unverändert; `--method zlib\|zopfli\|lzma`, `--level`, `--format 0x200\|0x300`, `--align/--no-align`, `--dedupe none\|source\|content`, `--recompress-all`, `--no-verify`, `--overwrite`, `--dry-run` |
 | `rgrf build <ordner> -o <grf> [--method zlib\|zopfli\|lzma] [--level N]` | GRF aus Verzeichnis bauen |
-| `rgrf repack <grf> -o <grf> --method ...` | Neu komprimieren (Inhalt unverändert) |
 | `rgrf diff <a> <b>` | Unterschiede (neu/gelöscht/geändert) |
 | `rgrf merge <basis> <overlay> -o <grf>` | Overlay hat Vorrang (z. B. `rdata` über `data`) |
 | `rgrf patch <alt> <neu> -o <gpf>` | Patch erzeugen |

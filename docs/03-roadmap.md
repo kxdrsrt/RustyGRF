@@ -47,6 +47,7 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - Extrahieren der 0x300-Archive nicht gegen einen Referenzordner verglichen (keiner vorhanden); die Hashes aller Einträge sind aber identisch, und die Extraktion nutzt denselben Lesepfad wie `hash`.
 
 ## M2 – Bauen und Neu-Komprimieren (`rgrf build|repack`)
+**Stand 2026-11-17:** `repack` umgesetzt und gemessen (Ergebnisse und Größen: `docs/rueckfragen/v6-2026-11-17-aktuell.md`); `build` aus Ordner und der Spieltest im Client stehen aus.
 - Aus Verzeichnis bauen, bestehende GRF neu komprimieren: zlib, Zopfli, LZMA.
 - **Abnahme:**
   - `build` aus `grf/cdata/data` ergibt ein Archiv, das GRF Editor/`GrfCL` und der Dev-Client lesen.
