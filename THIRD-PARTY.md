@@ -8,6 +8,7 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 | `lzma-rust2` | 0.25.0 | Apache-2.0 | LZMA-Einträge lesen (M1) und kodieren (M2, Feature `encoder`) | M1/M2 |
 | `zopfli` | 0.8.4 | Apache-2.0 | zlib-kompatible Kompression mit höherem Aufwand (`--method zopfli`) | M2 |
 | `sha2` | 0.11.1 | MIT OR Apache-2.0 | SHA-256 für Inhalts-Dedupe und Rückprüfung beim Repack | M2 |
+| `unicode-normalization` | 0.1.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | Dateinamen von macOS (NFD) beim Bauen in NFC bringen | M2 |
 | `crc32fast` | 1.5.5 | MIT OR Apache-2.0 | CRC32 | M1 |
 | `md-5` | 0.11.0 | MIT OR Apache-2.0 | MD5 | M1 |
 | `rayon` | 1.12.0 | MIT OR Apache-2.0 | parallele Verarbeitung | M1 |

@@ -6,19 +6,18 @@
 //! unchanged; the output is written to a temporary file and renamed only after the check passed.
 
 use rayon::prelude::*;
-use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::BufWriter;
-use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::path::Path;
 
 use crate::archive::Archive;
-use crate::codec::{self, DecodeStatus};
+use crate::codec;
 use crate::container::{Entry, flags};
 use crate::encode::{Method, encode};
 use crate::error::{Error, Result};
 use crate::io::ReadAt;
+use crate::pipeline::{self, Expected, Kind, Prepared, sha, status_class};
 use crate::progress::Control;
 use crate::writer::{Format, OutEntry, Placed, Writer};
 
@@ -122,35 +121,6 @@ pub(crate) struct Unit {
     hash: Option<[u8; 32]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Expected {
-    /// Decodes to data with this hash and status class.
-    Data([u8; 32], u8),
-    /// Encrypted: the stored bytes (with padding) must be identical.
-    Raw([u8; 32]),
-    Nothing,
-}
-
-/// How a block ends up in the output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Encoded,
-    KeptOriginal,
-    Encrypted,
-    Damaged,
-    Stored,
-}
-
-pub(crate) struct Prepared {
-    pub(crate) unit: usize,
-    kind: Kind,
-    stream: Vec<u8>,
-    /// `Some((zsize, aligned))` for blocks copied unchanged.
-    raw: Option<(u32, u32)>,
-    flags: u8,
-    pub(crate) expected: Expected,
-}
-
 #[derive(Default)]
 struct Stats {
     kept: usize,
@@ -159,23 +129,6 @@ struct Stats {
     stored: usize,
     stream_bytes: u64,
     damaged: Vec<usize>,
-}
-
-/// What the writer thread reports per written block: unit, position, flags, expectation.
-type Written = (usize, Placed, u8, Expected);
-
-fn sha(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(data).into()
-}
-
-fn status_class(s: &DecodeStatus) -> u8 {
-    match s {
-        DecodeStatus::Ok => 0,
-        DecodeStatus::Truncated { .. } => 1,
-        DecodeStatus::SizeMismatch { .. } => 2,
-        DecodeStatus::Corrupt(_) => 3,
-        DecodeStatus::Encrypted => 4,
-    }
 }
 
 pub(crate) fn plan_units<R: ReadAt>(
@@ -320,37 +273,6 @@ pub(crate) fn prepare<R: ReadAt>(
     })
 }
 
-/// How much decoded data one batch may hold in memory (all worker threads together).
-const BATCH_BYTES: u64 = 256 << 20;
-const BATCH_UNITS: usize = 4096;
-
-fn batches<R: ReadAt>(src: &Archive<R>, units: &[Unit]) -> Vec<std::ops::Range<usize>> {
-    let (mut out, mut start, mut bytes) = (Vec::new(), 0usize, 0u64);
-    for (i, u) in units.iter().enumerate() {
-        let size = src
-            .entry(u.members[0])
-            .map_or(0, |e| u64::from(e.size).max(u64::from(e.zsize)));
-        if i > start && (bytes + size > BATCH_BYTES || i - start >= BATCH_UNITS) {
-            out.push(start..i);
-            start = i;
-            bytes = 0;
-        }
-        bytes += size;
-    }
-    if start < units.len() {
-        out.push(start..units.len());
-    }
-    out
-}
-
-fn temp_path(dst: &Path) -> PathBuf {
-    let name = dst
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    dst.with_file_name(format!(".{name}.rgrf-tmp"))
-}
-
 pub fn repack<R: ReadAt>(
     src: &Archive<R>,
     dst: &Path,
@@ -393,14 +315,11 @@ pub fn repack<R: ReadAt>(
         return Ok(report);
     }
 
-    let tmp = temp_path(dst);
+    let tmp = pipeline::temp_path(dst);
     let result = write_all(src, &units, &tmp, format, align, opts, ctl, &mut report);
     match result {
         Ok(()) => {
-            if opts.overwrite && dst.exists() {
-                fs::remove_file(dst)?;
-            }
-            fs::rename(&tmp, dst)?;
+            pipeline::commit(&tmp, dst, opts.overwrite)?;
             Ok(report)
         }
         Err(e) => {
@@ -422,7 +341,7 @@ fn write_all<R: ReadAt>(
     report: &mut RepackReport,
 ) -> Result<()> {
     let file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
-    let mut writer = Writer::new(
+    let writer = Writer::new(
         BufWriter::with_capacity(1 << 20, file),
         format,
         align,
@@ -431,68 +350,31 @@ fn write_all<R: ReadAt>(
     let mut placed: Vec<Option<Placed>> = vec![None; units.len()];
     let mut out_flags: Vec<u8> = vec![flags::FILE; units.len()];
     let mut expected: Vec<Expected> = vec![Expected::Nothing; units.len()];
-    let ranges = batches(src, units);
     let total = units.len() as u64;
 
-    let (tx, rx) = mpsc::sync_channel::<Vec<Prepared>>(1);
     let mut stats = Stats::default();
-
-    let mut produced: Result<()> = Ok(());
-    let written: Result<(Writer<BufWriter<File>>, Vec<Written>)> = std::thread::scope(|scope| {
-        let handle = scope.spawn(move || {
-            let mut done = Vec::new();
-            for batch in rx {
-                for p in batch {
-                    let pl = match p.raw {
-                        Some((zsize, aligned)) => writer.put_raw(&p.stream, zsize, aligned)?,
-                        None => writer.put_stream(&p.stream)?,
-                    };
-                    done.push((p.unit, pl, p.flags, p.expected));
+    let (writer, done) = pipeline::run(
+        writer,
+        pipeline::batches(units.iter().map(|u| {
+            src.entry(u.members[0])
+                .map_or(0, |e| u64::from(e.size).max(u64::from(e.zsize)))
+        })),
+        total,
+        ctl,
+        &|u| prepare(src, u, &units[u], opts),
+        &mut |batch| {
+            for p in batch {
+                match p.kind {
+                    Kind::Encoded => stats.recompressed += 1,
+                    Kind::KeptOriginal => stats.kept += 1,
+                    Kind::Encrypted => stats.encrypted += 1,
+                    Kind::Stored => stats.stored += 1,
+                    Kind::Damaged => stats.damaged.push(units[p.unit].members[0]),
                 }
+                stats.stream_bytes += p.stream.len() as u64;
             }
-            Ok((writer, done))
-        });
-        for range in ranges {
-            if let Err(e) = ctl.check() {
-                produced = Err(e);
-                break;
-            }
-            let batch: Result<Vec<Prepared>> = range
-                .clone()
-                .into_par_iter()
-                .map(|u| prepare(src, u, &units[u], opts))
-                .collect();
-            match batch {
-                Ok(batch) => {
-                    for p in &batch {
-                        match p.kind {
-                            Kind::Encoded => stats.recompressed += 1,
-                            Kind::KeptOriginal => stats.kept += 1,
-                            Kind::Encrypted => stats.encrypted += 1,
-                            Kind::Stored => stats.stored += 1,
-                            Kind::Damaged => stats.damaged.push(units[p.unit].members[0]),
-                        }
-                        stats.stream_bytes += p.stream.len() as u64;
-                    }
-                    if tx.send(batch).is_err() {
-                        break; // the writer stopped; its error is returned below
-                    }
-                    ctl.report(range.end as u64, total);
-                }
-                Err(e) => {
-                    produced = Err(e);
-                    break;
-                }
-            }
-        }
-        drop(tx);
-        handle.join().expect("writer thread panicked")
-    });
-    let (writer, done) = match written {
-        Ok(w) => w,
-        Err(e) => return Err(produced.err().unwrap_or(e)),
-    };
-    produced?;
+        },
+    )?;
     for (unit, pl, flags, exp) in done {
         placed[unit] = Some(pl);
         out_flags[unit] = flags;

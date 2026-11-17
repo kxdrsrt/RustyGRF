@@ -281,3 +281,60 @@ fn repack_cdata_to_lzma_and_back_keeps_every_hash() {
     assert_eq!(json(&o)["dry_run"], true);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn build_from_extracted_cdata_keeps_every_hash() {
+    let Some(grf) = testdata("client-dev/full/cdata.grf") else {
+        return;
+    };
+    let dir = tmpdir("build");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("src").to_string_lossy().into_owned();
+    let out = dir.join("built.grf").to_string_lossy().into_owned();
+    let o = rgrf(&["extract", &grf, &src, "--quiet"]);
+    assert_eq!(o.status.code(), Some(0));
+
+    let o = rgrf(&["build", &src, "-o", &out, "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(
+        (v["verified"].clone(), v["format"].clone()),
+        (true.into(), "0x200".into())
+    );
+    let hashes = |p: &str| {
+        let mut l: Vec<String> = String::from_utf8_lossy(&rgrf(&["hash", p]).stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        l.sort();
+        l
+    };
+    assert_eq!(hashes(&grf), hashes(&out));
+
+    // safety: no replacing, no output inside the folder
+    let o = rgrf(&["build", &src, "-o", &out]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
+    let inside = format!("{src}/inside.grf");
+    let o = rgrf(&["build", &src, "-o", &inside]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!std::path::Path::new(&inside).exists());
+    assert_eq!(
+        json(&rgrf(&[
+            "build",
+            &src,
+            "-o",
+            &out,
+            "--dry-run",
+            "--overwrite",
+            "--json"
+        ]))["dry_run"],
+        true
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

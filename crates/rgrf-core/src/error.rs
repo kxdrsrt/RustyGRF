@@ -31,6 +31,8 @@ pub enum Error {
     TargetExists(String),
     #[error("{0}")]
     TooLarge(String),
+    #[error("{0}")]
+    InvalidInput(String),
     #[error("cannot repack: {0}")]
     Unsupported(String),
     #[error("verification of the written archive failed: {0}")]

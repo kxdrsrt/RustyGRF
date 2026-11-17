@@ -11,6 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
+use rgrf_core::build::{BuildOptions, build};
 use rgrf_core::codec::Codec;
 use rgrf_core::encode::Method;
 use rgrf_core::extract::{ExtractOptions, OnCollision, extract};
@@ -134,6 +135,39 @@ enum Cmd {
         #[arg(long)]
         overwrite: bool,
         /// Only plan, write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Build an archive from a folder (the folder is the archive root, e.g. it contains `data/`)
+    Build {
+        folder: PathBuf,
+        /// Output archive (written to a temporary file first)
+        #[arg(short, long)]
+        output: PathBuf,
+        /// zlib (default, every client), zopfli (slow, smaller) or lzma (needs the LZMA cps.dll)
+        #[arg(long, value_enum, default_value = "zlib")]
+        method: MethodArg,
+        /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
+        #[arg(long)]
+        level: Option<u32>,
+        /// 0x200 (default, 32-bit offsets, max 4 GiB) or 0x300
+        #[arg(long, value_parser = parse_format, default_value = "0x200")]
+        format: Format,
+        /// Pad streams to a multiple of 8 (default: yes for 0x200, no for 0x300)
+        #[arg(long, conflicts_with = "no_align")]
+        align: bool,
+        #[arg(long)]
+        no_align: bool,
+        /// Let files with identical content share one data block
+        #[arg(long)]
+        dedupe: bool,
+        /// Skip decoding the written archive for comparison (not recommended)
+        #[arg(long)]
+        no_verify: bool,
+        /// Replace an existing output file
+        #[arg(long)]
+        overwrite: bool,
+        /// Only scan and plan, write nothing
         #[arg(long)]
         dry_run: bool,
     },
@@ -337,6 +371,38 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Build {
+            folder,
+            output,
+            method,
+            level,
+            format,
+            align,
+            no_align,
+            dedupe,
+            no_verify,
+            overwrite,
+            dry_run,
+        } => {
+            let opts = BuildOptions {
+                method: method_from(*method, *level)?,
+                format: *format,
+                align: if *align {
+                    Some(true)
+                } else if *no_align {
+                    Some(false)
+                } else {
+                    None
+                },
+                dedupe: *dedupe,
+                names: cli.names,
+                verify: !*no_verify,
+                overwrite: *overwrite,
+                dry_run: *dry_run,
+                max_file_len: None,
+            };
+            build_cmd(cli, folder, output, &opts)
+        }
         Cmd::Repack {
             grf,
             output,
@@ -351,22 +417,7 @@ fn run(cli: &Cli) -> Result<i32> {
             overwrite,
             dry_run,
         } => {
-            let method = match method {
-                MethodArg::Zlib => Method::Zlib {
-                    level: level.unwrap_or(9),
-                },
-                MethodArg::Zopfli => Method::Zopfli {
-                    iterations: u64::from(level.unwrap_or(10)),
-                },
-                MethodArg::Lzma => Method::Lzma {
-                    preset: level.unwrap_or(9),
-                },
-            };
-            if let Method::Zlib { level } | Method::Lzma { preset: level } = method
-                && level > 9
-            {
-                bail!("--level must be 0-9 for zlib and lzma");
-            }
+            let method = method_from(*method, *level)?;
             let opts = RepackOptions {
                 method,
                 format: *format,
@@ -844,4 +895,90 @@ fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Res
         }
     }
     Ok(if warn { 2 } else { 0 })
+}
+
+fn method_from(method: MethodArg, level: Option<u32>) -> Result<Method> {
+    let m = match method {
+        MethodArg::Zlib => Method::Zlib {
+            level: level.unwrap_or(9),
+        },
+        MethodArg::Zopfli => Method::Zopfli {
+            iterations: u64::from(level.unwrap_or(10)),
+        },
+        MethodArg::Lzma => Method::Lzma {
+            preset: level.unwrap_or(9),
+        },
+    };
+    if let Method::Zlib { level } | Method::Lzma { preset: level } = m
+        && level > 9
+    {
+        bail!("--level must be 0-9 for zlib and lzma");
+    }
+    Ok(m)
+}
+
+fn build_cmd(cli: &Cli, folder: &Path, output: &Path, opts: &BuildOptions) -> Result<i32> {
+    let meter = Meter::new(cli);
+    let cb = meter.callback();
+    let ctl = Control {
+        cancel: None,
+        progress: Some(&cb),
+    };
+    let started = Instant::now();
+    let r = build(folder, output, opts, &ctl);
+    meter.done();
+    let r = r?;
+    let secs = started.elapsed().as_secs_f64();
+    if cli.json {
+        let skipped: Vec<Value> = r
+            .skipped
+            .iter()
+            .map(|s| json!({"path": s.path.display().to_string(), "reason": s.reason}))
+            .collect();
+        print_json(&json!({
+            "schema_version": SCHEMA_VERSION,
+            "dry_run": r.dry_run, "output": output.display().to_string(),
+            "format": format!("0x{:03x}", r.format),
+            "files": r.files, "blocks": r.blocks, "shared_files": r.shared_files,
+            "unpacked_bytes": r.unpacked_bytes, "output_stream_bytes": r.output_stream_bytes,
+            "output_file_bytes": r.output_file_len, "verified": r.verified,
+            "skipped": skipped, "seconds": secs,
+        }))?;
+    } else {
+        println!(
+            "{} {} -> {} (0x{:03x}) in {:.1}s",
+            if r.dry_run { "Plan for" } else { "Built" },
+            folder.display(),
+            output.display(),
+            r.format,
+            secs
+        );
+        println!(
+            "Files:    {} ({} bytes), data blocks {}, files sharing a block {}",
+            r.files, r.unpacked_bytes, r.blocks, r.shared_files
+        );
+        if !r.dry_run {
+            println!(
+                "Size:     streams {} bytes, file {} bytes ({:.1}% of the unpacked size)",
+                r.output_stream_bytes,
+                r.output_file_len,
+                r.output_file_len as f64 * 100.0 / r.unpacked_bytes.max(1) as f64
+            );
+            println!(
+                "Checked:  {}",
+                if r.verified {
+                    "every file decoded and compared with the folder"
+                } else {
+                    "no (skipped)"
+                }
+            );
+        }
+        for s in r.skipped.iter().take(10) {
+            eprintln!("skipped: {} ({})", s.path.display(), s.reason);
+        }
+        if r.skipped.len() > 10 {
+            eprintln!("skipped: ... and {} more", r.skipped.len() - 10);
+        }
+    }
+    Ok(0)
 }
