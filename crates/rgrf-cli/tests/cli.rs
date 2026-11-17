@@ -447,3 +447,110 @@ fn diff_merge_and_patch_on_small_archives() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn spr_info_export_build_round_trip() {
+    use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};
+
+    let mut pal = Box::new([0u8; PALETTE_LEN]);
+    for i in 0..256 {
+        pal[4 * i] = i as u8;
+        pal[4 * i + 1] = 255 - i as u8;
+        pal[4 * i + 2] = 9;
+    }
+    let spr = Spr {
+        version: Version::V2_1,
+        indexed: vec![
+            IndexedImage {
+                width: 3,
+                height: 2,
+                pixels: vec![0, 0, 5, 0, 9, 0],
+            },
+            IndexedImage {
+                width: 1,
+                height: 1,
+                pixels: vec![200],
+            },
+        ],
+        rgba: vec![RgbaImage {
+            width: 2,
+            height: 1,
+            pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        }],
+        palette: Some(pal),
+        warnings: vec![],
+    };
+    let dir = tmpdir("spr");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.spr");
+    let original = spr.to_bytes(Version::V2_1).unwrap();
+    std::fs::write(&file, &original).unwrap();
+    let f = file.to_str().unwrap();
+
+    let o = rgrf(&["--json", "spr", "info", f]);
+    assert!(o.status.success());
+    let v = json(&o);
+    assert_eq!(v["version"], "2.1");
+    assert_eq!(v["indexed_images"], 2);
+    assert_eq!(v["rgba_images"], 1);
+
+    let frames = dir.join("frames");
+    let fr = frames.to_str().unwrap();
+    let o = rgrf(&["spr", "export", f, "-o", fr]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::read_dir(&frames).unwrap().count(), 3);
+    // never overwrites without --overwrite
+    assert_eq!(rgrf(&["spr", "export", f, "-o", fr]).status.code(), Some(1));
+    assert!(
+        rgrf(&["spr", "export", f, "-o", fr, "--overwrite"])
+            .status
+            .success()
+    );
+
+    let out = dir.join("b.spr");
+    let o = rgrf(&["spr", "build", fr, "-o", out.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::read(&out).unwrap(), original);
+    assert_eq!(
+        rgrf(&["spr", "build", fr, "-o", out.to_str().unwrap()])
+            .status
+            .code(),
+        Some(1),
+        "refuses to overwrite"
+    );
+
+    // not an SPR, and an unknown version string
+    std::fs::write(dir.join("x.spr"), b"hello").unwrap();
+    assert_eq!(
+        rgrf(&["spr", "info", dir.join("x.spr").to_str().unwrap()])
+            .status
+            .code(),
+        Some(1)
+    );
+    assert!(
+        !rgrf(&["spr", "build", fr, "-o", "/tmp/x", "--version", "9"])
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn spr_from_a_real_grf_entry() {
+    let Some(data) = testdata("0 OTHER CLIENTS/client-kro/data.grf") else {
+        return;
+    };
+    let o = rgrf(&[
+        "--json",
+        "spr",
+        "info",
+        &data,
+        r"data\sprite\npc\4_cenere.spr",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(v["version"], "2.1");
+    // measured: this sprite has only true-colour frames
+    assert_eq!(v["indexed_images"], 0);
+    assert_eq!(v["rgba_images"], 24);
+}

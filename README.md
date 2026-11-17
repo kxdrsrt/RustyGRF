@@ -2,7 +2,7 @@
 
 Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/GPF/Thor), inspiriert von Tokeiburus **GRF Editor**.
 
-**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)**, **M2 (`build`, `repack`)** und **M3 (`diff`, `merge`, `patch`)** und **M4 (MCP-Server `rgrf-mcp`, 11 Tools)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash|build|repack|diff|merge|patch` läuft auf allen Test-Archiven; Lesen stimmt mit GRF Editor überein, geschriebene Archive liest GRF Editor ohne Abweichung und die LZMA-Variante läuft im Dev-Client (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). **M5 (Plattformen)**: Tests bestanden auf macOS ARM64, Linux ARM64, Windows ARM64 und x64; CI-Konfiguration liegt bereit, läuft erst nach dem GitHub-Push. Nächster Schritt: Punkt 34 in den Rückfragen. Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 7).
+**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)**, **M2 (`build`, `repack`)** und **M3 (`diff`, `merge`, `patch`)** und **M4 (MCP-Server `rgrf-mcp`, 11 Tools)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash|build|repack|diff|merge|patch` läuft auf allen Test-Archiven; Lesen stimmt mit GRF Editor überein, geschriebene Archive liest GRF Editor ohne Abweichung und die LZMA-Variante läuft im Dev-Client (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). **M5 (Plattformen)**: Tests bestanden auf macOS ARM64, Linux ARM64, Windows ARM64 und x64; CI-Konfiguration liegt bereit, läuft erst nach dem GitHub-Push. **M7a (SPR lesen/schreiben, PNG-Export) ist umgesetzt** (`rgrf spr`), siehe [docs/09-formats.md](docs/09-formats.md); nächster Schritt: ACT/PAL (M7b). Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 7).
 
 **Lizenz:** `MIT OR Apache-2.0`. **Inspiration/Credits:** GRF Editor und ActEditor von Tokeiburu (mit seiner Erlaubnis; RustyGRF ist kein Fork), LessGRF von Curiosity. Siehe `NOTICE`.
 
@@ -27,6 +27,8 @@ Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/
 | [docs/05-licensing.md](docs/05-licensing.md) | Erlaubnis von Tokeiburu, Lizenz, Clean-Room-Regeln |
 | [docs/06-tooling-and-workflow.md](docs/06-tooling-and-workflow.md) | Modellwahl, Voraussetzungen auf dem Rechner, MCPs (Context7 u. a.), Arbeitsweise |
 | [docs/07-ui-ux.md](docs/07-ui-ux.md) | GUI-Technik (Tauri), UX-Prinzipien, Hauptansicht, Design Tokens |
+| [docs/09-formats.md](docs/09-formats.md) | Dateiformate im Client (SPR, später ACT, PAL, ...), Aufbau und Messungen |
+| [docs/10-feature-matrix.md](docs/10-feature-matrix.md) | Funktionen von GRF Editor und ACT Editor gegen RustyGRF (Plan M7) |
 | [docs/08-translation.md](docs/08-translation.md) | Übersetzung (RO Translation Project) in `core.grf`/`cdata.grf` einspielen, Werkzeug und Messungen |
 | [BENCHMARKS.md](BENCHMARKS.md) | Messungen gegen GRF Editor (`GrfCL`) und auf macOS, ehrlich mit Grenzen (Englisch, für Showcase) |
 | [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v7) |

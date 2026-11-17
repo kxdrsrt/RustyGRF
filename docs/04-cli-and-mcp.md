@@ -18,6 +18,9 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 | `rgrf extract <grf> <ziel> [pattern]` | Entpacken (parallel, mit Namenmodus) |
 | `rgrf verify <grf>` | Tabelle, Offsets, Überlappungen, Dekompression, Größen, Duplikate |
 | `rgrf hash <grf> [pattern]` | CRC32/MD5 je Eintrag |
+| `rgrf spr info <spr>` oder `<grf> <pfad>` | **umgesetzt (M7a):** Version, Bilder, Größen, Warnungen eines Sprites (lose Datei oder Eintrag im GRF); `--json` |
+| `rgrf spr export <spr>` oder `<grf> <pfad>` `-o <ordner>` | **M7a:** jedes Bild als PNG (`000.png`, ...; Palettenbilder als indiziertes PNG mit Palette, True-Color als RGBA); überschreibt nie ohne `--overwrite` |
+| `rgrf spr build <ordner> -o <spr>` | **M7a:** SPR aus den PNGs eines Ordners (nach Namen sortiert); `--version 2.1` (Standard), `2.0`, `1.1`, `1.0`; alle indizierten PNGs müssen dieselbe Palette haben |
 | `rgrf build <ordner> -o <grf>` | **umgesetzt (M2):** GRF aus Ordner (Ordner = Archivwurzel, enthält z. B. `data/`); gleiche Optionen wie `repack` (`--method`, `--level`, `--format` Standard 0x200, `--align/--no-align`, `--dedupe` = gleicher Inhalt teilt einen Block, `--no-verify`, `--overwrite`, `--dry-run`); Dateinamen NFC, `.DS_Store`/`._*`/`Thumbs.db`/`desktop.ini`/Symlinks werden übersprungen und gemeldet; Fehler bei nicht darstellbaren Namen, Groß-/Kleinschreibungs-Kollisionen, Dateien ≥ 4 GiB, Ausgabe im Quellordner |
 | `rgrf repack <grf> -o <grf>` | **umgesetzt (M2):** neu komprimieren/umformatieren, Inhalt unverändert; `--method zlib\|zopfli\|lzma`, `--level`, `--format 0x200\|0x300`, `--align/--no-align`, `--dedupe none\|source\|content`, `--recompress-all`, `--no-verify`, `--overwrite`, `--dry-run` |
 | `rgrf diff <a> <b> [--all]` | **umgesetzt (M3):** Pfade nur in A / nur in B / mit anderem Inhalt (SHA-256 des dekodierten Inhalts, Pfadvergleich wie der Client: Groß-/Kleinschreibung und `/`=`\` egal); Exit 0 identisch, 2 Unterschiede |

@@ -24,6 +24,8 @@ use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, Entry, GrfPath, NameMode};
 use serde_json::{Value, json};
 
+mod spr_cmd;
+
 const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Parser)]
@@ -206,6 +208,41 @@ enum Cmd {
     Hash {
         grf: PathBuf,
         pattern: Option<String>,
+    },
+    /// Sprites (.spr): show, export frames as PNG, build from PNGs
+    Spr {
+        #[command(subcommand)]
+        action: SprCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SprCmd {
+    /// Version, frames and sizes of a sprite (a loose .spr file, or a GRF and the entry path)
+    Info {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// Write every frame as PNG (palette images as indexed PNG, true-colour as RGBA)
+    Export {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Output folder (frames are numbered 000.png, 001.png, ...)
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Build an .spr from the PNGs of a folder (sorted by name)
+    Build {
+        folder: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// SPR version: 2.1 (default, RLE as in the client files), 2.0 (raw), 1.1 or 1.0 (palette images only)
+        #[arg(long, default_value = "2.1")]
+        version: rgrf_formats::spr::Version,
+        #[arg(long)]
+        overwrite: bool,
     },
 }
 
@@ -468,6 +505,30 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Spr { action } => match action {
+            SprCmd::Info { input, entry } => {
+                spr_cmd::info(input, entry.as_deref(), cli.names, cli.json)
+            }
+            SprCmd::Export {
+                input,
+                entry,
+                output,
+                overwrite,
+            } => spr_cmd::export(
+                input,
+                entry.as_deref(),
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            SprCmd::Build {
+                folder,
+                output,
+                version,
+                overwrite,
+            } => spr_cmd::build(folder, output, *version, *overwrite, cli.json),
+        },
         Cmd::Build {
             folder,
             output,

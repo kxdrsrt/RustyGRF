@@ -15,7 +15,10 @@ use rgrf_core::{Archive, DecodeStatus, NameMode};
 
 const ARCHIVES: [(&str, &str); 7] = [
     ("cdata", "0 GRFs/reference/cdata-2024-original.grf"),
-    ("core", "client-dev/full/core.grf"),
+    (
+        "core",
+        "0 GRFs/reference/core-before-translation-2026-11-17.grf",
+    ),
     ("cpal", "client-dev/full/cpal.grf"),
     ("rdata", "0 OTHER CLIENTS/client-kro/rdata.grf"),
     ("data", "0 OTHER CLIENTS/client-kro/data.grf"),

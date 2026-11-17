@@ -125,8 +125,8 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 
 ## M7 – Formate und All-in-one (Entscheidung D16, 2026-11-18)
 **Ziel (von dir bestätigt):** ein Werkzeug statt GRF Editor + ACT Editor + Palette Editor + Einzelskripte. Reihenfolge nach Abhängigkeit; je Teil zuerst Bibliothek (`rgrf-core`/Format-Crates), dann CLI und MCP, die GUI (M8) setzt darauf auf.
-- **M7.0 Funktionsmatrix (zuerst, klein):** Was GRF Editor, ACT Editor und Palette Editor wirklich können, aus den Quelltexten (`1 CLIENT TOOLS/5 GRF Editor/src`, `6 ACT Editor`), nicht aus dem Gedächtnis; daraus die Liste „muss“/„später“/„nicht“. Bisher nur aus Ordnernamen bekannt: ActImaging, Lua, Encryption, Palette Editor, OpenTK (3D-Vorschau).
-- **M7a SPR:** lesen/schreiben (indiziert + RGBA, RLE), PNG-Export/-Import. **Abnahme:** Rundlauf aller SPR in `data.grf` ohne Verlust; Export gleich wie GRF Editor an festen Beispielen.
+- **M7.0 Funktionsmatrix ✅ (2026-11-18):** [10-feature-matrix.md](10-feature-matrix.md), aus Quelltexten von GRF Editor und ACT Editor (Umfang, nicht jedes Verhalten); zwei offene Fragen dort (Skripte, Audio/Video).
+- **M7a SPR ✅ (2026-11-18):** lesen/schreiben (1.0–2.1; indiziert + RGBA, RLE), PNG-Export/-Import, `rgrf spr info|export|build`. **Gemessen** an 44.526 SPR in `data.grf`: alle lesbar, Pixel und Palette nach Zurückschreiben identisch, 44.520 byteidentisch (Rest: ungenutzte Bytes vor der Palette bzw. nicht untersucht), Details in [09-formats.md](09-formats.md). **Offen:** Vergleich mit GRF Editor in der Windows-VM; Bearbeiten (Bilder tauschen/hinzufügen) kommt mit M7b/M8.
 - **M7b PAL + ACT (+ IMF):** lesen/schreiben, Aktionen/Frames/Layer/Anker/Sounds, Rendern nach PNG/GIF, Bearbeiten (Layer, Versatz, Palette tauschen, Aktion kopieren). **Abnahme:** Rundlauf aller ACT; Render gleich wie ActEditor (Windows-VM als Referenz).
 - **M7c Lua/Lub und Text:** Anzeigen/Dekompilieren, Prüfung auf die Fehler, die wir beim Übersetzungstest erst im Client gesehen haben (fehlendes `SystemEN`, falsche `NPCIdentity`).
 - **M7d Bilder:** BMP/TGA/JPG-Vorschau, Magenta-Transparenz, Optimierer (siehe `RO/docs/grf-research/06`).

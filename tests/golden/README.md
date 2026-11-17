@@ -7,7 +7,7 @@ Erzeugt am 2026-11-16 (0x200-Archive) und 2026-11-16 abends (0x300, je 24 bzw. 5
 | Datei | Quelle (relativ zu `RO/1 CLIENT-SIDE`) | Einträge | LZMA | Fehler |
 |---|---|---|---|---|
 | `cdata.tsv.gz` | `0 GRFs/reference/cdata-2024-original.grf` | 3.973 | 185 | 0 |
-| `core.tsv.gz` | `client-dev/full/core.grf` | 4.661 | 4.391 | 0 |
+| `core.tsv.gz` | `0 GRFs/reference/core-before-translation-2026-11-17.grf` (old `client-dev/full/core.grf`, replaced by the translation update 2026-11-17) | 4.661 | 4.391 | 0 |
 | `cpal.tsv.gz` | `client-dev/full/cpal.grf` | 45.555 | 0 | 0 |
 | `rdata.tsv.gz` | `0 OTHER CLIENTS/client-kro/rdata.grf` | 24.756 | 0 | 0 |
 | `data.tsv.gz` | `0 OTHER CLIENTS/client-kro/data.grf` (identisch mit `client-dev/full/data.grf`, byteweise verglichen) | 202.358 | 0 | 0 |

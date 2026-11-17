@@ -1,0 +1,19 @@
+[package]
+name = "rgrf-formats"
+description = "RustyGRF file formats of the Ragnarok Online client: SPR, (later) ACT, PAL, ..."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+png = "0.18.1"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+rayon = "1.12.0"
+rgrf-core = { path = "../rgrf-core" }
