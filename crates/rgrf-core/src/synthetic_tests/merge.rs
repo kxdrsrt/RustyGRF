@@ -284,3 +284,48 @@ fn copy_streams_keeps_a_damaged_entry_damaged_and_verify_reports_it() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn replace_only_updates_existing_paths_and_adds_nothing_new() {
+    use crate::merge::merge_with;
+    let base = open(&[
+        file("data\\a.txt", b"base a"),
+        file("data\\b.txt", b"base b"),
+    ]);
+    let update = open(&[
+        file("DATA/A.TXT", b"new a"),
+        file("data\\only_in_update.txt", b"x"),
+    ]);
+    let (dir, dst) = out("replace-only");
+    let r = merge_with(
+        &[&update, &base],
+        &dst,
+        &RepackOptions::default(),
+        true,
+        &Control::default(),
+    )
+    .unwrap();
+    let m = Archive::open(&dst).unwrap();
+    assert_eq!(
+        names(&m),
+        ["data\\a.txt", "data\\b.txt"],
+        "order and set of the base"
+    );
+    assert_eq!(content(&m, "data\\a.txt"), b"new a");
+    assert_eq!(content(&m, "data\\b.txt"), b"base b");
+    assert_eq!(r.sources[0].ignored_new, 1);
+    assert_eq!((r.sources[0].used, r.sources[1].used), (1, 1));
+
+    // without the flag the new path is added
+    let all = dir.join("all.grf");
+    merge_with(
+        &[&update, &base],
+        &all,
+        &RepackOptions::default(),
+        false,
+        &Control::default(),
+    )
+    .unwrap();
+    assert_eq!(Archive::open(&all).unwrap().len(), 3);
+    std::fs::remove_dir_all(dir).unwrap();
+}

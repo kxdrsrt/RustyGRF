@@ -153,6 +153,10 @@ enum Cmd {
         grfs: Vec<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
+        /// The LAST archive is the base: earlier archives replace its files but add no new paths
+        /// (update a GRF with a newer translation without pulling in everything else)
+        #[arg(long)]
+        replace_only: bool,
         #[command(flatten)]
         write: WriteArgs,
     },
@@ -500,8 +504,9 @@ fn run(cli: &Cli) -> Result<i32> {
         Cmd::Merge {
             grfs,
             output,
+            replace_only,
             write,
-        } => merge_cmd(cli, grfs, output, &write.options()?),
+        } => merge_cmd(cli, grfs, output, *replace_only, &write.options()?),
         Cmd::Patch {
             old,
             new,
@@ -1121,7 +1126,13 @@ fn open_all(paths: &[PathBuf], output: &Path) -> Result<Vec<Archive>> {
     Ok(archives)
 }
 
-fn merge_cmd(cli: &Cli, grfs: &[PathBuf], output: &Path, opts: &RepackOptions) -> Result<i32> {
+fn merge_cmd(
+    cli: &Cli,
+    grfs: &[PathBuf],
+    output: &Path,
+    replace_only: bool,
+    opts: &RepackOptions,
+) -> Result<i32> {
     let archives = open_all(grfs, output)?;
     let refs: Vec<&Archive> = archives.iter().collect();
     let meter = Meter::new(cli);
@@ -1131,7 +1142,7 @@ fn merge_cmd(cli: &Cli, grfs: &[PathBuf], output: &Path, opts: &RepackOptions) -
         progress: Some(&cb),
     };
     let started = Instant::now();
-    let r = rgrf_core::merge::merge(&refs, output, opts, &ctl);
+    let r = rgrf_core::merge::merge_with(&refs, output, opts, replace_only, &ctl);
     meter.done();
     let r = r?;
     let secs = started.elapsed().as_secs_f64();
@@ -1145,7 +1156,7 @@ fn merge_cmd(cli: &Cli, grfs: &[PathBuf], output: &Path, opts: &RepackOptions) -
             .map(|(p, s)| {
                 json!({
                     "path": p.display().to_string(), "files": s.files, "used": s.used,
-                    "overridden": s.overridden, "shadowed": s.shadowed,
+                    "overridden": s.overridden, "shadowed": s.shadowed, "ignored_new": s.ignored_new,
                     "markers_skipped": s.markers_skipped,
                 })
             })
@@ -1164,10 +1175,22 @@ fn merge_cmd(cli: &Cli, grfs: &[PathBuf], output: &Path, opts: &RepackOptions) -
                 s.used,
                 s.overridden,
                 p.display(),
-                if s.markers_skipped > 0 {
-                    format!("  ({} empty markers not copied)", s.markers_skipped)
-                } else {
-                    String::new()
+                {
+                    let mut notes = Vec::new();
+                    if s.markers_skipped > 0 {
+                        notes.push(format!("{} empty markers not copied", s.markers_skipped));
+                    }
+                    if s.ignored_new > 0 {
+                        notes.push(format!(
+                            "{} new paths ignored (--replace-only)",
+                            s.ignored_new
+                        ));
+                    }
+                    if notes.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  ({})", notes.join(", "))
+                    }
                 }
             );
         }

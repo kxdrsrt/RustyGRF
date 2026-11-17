@@ -349,6 +349,7 @@ fn the_output_check_detects_a_damaged_result() {
     let sel = Selection {
         sources: &sources,
         sel: (0..src.len()).map(|idx| Sel { src: 0, idx }).collect(),
+        names: Vec::new(),
     };
     let units = plan_units(&sel, &o, &Control::default()).unwrap();
     let mut unit_of = vec![None; src.len()];

@@ -147,6 +147,8 @@ pub struct SourceStats {
     /// Files replaced by a later entry of the same archive.
     pub shadowed: usize,
     pub markers_skipped: usize,
+    /// Files not taken because `replace_only` is set and the base archive does not have the path.
+    pub ignored_new: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +174,19 @@ pub fn merge<R: ReadAt>(
     opts: &RepackOptions,
     ctl: &Control,
 ) -> Result<MergeReport> {
+    merge_with(sources, dst, opts, false, ctl)
+}
+
+/// Like [`merge`]. With `replace_only` the **last** archive is the base: archives before it may
+/// replace files the base already has but add no new paths (to update a GRF with a newer
+/// translation without pulling in everything else that translation contains).
+pub fn merge_with<R: ReadAt>(
+    sources: &[&Archive<R>],
+    dst: &Path,
+    opts: &RepackOptions,
+    replace_only: bool,
+    ctl: &Control,
+) -> Result<MergeReport> {
     if sources.is_empty() {
         return Err(Error::InvalidInput(
             "merge needs at least one archive".into(),
@@ -180,6 +195,7 @@ pub fn merge<R: ReadAt>(
     let mut stats = vec![SourceStats::default(); sources.len()];
     let mut at: HashMap<Vec<u8>, usize> = HashMap::new();
     let mut sel: Vec<Sel> = Vec::new();
+    let mut names: Vec<Option<GrfPath>> = Vec::new();
     for (src, a) in sources.iter().enumerate().rev() {
         let (order, dup) = last_by_key(a);
         stats[src].markers_skipped = a.entries().iter().filter(|e| e.is_marker()).count();
@@ -190,14 +206,23 @@ pub fn merge<R: ReadAt>(
                 continue;
             }
             stats[src].files += 1;
+            if replace_only && src + 1 != sources.len() && !at.contains_key(&e.name.key()) {
+                stats[src].ignored_new += 1;
+                continue;
+            }
             match at.get(&e.name.key()) {
                 Some(&pos) => {
                     stats[sel[pos].src].overridden += 1;
+                    // the spelling of the first (lowest-priority) archive stays
+                    if names[pos].is_none() {
+                        names[pos] = Some(sources[sel[pos].src].entry(sel[pos].idx)?.name.clone());
+                    }
                     sel[pos] = Sel { src, idx };
                 }
                 None => {
                     at.insert(e.name.key(), sel.len());
                     sel.push(Sel { src, idx });
+                    names.push(None);
                 }
             }
         }
@@ -206,7 +231,11 @@ pub fn merge<R: ReadAt>(
         stats[s.src].used += 1;
     }
     let format = opts.format.unwrap_or_else(|| default_format(sources));
-    let selection = Selection { sources, sel };
+    let selection = Selection {
+        sources,
+        sel,
+        names,
+    };
     let repack = write_selection(&selection, dst, format, opts, ctl)?;
     Ok(MergeReport {
         repack,
@@ -259,6 +288,7 @@ pub fn patch<R: ReadAt>(
     let selection = Selection {
         sources: &sources,
         sel,
+        names: Vec::new(),
     };
     let repack = write_selection(&selection, dst, format, opts, ctl)?;
     Ok(PatchReport {

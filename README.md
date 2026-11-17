@@ -27,6 +27,8 @@ Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/
 | [docs/05-licensing.md](docs/05-licensing.md) | Erlaubnis von Tokeiburu, Lizenz, Clean-Room-Regeln |
 | [docs/06-tooling-and-workflow.md](docs/06-tooling-and-workflow.md) | Modellwahl, Voraussetzungen auf dem Rechner, MCPs (Context7 u. a.), Arbeitsweise |
 | [docs/07-ui-ux.md](docs/07-ui-ux.md) | GUI-Technik (Tauri), UX-Prinzipien, Hauptansicht, Design Tokens |
+| [docs/08-translation.md](docs/08-translation.md) | Übersetzung (RO Translation Project) in `core.grf`/`cdata.grf` einspielen, Werkzeug und Messungen |
+| [BENCHMARKS.md](BENCHMARKS.md) | Messungen gegen GRF Editor (`GrfCL`) und auf macOS, ehrlich mit Grenzen (Englisch, für Showcase) |
 | [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v7) |
 | [docs/MASTERPROMPT.md](docs/MASTERPROMPT.md) | Prompt für eine neue Session, um sofort loszulegen |
 

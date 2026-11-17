@@ -276,6 +276,11 @@ pub const TOOLS: &[Tool] = &[
         description: "Merges archives into one. For every path the FIRST archive of `paths` wins (like the lowest index in DATA.INI): list custom GRFs first and data.grf last.",
         params: &[
             req("paths", Ty::StrList, "Archives, highest priority first."),
+            opt(
+                "replace_only",
+                Ty::Bool,
+                "The LAST archive is the base: earlier archives replace its files but add no new paths (update a GRF with a newer translation without pulling in everything else).",
+            ),
             OUTPUT,
             METHOD_OR_COPY,
             LEVEL,
@@ -766,8 +771,14 @@ fn merge_tool(ctx: &Ctx, a: &Args) -> Out {
         .map(|p| open(ctx, p))
         .collect::<Result<_, _>>()?;
     let refs: Vec<&Archive> = archives.iter().collect();
-    let r = rgrf_core::merge::merge(&refs, &out, &repack_options(a, true)?, &ctx.control)
-        .map_err(err)?;
+    let r = rgrf_core::merge::merge_with(
+        &refs,
+        &out,
+        &repack_options(a, true)?,
+        a.flag("replace_only"),
+        &ctx.control,
+    )
+    .map_err(err)?;
     let mut v = repack_json(&r.repack, &out);
     v["inputs"] = paths
         .iter()
@@ -776,6 +787,7 @@ fn merge_tool(ctx: &Ctx, a: &Args) -> Out {
             json!({
                 "path": p, "files": s.files, "used_in_result": s.used,
                 "replaced_by_higher_priority": s.overridden, "hidden_by_later_duplicate": s.shadowed,
+                "new_paths_ignored": s.ignored_new,
                 "empty_markers_not_copied": s.markers_skipped,
             })
         })

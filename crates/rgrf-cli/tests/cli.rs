@@ -399,6 +399,23 @@ fn diff_merge_and_patch_on_small_archives() {
     let cat = rgrf(&["cat", &p("merged.grf"), "data\\b.txt"]);
     assert_eq!(String::from_utf8_lossy(&cat.stdout), "custom b");
 
+    // --replace-only: the last archive is the base, custom.grf may replace but not add (c.txt)
+    let o = rgrf(&[
+        "merge",
+        &p("custom.grf"),
+        &p("base.grf"),
+        "-o",
+        &p("updated.grf"),
+        "--replace-only",
+        "--json",
+    ]);
+    assert_eq!(o.status.code(), Some(0));
+    let v = json(&o);
+    assert_eq!(v["files"], 2);
+    assert_eq!(v["sources"][0]["ignored_new"], 1);
+    let cat = rgrf(&["cat", &p("updated.grf"), "data\\b.txt"]);
+    assert_eq!(String::from_utf8_lossy(&cat.stdout), "custom b");
+
     // a patch from base to merged holds the new and the changed file
     let o = rgrf(&[
         "patch",

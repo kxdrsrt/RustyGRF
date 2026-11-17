@@ -17,6 +17,7 @@ use crate::container::{Entry, flags};
 use crate::encode::{Method, encode};
 use crate::error::{Error, Result};
 use crate::io::ReadAt;
+use crate::name::GrfPath;
 use crate::pipeline::{self, Expected, Kind, Prepared, sha, status_class};
 use crate::progress::Control;
 use crate::writer::{Format, OutEntry, Placed, Writer};
@@ -131,6 +132,9 @@ pub(crate) struct Sel {
 pub(crate) struct Selection<'a, R: ReadAt> {
     pub(crate) sources: &'a [&'a Archive<R>],
     pub(crate) sel: Vec<Sel>,
+    /// Name to write instead of the selected entry's own (`merge` keeps the spelling of the
+    /// lowest-priority archive when a higher one replaces the file). Empty or `None`: own name.
+    pub(crate) names: Vec<Option<GrfPath>>,
 }
 
 impl<R: ReadAt> Selection<'_, R> {
@@ -144,6 +148,14 @@ impl<R: ReadAt> Selection<'_, R> {
 
     pub(crate) fn entry(&self, i: usize) -> Result<&Entry> {
         self.archive(i).entry(self.sel[i].idx)
+    }
+
+    /// The name the output entry gets.
+    pub(crate) fn name(&self, i: usize) -> Result<&GrfPath> {
+        match self.names.get(i) {
+            Some(Some(n)) => Ok(n),
+            _ => Ok(&self.entry(i)?.name),
+        }
     }
 
     fn read(&self, i: usize) -> Result<codec::Decoded> {
@@ -363,6 +375,7 @@ pub fn repack<R: ReadAt>(
     let s = Selection {
         sources: &sources,
         sel: (0..src.len()).map(|idx| Sel { src: 0, idx }).collect(),
+        names: Vec::new(),
     };
     let format = opts.format.unwrap_or(if src.header().version == 0x300 {
         Format::V300
@@ -496,13 +509,13 @@ fn write_all<R: ReadAt>(
         let e = s.entry(i)?;
         out_entries.push(match *unit {
             Some(u) => OutEntry {
-                name: e.name.clone(),
+                name: s.name(i)?.clone(),
                 placed: placed[u].expect("every unit was written"),
                 size: e.size,
                 flags: out_flags[u],
             },
             None => OutEntry {
-                name: e.name.clone(),
+                name: s.name(i)?.clone(),
                 placed: marker,
                 size: 0,
                 flags: 0,
@@ -549,7 +562,7 @@ pub(crate) fn verify_output<R: ReadAt>(
     }
     for (i, b) in out.entries().iter().enumerate() {
         let a = s.entry(i)?;
-        if a.name != b.name
+        if *s.name(i)? != b.name
             || a.size != b.size && !a.is_marker()
             || a.is_marker() != b.is_marker()
             || a.is_raw() != b.is_raw()
