@@ -63,6 +63,11 @@ const METHOD: Param = opt(
     Ty::Enum(&["zlib", "zopfli", "lzma"]),
     "Compression: zlib (default, every client), zopfli (smaller zlib, very slow: about 8 CPU seconds per MB) or lzma (smallest, only for clients with the LZMA-capable cps.dll).",
 );
+const METHOD_OR_COPY: Param = opt(
+    "method",
+    Ty::Enum(&["zlib", "zopfli", "lzma"]),
+    "Omit it to copy every stream unchanged (fast, nothing is compressed again, recommended). Set it to compress again and keep the new stream where it is smaller: zlib (every client), zopfli (smaller, very slow) or lzma (smallest, only for clients with the LZMA-capable cps.dll).",
+);
 const LEVEL: Param = opt(
     "level",
     Ty::Int,
@@ -272,7 +277,7 @@ pub const TOOLS: &[Tool] = &[
         params: &[
             req("paths", Ty::StrList, "Archives, highest priority first."),
             OUTPUT,
-            METHOD,
+            METHOD_OR_COPY,
             LEVEL,
             FORMAT,
             DEDUPE,
@@ -290,7 +295,7 @@ pub const TOOLS: &[Tool] = &[
             req("old", Ty::Str, "The older archive."),
             req("new", Ty::Str, "The newer archive."),
             OUTPUT,
-            METHOD,
+            METHOD_OR_COPY,
             LEVEL,
             FORMAT,
             DEDUPE,
@@ -670,9 +675,11 @@ fn format(a: &Args) -> Option<Format> {
     })
 }
 
-fn repack_options(a: &Args) -> Result<RepackOptions, String> {
+/// `copy_by_default`: without `method` the streams are copied unchanged (merge, patch).
+fn repack_options(a: &Args, copy_by_default: bool) -> Result<RepackOptions, String> {
     Ok(RepackOptions {
         method: method(a)?,
+        copy_streams: copy_by_default && a.opt_str("method").is_none(),
         format: format(a),
         dedupe: match a.opt_str("dedupe") {
             Some("none") => Dedupe::None,
@@ -743,7 +750,7 @@ fn repack_tool(ctx: &Ctx, a: &Args) -> Out {
     let src = ctx.policy.read(a.str("path"))?;
     let out = output_path(ctx, a, std::slice::from_ref(&src))?;
     let arc = open(ctx, a.str("path"))?;
-    let r = repack(&arc, &out, &repack_options(a)?, &ctx.control).map_err(err)?;
+    let r = repack(&arc, &out, &repack_options(a, false)?, &ctx.control).map_err(err)?;
     Ok(repack_json(&r, &out))
 }
 
@@ -759,7 +766,8 @@ fn merge_tool(ctx: &Ctx, a: &Args) -> Out {
         .map(|p| open(ctx, p))
         .collect::<Result<_, _>>()?;
     let refs: Vec<&Archive> = archives.iter().collect();
-    let r = rgrf_core::merge::merge(&refs, &out, &repack_options(a)?, &ctx.control).map_err(err)?;
+    let r = rgrf_core::merge::merge(&refs, &out, &repack_options(a, true)?, &ctx.control)
+        .map_err(err)?;
     let mut v = repack_json(&r.repack, &out);
     v["inputs"] = paths
         .iter()
@@ -783,7 +791,7 @@ fn patch_tool(ctx: &Ctx, a: &Args) -> Out {
     ];
     let out = output_path(ctx, a, &inputs)?;
     let (old, new) = (open(ctx, a.str("old"))?, open(ctx, a.str("new"))?);
-    let r = rgrf_core::merge::patch(&old, &new, &out, &repack_options(a)?, &ctx.control)
+    let r = rgrf_core::merge::patch(&old, &new, &out, &repack_options(a, true)?, &ctx.control)
         .map_err(err)?;
     let mut v = repack_json(&r.repack, &out);
     v["added"] = r.added.into();

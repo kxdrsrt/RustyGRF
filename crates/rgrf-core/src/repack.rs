@@ -43,6 +43,9 @@ pub struct RepackOptions {
     /// Always use the freshly encoded stream. By default the original stream is kept when it uses
     /// the same codec and is not larger.
     pub recompress_all: bool,
+    /// Copy every stream unchanged and never encode (fast: no compression work). `method` and
+    /// `recompress_all` are ignored; damage is not looked for (`verify` shows it).
+    pub copy_streams: bool,
     /// Decode the written archive and compare every entry with the source (strongly recommended).
     pub verify: bool,
     pub overwrite: bool,
@@ -60,6 +63,7 @@ impl Default for RepackOptions {
             align: None,
             dedupe: Dedupe::default(),
             recompress_all: false,
+            copy_streams: false,
             verify: true,
             overwrite: false,
             dry_run: false,
@@ -267,6 +271,37 @@ pub(crate) fn prepare<R: ReadAt>(
             raw: Some((e.zsize, e.zsize_aligned)),
             flags: e.flags,
             expected,
+        });
+    }
+    if opts.copy_streams {
+        if e.is_raw() {
+            // flags 0: stored uncompressed, kept as the official archives have it
+            let raw = s.read_raw_aligned(rep)?;
+            return Ok(Prepared {
+                unit: unit_id,
+                kind: Kind::Stored,
+                expected: if opts.verify {
+                    Expected::Raw(sha(&raw))
+                } else {
+                    Expected::Nothing
+                },
+                stream: raw,
+                raw: Some((e.zsize, e.zsize_aligned)),
+                flags: e.flags,
+            });
+        }
+        let stream = s.read_raw(rep)?;
+        return Ok(Prepared {
+            unit: unit_id,
+            kind: Kind::KeptOriginal,
+            expected: if opts.verify {
+                Expected::Stream(sha(&stream))
+            } else {
+                Expected::Nothing
+            },
+            stream,
+            raw: None,
+            flags: flags::FILE,
         });
     }
     let d = s.read(rep)?;
@@ -539,6 +574,8 @@ pub(crate) fn verify_output<R: ReadAt>(
                 Expected::Nothing => None,
                 Expected::Raw(h) => (sha(&out.read_raw_aligned(rep)?) != *h)
                     .then(|| format!("entry {rep}: stored bytes of an encrypted entry changed")),
+                Expected::Stream(h) => (sha(&out.read_raw(rep)?) != *h)
+                    .then(|| format!("entry {rep}: copied stream differs from the source")),
                 Expected::Data(h, class) => {
                     let d = out.read(rep)?;
                     (status_class(&d.status) != *class || sha(&d.data) != *h).then(|| {

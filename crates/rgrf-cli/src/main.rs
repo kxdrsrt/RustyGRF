@@ -218,12 +218,13 @@ enum MethodArg {
 
 #[derive(clap::Args)]
 struct WriteArgs {
-    /// zlib (default, every client), zopfli (zlib-compatible, smaller, slow) or lzma (only with
-    /// the LZMA-capable cps.dll in the client)
-    #[arg(long, value_enum, default_value = "zlib")]
-    method: MethodArg,
+    /// Without it every stream is copied unchanged (fast, nothing is compressed again). With it
+    /// entries are compressed again and kept only where smaller: zlib (every client), zopfli
+    /// (zlib-compatible, smaller, slow) or lzma (only with the LZMA-capable cps.dll)
+    #[arg(long, value_enum)]
+    method: Option<MethodArg>,
     /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
-    #[arg(long)]
+    #[arg(long, requires = "method")]
     level: Option<u32>,
     /// 0x200 (32-bit offsets, max 4 GiB) or 0x300 (default: 0x300 if any input is 0x300)
     #[arg(long, value_parser = parse_format)]
@@ -238,7 +239,7 @@ struct WriteArgs {
     #[arg(long, value_enum, default_value = "source")]
     dedupe: DedupeArg,
     /// Always use the new stream, never keep the original stream of the same codec
-    #[arg(long)]
+    #[arg(long, requires = "method")]
     recompress_all: bool,
     /// Skip decoding the written archive for comparison (not recommended)
     #[arg(long)]
@@ -254,7 +255,11 @@ struct WriteArgs {
 impl WriteArgs {
     fn options(&self) -> Result<RepackOptions> {
         Ok(RepackOptions {
-            method: method_from(self.method, self.level)?,
+            method: match self.method {
+                Some(m) => method_from(m, self.level)?,
+                None => Method::DEFAULT,
+            },
+            copy_streams: self.method.is_none(),
             format: self.format,
             align: if self.align {
                 Some(true)
@@ -537,6 +542,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 verify: !*no_verify,
                 overwrite: *overwrite,
                 dry_run: *dry_run,
+                copy_streams: false,
                 max_file_len: None,
             };
             repack_cmd(cli, grf, output, &opts)
@@ -1083,7 +1089,7 @@ fn write_summary(r: &rgrf_core::repack::RepackReport, output: &Path, secs: f64) 
         println!(
             "Checked:  {}",
             if r.verified {
-                "every entry decoded and compared with its input"
+                "every entry checked against its input (decoded, or the copied stream compared)"
             } else {
                 "no (skipped)"
             }

@@ -218,3 +218,69 @@ fn patch_contains_only_new_and_changed_files_and_restores_the_new_state_over_the
     assert!(!same.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn copy_streams_keeps_every_stream_byte_for_byte_across_formats() {
+    let mut lz = file("data\\lz.txt", &data(3, 6000));
+    lz.stream = Stream::Lzma(data(3, 6000));
+    let a = open(&[file("data\\z.txt", &data(1, 6000)), lz]);
+    let b = open(&[file("data\\only_b.txt", &data(2, 4000))]);
+    let (dir, dst) = out("copy");
+    // the method says zlib 9, but copying must ignore it and keep the LZMA stream
+    let o = RepackOptions {
+        copy_streams: true,
+        format: Some(crate::writer::Format::V300),
+        ..RepackOptions::default()
+    };
+    let r = merge(&[&a, &b], &dst, &o, &Control::default()).unwrap();
+    assert_eq!((r.repack.recompressed, r.repack.kept_original), (0, 3));
+    assert!(r.repack.verified);
+    let m = Archive::open(&dst).unwrap();
+    assert_eq!(m.header().version, 0x300);
+    // every output stream is exactly the stream of its source entry
+    for (src, name) in [
+        (&a, "data\\z.txt"),
+        (&a, "data\\lz.txt"),
+        (&b, "data\\only_b.txt"),
+    ] {
+        let p = GrfPath::new(name.as_bytes().to_vec());
+        let (i, j) = (src.find(&p).unwrap(), m.find(&p).unwrap());
+        assert_eq!(src.read_raw(i).unwrap(), m.read_raw(j).unwrap(), "{name}");
+        assert_eq!(src.read(i).unwrap().data, m.read(j).unwrap().data, "{name}");
+    }
+    let lz_at = m.find(&GrfPath::new(b"data\\lz.txt".to_vec())).unwrap();
+    assert_eq!(
+        m.sniff_codec(lz_at).unwrap(),
+        Some(crate::codec::Codec::Lzma)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn copy_streams_keeps_a_damaged_entry_damaged_and_verify_reports_it() {
+    let a = open(&[file("data\\a.txt", &data(1, 3000))]);
+    let (dir, dst) = out("copy-tamper");
+    let o = RepackOptions {
+        copy_streams: true,
+        ..RepackOptions::default()
+    };
+    merge(&[&a], &dst, &o, &Control::default()).unwrap();
+    let mut bytes = std::fs::read(&dst).unwrap();
+    let at = 46 + 8; // inside the first stream
+    bytes[at] ^= 0xFF;
+    std::fs::write(&dst, &bytes).unwrap();
+    let again = dir.join("again.grf");
+    let broken = Archive::from_source(bytes).unwrap();
+    // a copy keeps the damage as it is; only `verify` looks for it
+    merge(&[&broken], &again, &o, &Control::default()).unwrap();
+    let rep = crate::verify::verify(
+        &Archive::open(&again).unwrap(),
+        crate::verify::VerifyOptions { decode: true },
+        &Control::default(),
+    )
+    .unwrap();
+    assert!(
+        rep.count(crate::verify::Severity::Error) + rep.count(crate::verify::Severity::Warning) > 0
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

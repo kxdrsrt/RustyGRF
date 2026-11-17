@@ -60,7 +60,7 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 **Stand 2026-11-17: umgesetzt und an echten Daten gemessen** (Apple M5 Pro, Release-Build, jede Ausgabe rückgeprüft).
 - Zwei Archive vergleichen, Archive mit Priorität zusammenführen (**erstes gewinnt**, entspricht dem niedrigsten Index in `DATA.INI`: deine Annahme „eigene Custom-GRFs zuerst, `data.grf` zuletzt“), Patch-GRF mit nur Neuem/Geändertem erzeugen. `repack`, `merge` und `patch` teilen eine Schreib-Pipeline (Auswahl von Einträgen aus mehreren Quellen).
 - **Abnahme 1 (`data kro latest` + `official_data (chris)`):** `merge "official_data (chris).grf" "data kro latest.grf"` ergibt 406.675 Dateien (186.507 aus Chris, 220.168 aus kRO, 41.221 kRO-Dateien überschrieben); `diff` gegen deine Merge-GRF `data (merged kro+chris).grf`: **406.675 identisch, 0 nur links, 0 nur rechts, 0 unterschiedlich**. Dauer Merge 78 s, `diff` zweier 4–5-GB-Archive 13 s. Das Ergebnis (0x300, zlib, 4,49 GB) ist damit dieselbe Datei im Inhalt, die du in GRF Editor gebaut hast.
-- **Abnahme 2 (`rdata` über `data`, kRO-Client 2024):** 205.609 Dateien (24.756 aus `rdata`, 180.853 aus `data`, 3.252 neue Pfade, 21.504 überschrieben, davon 4.562 mit tatsächlich anderem Inhalt); der leere Marker von `data.grf` wird nicht kopiert (Roadmap-Erwartung 205.610 = 205.609 Dateien + 1 Marker, bestätigt). `diff` gegen `rdata`: 24.756 identisch, 0 unterschiedlich (jeder Pfad von `rdata` gewinnt). Der verschlüsselte Eintrag und `worm_tail_damage.wav` werden unverändert übernommen. Ausgabe 0x200 + zlib 9: 4.001.949.159 B (passt unter 4 GiB), 63 s.
+- **Abnahme 2 (`rdata` über `data`, kRO-Client 2024):** 205.609 Dateien (24.756 aus `rdata`, 180.853 aus `data`, 3.252 neue Pfade, 21.504 überschrieben, davon 4.562 mit tatsächlich anderem Inhalt); der leere Marker von `data.grf` wird nicht kopiert (Roadmap-Erwartung 205.610 = 205.609 Dateien + 1 Marker, bestätigt). `diff` gegen `rdata`: 24.756 identisch, 0 unterschiedlich (jeder Pfad von `rdata` gewinnt). Der verschlüsselte Eintrag und `worm_tail_damage.wav` werden unverändert übernommen. Zuerst mit Neukomprimierung (zlib 9): 4.001.949.159 B, 63 s. **Seit dem Vergleich mit GrfCL (unten) kopiert `merge` ohne `--method` die Ströme unverändert:** 4.042.050.709 B (passt unter 4 GiB), 6,0 s auf dem Mac (mit Prüfung), Inhalt identisch (205.609 Einträge, `diff` 0 Abweichungen).
 - Synthetische Tests (Core 6, CLI 1): Priorität und Reihenfolge, Duplikate in einem Archiv (später gewinnt), Groß-/Kleinschreibung und Separator beim Vergleich, 0x300-Quelle wählt 0x300, Dedupe über Archive, reproduzierbar, Patch über Alt = Neu, Ablehnung (kein Eingabearchiv als Ziel, kein vorhandenes Ziel, nichts zu patchen).
 - **Nicht gemessen:** die Reihenfolge der `DATA.INI`-Indizes im Client (die Priorität „erstes Archiv gewinnt“ ist die Annahme aus deiner Aussage und gängiger Praxis; ein Spieltest mit zwei Archiven, die dieselbe Datei verschieden enthalten, würde es belegen); Ordner als Eingabe von `diff`/`merge` (stattdessen erst mit `build` ein Archiv erzeugen).
 - Zwei Archive/Ordner vergleichen, `rdata` über `data` legen, Patch-GRF erzeugen.
@@ -74,6 +74,32 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - **Nicht getestet:** der Betrieb in einem echten Agenten-Client (VS Code/Copilot); der Server ist dort als `rustygrf` in `.vscode/mcp.json` eingetragen, nach `cargo build --release` startbar. Parallele Anfragen (ein Aufruf nach dem anderen).
 - Tools aus [04-cli-and-mcp.md](04-cli-and-mcp.md), Sicherheitsmodell (Schreiben nur in erlaubten Ordnern).
 - **Abnahme:** Ein KI-Agent kann ohne Shell-Zugriff ein Archiv untersuchen, zwei vergleichen und ein Testarchiv bauen; alle Tools haben JSON-Schemas und Tests.
+
+## Vergleich mit GRF Editor (`GrfCL`), 2026-11-17
+**Messung in derselben Windows-ARM64-VM** (Parallels, 6 vCPU, 6 GB RAM), lokale Platte, gleiche Eingaben, Wall-Zeit des Prozesses und Spitzen-Arbeitsspeicher; Reihenfolge der Werkzeuge wechselt je Lauf. `rgrf.exe` ARM64 (Kreuz-Bau); `GrfCL.exe` aus `1 CLIENT TOOLS/5 GRF Editor` (.NET; der Prozessstart ist in den Zeiten enthalten). Kleine Aufgaben 3 Läufe (Median, in Klammern Streuung), große 1 Lauf. Jede Ausgabe beider Werkzeuge wurde mit `rgrf verify` gelesen (0 Fehler) und, wo vergleichbar, mit `rgrf diff` auf Inhalt verglichen. Rohdaten: `~/build/bench/results*.jsonl`, Skript `tools/cross/bench.ps1`.
+
+| Aufgabe | `rgrf` | `GrfCL` | Größe der Ausgabe | Spitzen-RAM `rgrf` / `GrfCL` |
+|---|---|---|---|---|
+| Öffnen + Info `data.grf` (4 GB) | 0,08–0,13 s | 1,2–1,4 s | – | 42 MB / 260 MB |
+| Entpacken `cdata` (103 MB, 3.973 Dateien) | **2,3 s** | 4,1 s | gleich | 20 / 145 MB |
+| Entpacken `rdata` (1,2 GB, 24.756 Dateien) | 25,5 s | 26,3 s | gleich | 59 / 370 MB |
+| Entpacken `data.grf` (16 GB, 202.357 Dateien) | 243 s (zweiter) / 385 s (erster) | 314 s / 316 s | gleich | 202 / 1.138 MB |
+| Bauen `cdata` zlib 9 (mit Prüfung) | **1,0 s** (0,9–4,7) | 2,1 s | 17.009.178 / 17.012.174 B (−0,02 %) | 77 / 146 MB |
+| Bauen `rdata` zlib 9 (mit Prüfung) | **11,7 s** (11,3–30,3) | 16,8 s | 287.083.129 / 287.126.228 B (−0,02 %) | 196 / 541 MB |
+| Bauen `cdata` LZMA, `rgrf` Standard (Preset 9) | 10,5 s | **8,5 s** | **13,11 / 13,55 MB (−3,3 %)** | 147 / 151 MB |
+| Bauen `cdata` LZMA, `rgrf --level 6` | **6,6 s** | 8,5 s | **13,28 / 13,55 MB (−2,1 %)** | 128 / 151 MB |
+| Bauen `rdata` LZMA, `rgrf` Standard | 127 s | **74 s** | **233,6 / 237,4 MB (−1,6 %)** | 249 / 449 MB |
+| Bauen `rdata` LZMA, `rgrf --level 6` | **67 s** | 74 s | **235,4 / 237,4 MB (−0,8 %)** | 273 / 449 MB |
+| Merge `rdata` über `data` (Ströme kopiert) | 19,2 s (13,0 s ohne Prüfung) | 17,0 s (10,6–19,8) | 4.042.050.709 / 4.042.057.505 B | 242 / 377 MB |
+
+**Lesart (gemessen, mit Vorbehalt):**
+- `rgrf` ist beim Öffnen deutlich schneller (Prozessstart von .NET ist Teil der `GrfCL`-Zeit), beim zlib-Bauen schneller, braucht **durchweg weniger Arbeitsspeicher** (bis zu 6×) und erzeugt **gleich große bis kleinere** Dateien, bei LZMA 0,8–3,3 % kleiner.
+- Beim Entpacken ist `rgrf` bei kleinen Archiven schneller und bei den großen **nicht eindeutig**: das 16-GB-Entpacken schwankte bei `rgrf` zwischen 243 s und 385 s je nach Reihenfolge (Dateisystem-Cache und Schreiblast der VM), `GrfCL` blieb bei 314–316 s. Ein Sieger lässt sich daraus nicht ableiten.
+- **LZMA mit `rgrf`-Standard (Preset 9) ist langsamer als `GrfCL`** (bis 1,7×), mit `--level 6` schneller und trotzdem kleiner. Das Preset ist ein Zeit-gegen-Größe-Regler, kein Fehler. Standard bleibt Preset 9 (kleinste Dateien).
+- **Gefunden und behoben durch diesen Vergleich:** `merge` brauchte zuerst 153–186 s (gegen 19 s), weil jeder Eintrag neu mit zlib 9 komprimiert wurde. Jetzt kopiert `merge`/`patch` ohne `--method` die Ströme (Auswahl `copy_streams`); ein Lauf in der VM zeigt 13–19 s, auf dem Mac 6 s. Der Nachteil: die Ausgabe ist 1 % größer als mit Neukomprimierung (4.042 gegen 4.002 MB).
+- Die Prüfung der Ausgabe (Standard) kostet bei `rgrf` mal wenig, mal viel (Build `rdata` zlib: 11,7 s gegen 10,2 s ohne Prüfung, einmal 30 s); die Streuung der VM ist groß (derselbe Lauf 10 bis 44 s). Eine Ursache dafür habe ich nicht belegt.
+- **Gleichwertigkeit:** `GrfCL` und `rgrf` erzeugen beim Merge gleich große Archive (Abweichung 6.800 Byte); die beiden unterscheiden sich im Inhalt nur in zwei Einträgen (`rgrf diff --all` auf den Ergebnissen des Kopier-Laufs): dem leeren Marker (`rgrf` kopiert Marker nicht) und dem **einen verschlüsselten Eintrag** `data\luafiles514\lua files\msgstring_kr_s.lub` aus `rdata`: `rgrf` kopiert ihn unverändert, die `GrfCL`-Kopie hat andere gespeicherte Bytes (warum, habe ich nicht untersucht; ob der Client sie liest, ist nicht geprüft).
+- **Grenzen der Aussage:** eine VM, ein Rechner; `GrfCL` auf ARM64-Windows läuft vermutlich teilweise unter Emulation (nicht geprüft), `rgrf` nativ; GRF Editor selbst (GUI) nicht gemessen; `rgrf` hat viel weniger Funktionen als GRF Editor (Vorschau, Editoren, Thor, Verschlüsselung u. a.); keine Messung auf einem anderen Rechner; Zopfli nicht verglichen (hat `GrfCL` nicht).
 
 ## M5 – Plattformen und Release
 **Stand 2026-11-17: Tests auf vier Plattformen bestanden; Release-Binärdateien und CI-Lauf stehen aus (brauchen den GitHub-Push).**

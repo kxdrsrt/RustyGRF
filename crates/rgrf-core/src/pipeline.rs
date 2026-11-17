@@ -21,6 +21,8 @@ pub(crate) enum Expected {
     Data([u8; 32], u8),
     /// Encrypted: the stored bytes (with padding) must be identical.
     Raw([u8; 32]),
+    /// Copied unchanged: the stream (without padding) must be identical, so it decodes as before.
+    Stream([u8; 32]),
     Nothing,
 }
 
