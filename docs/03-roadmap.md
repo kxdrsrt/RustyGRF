@@ -123,8 +123,16 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 ## M6 – Entscheidung: Verschlüsselung, 0x300, Thor
 - Nach Bedarf. Voraussetzungen: Format-Details belegen, Tests mit echten Archiven, Konflikt mit der einen `cps.dll` im Client beachten.
 
-## M7 – Format-Crates und Oberfläche
-- SPR → ACT → PAL → GAT/GND/RSW → RSM → STR. Zuerst Lesen und Rendern in eine Bildausgabe (CLI/MCP: "Vorschau als PNG"), dann eine GUI.
+## M7 – Formate und All-in-one (Entscheidung D16, 2026-11-18)
+**Ziel (von dir bestätigt):** ein Werkzeug statt GRF Editor + ACT Editor + Palette Editor + Einzelskripte. Reihenfolge nach Abhängigkeit; je Teil zuerst Bibliothek (`rgrf-core`/Format-Crates), dann CLI und MCP, die GUI (M8) setzt darauf auf.
+- **M7.0 Funktionsmatrix (zuerst, klein):** Was GRF Editor, ACT Editor und Palette Editor wirklich können, aus den Quelltexten (`1 CLIENT TOOLS/5 GRF Editor/src`, `6 ACT Editor`), nicht aus dem Gedächtnis; daraus die Liste „muss“/„später“/„nicht“. Bisher nur aus Ordnernamen bekannt: ActImaging, Lua, Encryption, Palette Editor, OpenTK (3D-Vorschau).
+- **M7a SPR:** lesen/schreiben (indiziert + RGBA, RLE), PNG-Export/-Import. **Abnahme:** Rundlauf aller SPR in `data.grf` ohne Verlust; Export gleich wie GRF Editor an festen Beispielen.
+- **M7b PAL + ACT (+ IMF):** lesen/schreiben, Aktionen/Frames/Layer/Anker/Sounds, Rendern nach PNG/GIF, Bearbeiten (Layer, Versatz, Palette tauschen, Aktion kopieren). **Abnahme:** Rundlauf aller ACT; Render gleich wie ActEditor (Windows-VM als Referenz).
+- **M7c Lua/Lub und Text:** Anzeigen/Dekompilieren, Prüfung auf die Fehler, die wir beim Übersetzungstest erst im Client gesehen haben (fehlendes `SystemEN`, falsche `NPCIdentity`).
+- **M7d Bilder:** BMP/TGA/JPG-Vorschau, Magenta-Transparenz, Optimierer (siehe `RO/docs/grf-research/06`).
+- **M7e Karten und 3D:** GAT/GND/RSW lesen und Vorschau, später RSM/STR.
+- **M7f Client-Werkzeuge:** `DATA.INI`-Prüfer (Priorität, gemessen), Übersetzungs-Update (`tools/translation/*.py` nach Rust), **Ressourcen-Prüfer** („Resource File Loading fail“ vorab finden, Anlass: `effect\p2.bmp`).
+- Vergleich mit GRF Editor/ActEditor nur in der Windows-VM möglich (die Programme laufen nicht auf dem Mac).
 - **Abnahme je Format:** Vergleich mit Ausgaben von GRF Editor/ActEditor an festen Beispieldateien.
 
 ## M8 – App (GUI) mit Icon und Installern
