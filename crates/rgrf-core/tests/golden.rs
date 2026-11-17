@@ -14,7 +14,7 @@ use rgrf_core::hash::Digest;
 use rgrf_core::{Archive, DecodeStatus, NameMode};
 
 const ARCHIVES: [(&str, &str); 7] = [
-    ("cdata", "client-dev/full/cdata.grf"),
+    ("cdata", "0 GRFs/reference/cdata-2024-original.grf"),
     ("core", "client-dev/full/core.grf"),
     ("cpal", "client-dev/full/cpal.grf"),
     ("rdata", "0 OTHER CLIENTS/client-kro/rdata.grf"),

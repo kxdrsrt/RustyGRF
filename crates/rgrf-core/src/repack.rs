@@ -98,14 +98,16 @@ pub struct RepackReport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct SourceKey {
+    src: usize,
     offset: u64,
     zsize: u32,
     size: u32,
     flags: u8,
 }
 
-fn source_key(e: &Entry) -> SourceKey {
+fn source_key(src: usize, e: &Entry) -> SourceKey {
     SourceKey {
+        src,
         offset: e.offset,
         zsize: e.zsize,
         size: e.size,
@@ -113,9 +115,49 @@ fn source_key(e: &Entry) -> SourceKey {
     }
 }
 
+/// One output entry: entry `idx` of source archive `src`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Sel {
+    pub(crate) src: usize,
+    pub(crate) idx: usize,
+}
+
+/// The entries of the output archive, in output order, each taken from one of the sources.
+/// `repack` selects every entry of one archive; `merge`/`patch` select from several.
+pub(crate) struct Selection<'a, R: ReadAt> {
+    pub(crate) sources: &'a [&'a Archive<R>],
+    pub(crate) sel: Vec<Sel>,
+}
+
+impl<R: ReadAt> Selection<'_, R> {
+    pub(crate) fn len(&self) -> usize {
+        self.sel.len()
+    }
+
+    fn archive(&self, i: usize) -> &Archive<R> {
+        self.sources[self.sel[i].src]
+    }
+
+    pub(crate) fn entry(&self, i: usize) -> Result<&Entry> {
+        self.archive(i).entry(self.sel[i].idx)
+    }
+
+    fn read(&self, i: usize) -> Result<codec::Decoded> {
+        self.archive(i).read(self.sel[i].idx)
+    }
+
+    fn read_raw(&self, i: usize) -> Result<Vec<u8>> {
+        self.archive(i).read_raw(self.sel[i].idx)
+    }
+
+    fn read_raw_aligned(&self, i: usize) -> Result<Vec<u8>> {
+        self.archive(i).read_raw_aligned(self.sel[i].idx)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Unit {
-    /// Entry indices, in source order; the first one is the representative.
+    /// Output entry indices, in output order; the first one is the representative.
     pub(crate) members: Vec<usize>,
     /// Hash of the decoded content if known (content dedupe or verification).
     hash: Option<[u8; 32]>,
@@ -132,13 +174,14 @@ struct Stats {
 }
 
 pub(crate) fn plan_units<R: ReadAt>(
-    src: &Archive<R>,
+    s: &Selection<R>,
     opts: &RepackOptions,
     ctl: &Control,
 ) -> Result<Vec<Unit>> {
     let mut units: Vec<Unit> = Vec::new();
     let mut by_source: HashMap<SourceKey, usize> = HashMap::new();
-    for (i, e) in src.entries().iter().enumerate() {
+    for i in 0..s.len() {
+        let e = s.entry(i)?;
         if e.is_marker() {
             continue;
         }
@@ -149,13 +192,15 @@ pub(crate) fn plan_units<R: ReadAt>(
             });
             continue;
         }
-        let u = *by_source.entry(source_key(e)).or_insert_with(|| {
-            units.push(Unit {
-                members: Vec::new(),
-                hash: None,
+        let u = *by_source
+            .entry(source_key(s.sel[i].src, e))
+            .or_insert_with(|| {
+                units.push(Unit {
+                    members: Vec::new(),
+                    hash: None,
+                });
+                units.len() - 1
             });
-            units.len() - 1
-        });
         units[u].members.push(i);
     }
 
@@ -166,10 +211,10 @@ pub(crate) fn plan_units<R: ReadAt>(
             .map(|u| {
                 ctl.check()?;
                 let rep = u.members[0];
-                if src.entry(rep)?.is_encrypted() {
+                if s.entry(rep)?.is_encrypted() {
                     return Ok(None);
                 }
-                let d = src.read(rep)?;
+                let d = s.read(rep)?;
                 Ok(d.status.is_ok().then(|| sha(&d.data)))
             })
             .collect();
@@ -178,7 +223,7 @@ pub(crate) fn plan_units<R: ReadAt>(
         for (mut u, h) in units.into_iter().zip(hashes) {
             u.hash = h?;
             let (size, raw) = {
-                let e = src.entry(u.members[0])?;
+                let e = s.entry(u.members[0])?;
                 (e.size, e.is_raw())
             };
             match u.hash {
@@ -201,15 +246,15 @@ pub(crate) fn plan_units<R: ReadAt>(
 }
 
 pub(crate) fn prepare<R: ReadAt>(
-    src: &Archive<R>,
+    s: &Selection<R>,
     unit_id: usize,
     unit: &Unit,
     opts: &RepackOptions,
 ) -> Result<Prepared> {
     let rep = unit.members[0];
-    let e = src.entry(rep)?;
+    let e = s.entry(rep)?;
     if e.is_encrypted() {
-        let raw = src.read_raw_aligned(rep)?;
+        let raw = s.read_raw_aligned(rep)?;
         let expected = if opts.verify {
             Expected::Raw(sha(&raw))
         } else {
@@ -224,7 +269,7 @@ pub(crate) fn prepare<R: ReadAt>(
             expected,
         });
     }
-    let d = src.read(rep)?;
+    let d = s.read(rep)?;
     let class = status_class(&d.status);
     let expected = |data: &[u8]| {
         if !opts.verify {
@@ -236,7 +281,7 @@ pub(crate) fn prepare<R: ReadAt>(
     if !d.status.is_ok() || e.is_raw() {
         // Damaged: cannot be re-encoded faithfully, keep the stored bytes (and what the client
         // would see). Stored uncompressed (flags 0): keep as the official archive has it.
-        let raw = src.read_raw_aligned(rep)?;
+        let raw = s.read_raw_aligned(rep)?;
         return Ok(Prepared {
             unit: unit_id,
             kind: if d.status.is_ok() {
@@ -253,7 +298,7 @@ pub(crate) fn prepare<R: ReadAt>(
     let mut stream = encode(opts.method, &d.data);
     let mut kept = false;
     if !opts.recompress_all {
-        let original = src.read_raw(rep)?;
+        let original = s.read_raw(rep)?;
         if codec::sniff(&original) == Some(opts.method.codec()) && original.len() <= stream.len() {
             stream = original;
             kept = true;
@@ -279,44 +324,62 @@ pub fn repack<R: ReadAt>(
     opts: &RepackOptions,
     ctl: &Control,
 ) -> Result<RepackReport> {
-    if src.table_info().key_block > 0 {
-        return Err(Error::Unsupported(
-            "the source has a protected-archive key block (not supported yet)".into(),
-        ));
-    }
+    let sources = [src];
+    let s = Selection {
+        sources: &sources,
+        sel: (0..src.len()).map(|idx| Sel { src: 0, idx }).collect(),
+    };
     let format = opts.format.unwrap_or(if src.header().version == 0x300 {
         Format::V300
     } else {
         Format::V200
     });
+    write_selection(&s, dst, format, opts, ctl)
+}
+
+/// Plans and writes the archive for a selection (shared by `repack`, `merge` and `patch`).
+pub(crate) fn write_selection<R: ReadAt>(
+    s: &Selection<R>,
+    dst: &Path,
+    format: Format,
+    opts: &RepackOptions,
+    ctl: &Control,
+) -> Result<RepackReport> {
+    if s.sources.iter().any(|a| a.table_info().key_block > 0) {
+        return Err(Error::Unsupported(
+            "a source has a protected-archive key block (not supported yet)".into(),
+        ));
+    }
     let align = opts.align.unwrap_or_else(|| format.aligns_by_default());
     if !opts.dry_run && dst.exists() && !opts.overwrite {
         return Err(Error::TargetExists(dst.display().to_string()));
     }
 
-    let entries = src.entries();
-    let units = plan_units(src, opts, ctl)?;
+    let units = plan_units(s, opts, ctl)?;
+    let mut markers = 0;
+    for i in 0..s.len() {
+        markers += usize::from(s.entry(i)?.is_marker());
+    }
     let mut report = RepackReport {
         format: format.version(),
-        entries: entries.len(),
-        markers: entries.iter().filter(|e| e.is_marker()).count(),
-        source_file_len: src.file_len(),
+        entries: s.len(),
+        markers,
+        source_file_len: s.sources.iter().map(|a| a.file_len()).sum(),
         dry_run: opts.dry_run,
         ..RepackReport::default()
     };
     report.files = report.entries - report.markers;
     report.blocks = units.len();
     report.shared_files = report.files - units.len();
-    report.source_stream_bytes = units
-        .iter()
-        .map(|u| u64::from(entries[u.members[0]].zsize))
-        .sum();
+    for u in &units {
+        report.source_stream_bytes += u64::from(s.entry(u.members[0])?.zsize);
+    }
     if opts.dry_run {
         return Ok(report);
     }
 
     let tmp = pipeline::temp_path(dst);
-    let result = write_all(src, &units, &tmp, format, align, opts, ctl, &mut report);
+    let result = write_all(s, &units, &tmp, format, align, opts, ctl, &mut report);
     match result {
         Ok(()) => {
             pipeline::commit(&tmp, dst, opts.overwrite)?;
@@ -331,7 +394,7 @@ pub fn repack<R: ReadAt>(
 
 #[allow(clippy::too_many_arguments)]
 fn write_all<R: ReadAt>(
-    src: &Archive<R>,
+    s: &Selection<R>,
     units: &[Unit],
     tmp: &Path,
     format: Format,
@@ -356,12 +419,12 @@ fn write_all<R: ReadAt>(
     let (writer, done) = pipeline::run(
         writer,
         pipeline::batches(units.iter().map(|u| {
-            src.entry(u.members[0])
+            s.entry(u.members[0])
                 .map_or(0, |e| u64::from(e.size).max(u64::from(e.zsize)))
         })),
         total,
         ctl,
-        &|u| prepare(src, u, &units[u], opts),
+        &|u| prepare(s, u, &units[u], opts),
         &mut |batch| {
             for p in batch {
                 match p.kind {
@@ -381,8 +444,8 @@ fn write_all<R: ReadAt>(
         expected[unit] = exp;
     }
 
-    // file table in source order
-    let mut unit_of: Vec<Option<usize>> = vec![None; src.len()];
+    // file table in output order
+    let mut unit_of: Vec<Option<usize>> = vec![None; s.len()];
     for (u, unit) in units.iter().enumerate() {
         for &m in &unit.members {
             unit_of[m] = Some(u);
@@ -393,11 +456,10 @@ fn write_all<R: ReadAt>(
         zsize: 0,
         aligned: 0,
     };
-    let out_entries: Vec<OutEntry> = src
-        .entries()
-        .iter()
-        .enumerate()
-        .map(|(i, e)| match unit_of[i] {
+    let mut out_entries: Vec<OutEntry> = Vec::with_capacity(s.len());
+    for (i, unit) in unit_of.iter().enumerate() {
+        let e = s.entry(i)?;
+        out_entries.push(match *unit {
             Some(u) => OutEntry {
                 name: e.name.clone(),
                 placed: placed[u].expect("every unit was written"),
@@ -410,8 +472,8 @@ fn write_all<R: ReadAt>(
                 size: 0,
                 flags: 0,
             },
-        })
-        .collect();
+        });
+    }
     let (len, mut out) = writer.finish(&out_entries)?;
     std::io::Write::flush(&mut out)?;
     drop(out);
@@ -425,16 +487,16 @@ fn write_all<R: ReadAt>(
     report.output_file_len = len;
 
     if opts.verify {
-        verify_output(src, units, &unit_of, &expected, tmp, ctl)?;
+        verify_output(s, units, &unit_of, &expected, tmp, ctl)?;
         report.verified = true;
     }
     Ok(())
 }
 
-/// Opens the written file and checks it against the source: same entries, same names, every block
-/// decodes to the expected content (or has identical stored bytes if encrypted).
+/// Opens the written file and checks it against the selection: same entries, same names, every
+/// block decodes to the expected content (or has identical stored bytes if encrypted).
 pub(crate) fn verify_output<R: ReadAt>(
-    src: &Archive<R>,
+    s: &Selection<R>,
     units: &[Unit],
     unit_of: &[Option<usize>],
     expected: &[Expected],
@@ -443,14 +505,15 @@ pub(crate) fn verify_output<R: ReadAt>(
 ) -> Result<()> {
     let fail = |m: String| Err(Error::VerifyFailed(m));
     let out = Archive::open(path)?;
-    if out.len() != src.len() {
+    if out.len() != s.len() {
         return fail(format!(
             "{} entries written, {} expected",
             out.len(),
-            src.len()
+            s.len()
         ));
     }
-    for (i, (a, b)) in src.entries().iter().zip(out.entries()).enumerate() {
+    for (i, b) in out.entries().iter().enumerate() {
+        let a = s.entry(i)?;
         if a.name != b.name
             || a.size != b.size && !a.is_marker()
             || a.is_marker() != b.is_marker()

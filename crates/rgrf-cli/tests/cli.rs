@@ -67,7 +67,7 @@ fn unknown_name_mode_is_rejected() {
 
 #[test]
 fn info_ls_find_cat_hash_on_cdata() {
-    let Some(grf) = testdata("client-dev/full/cdata.grf") else {
+    let Some(grf) = testdata("0 GRFs/reference/cdata-2024-original.grf") else {
         return;
     };
 
@@ -152,7 +152,7 @@ fn info_ls_and_verify_on_a_0x300_archive() {
 
 #[test]
 fn verify_exit_codes_clean_and_with_warning() {
-    if let Some(grf) = testdata("client-dev/full/cdata.grf") {
+    if let Some(grf) = testdata("0 GRFs/reference/cdata-2024-original.grf") {
         let o = rgrf(&["verify", &grf, "--json"]);
         assert_eq!(o.status.code(), Some(0));
         let v = json(&o);
@@ -178,7 +178,7 @@ fn verify_exit_codes_clean_and_with_warning() {
 
 #[test]
 fn extract_pattern_never_overwrites_and_reports() {
-    let Some(grf) = testdata("client-dev/full/cdata.grf") else {
+    let Some(grf) = testdata("0 GRFs/reference/cdata-2024-original.grf") else {
         return;
     };
     let dir = tmpdir("extract");
@@ -222,7 +222,7 @@ fn extract_pattern_never_overwrites_and_reports() {
 
 #[test]
 fn repack_cdata_to_lzma_and_back_keeps_every_hash() {
-    let Some(grf) = testdata("client-dev/full/cdata.grf") else {
+    let Some(grf) = testdata("0 GRFs/reference/cdata-2024-original.grf") else {
         return;
     };
     let dir = tmpdir("repack");
@@ -284,7 +284,7 @@ fn repack_cdata_to_lzma_and_back_keeps_every_hash() {
 
 #[test]
 fn build_from_extracted_cdata_keeps_every_hash() {
-    let Some(grf) = testdata("client-dev/full/cdata.grf") else {
+    let Some(grf) = testdata("0 GRFs/reference/cdata-2024-original.grf") else {
         return;
     };
     let dir = tmpdir("build");
@@ -336,5 +336,97 @@ fn build_from_extracted_cdata_keeps_every_hash() {
         ]))["dry_run"],
         true
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn diff_merge_and_patch_on_small_archives() {
+    let dir = tmpdir("merge");
+    let put = |root: &str, name: &str, data: &str| {
+        let p = dir.join(root).join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, data).unwrap();
+    };
+    put("base", "data/a.txt", "base a");
+    put("base", "data/b.txt", "base b");
+    put("custom", "data/b.txt", "custom b");
+    put("custom", "data/c.txt", "custom c");
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    for (folder, grf) in [("base", "base.grf"), ("custom", "custom.grf")] {
+        let o = rgrf(&["build", &p(folder), "-o", &p(grf), "--quiet"]);
+        assert_eq!(o.status.code(), Some(0));
+    }
+
+    let o = rgrf(&["diff", &p("base.grf"), &p("base.grf")]);
+    assert_eq!(o.status.code(), Some(0));
+    let o = rgrf(&["diff", &p("base.grf"), &p("custom.grf"), "--json"]);
+    assert_eq!(o.status.code(), Some(2), "differences give exit code 2");
+    let v = json(&o);
+    assert_eq!(
+        (
+            v["only_a"].clone(),
+            v["only_b"].clone(),
+            v["changed"].clone()
+        ),
+        (
+            serde_json::json!(["data\\a.txt"]),
+            serde_json::json!(["data\\c.txt"]),
+            serde_json::json!(["data\\b.txt"])
+        )
+    );
+
+    // the first archive wins
+    let o = rgrf(&[
+        "merge",
+        &p("custom.grf"),
+        &p("base.grf"),
+        "-o",
+        &p("merged.grf"),
+        "--json",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(
+        (v["files"].clone(), v["verified"].clone()),
+        (3.into(), true.into())
+    );
+    assert_eq!(v["sources"][1]["overridden"], 1);
+    let cat = rgrf(&["cat", &p("merged.grf"), "data\\b.txt"]);
+    assert_eq!(String::from_utf8_lossy(&cat.stdout), "custom b");
+
+    // a patch from base to merged holds the new and the changed file
+    let o = rgrf(&[
+        "patch",
+        &p("base.grf"),
+        &p("merged.grf"),
+        "-o",
+        &p("patch.grf"),
+        "--json",
+    ]);
+    assert_eq!(o.status.code(), Some(0));
+    let v = json(&o);
+    assert_eq!(
+        (v["added"].clone(), v["changed"].clone(), v["files"].clone()),
+        (1.into(), 1.into(), 2.into())
+    );
+
+    // safety: never over an input, never over an existing file
+    let o = rgrf(&[
+        "merge",
+        &p("custom.grf"),
+        &p("base.grf"),
+        "-o",
+        &p("base.grf"),
+    ]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("must not be one of the input"));
+    let o = rgrf(&["merge", &p("custom.grf"), "-o", &p("merged.grf")]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
     std::fs::remove_dir_all(dir).unwrap();
 }

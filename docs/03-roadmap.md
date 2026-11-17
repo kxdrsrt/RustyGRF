@@ -47,7 +47,7 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 - Extrahieren der 0x300-Archive nicht gegen einen Referenzordner verglichen (keiner vorhanden); die Hashes aller Einträge sind aber identisch, und die Extraktion nutzt denselben Lesepfad wie `hash`.
 
 ## M2 – Bauen und Neu-Komprimieren (`rgrf build|repack`)
-**Stand 2026-11-17:** `repack` umgesetzt und gemessen (Ergebnisse und Größen: `docs/rueckfragen/v6-2026-11-17-aktuell.md`); `build` aus Ordner umgesetzt (cdata entpackt → gebaut: alle 3.973 Hashes identisch, von GRF Editor in 0x200/0x300 und zlib/LZMA ohne Abweichung gelesen); der Spieltest im Client steht aus.
+**Stand 2026-11-17:** `repack` umgesetzt und gemessen (Ergebnisse und Größen: `docs/rueckfragen/v7-2026-11-17-aktuell.md`); `build` aus Ordner umgesetzt (cdata entpackt → gebaut: alle 3.973 Hashes identisch, von GRF Editor in 0x200/0x300 und zlib/LZMA ohne Abweichung gelesen); der Spieltest im Client ist bestanden (2026-11-17: `data.grf` der 2024er-Version als LZMA-0x200 läuft einwandfrei im Dev-Client mit LZMA-`cps.dll`; die echte Merge-GRF wird noch getestet, Punkt 31 in `rueckfragen/v7`).
 - Aus Verzeichnis bauen, bestehende GRF neu komprimieren: zlib, Zopfli, LZMA.
 - **Abnahme:**
   - `build` aus `grf/cdata/data` ergibt ein Archiv, das GRF Editor/`GrfCL` und der Dev-Client lesen.
@@ -57,6 +57,12 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
   - Rundlauf für Namen auf `data-official` (119.181 Nicht-ASCII-Namen) bestanden.
 
 ## M3 – Diff, Merge, Patch (`rgrf diff|merge|patch`)
+**Stand 2026-11-17: umgesetzt und an echten Daten gemessen** (Apple M5 Pro, Release-Build, jede Ausgabe rückgeprüft).
+- Zwei Archive vergleichen, Archive mit Priorität zusammenführen (**erstes gewinnt**, entspricht dem niedrigsten Index in `DATA.INI`: deine Annahme „eigene Custom-GRFs zuerst, `data.grf` zuletzt“), Patch-GRF mit nur Neuem/Geändertem erzeugen. `repack`, `merge` und `patch` teilen eine Schreib-Pipeline (Auswahl von Einträgen aus mehreren Quellen).
+- **Abnahme 1 (`data kro latest` + `official_data (chris)`):** `merge "official_data (chris).grf" "data kro latest.grf"` ergibt 406.675 Dateien (186.507 aus Chris, 220.168 aus kRO, 41.221 kRO-Dateien überschrieben); `diff` gegen deine Merge-GRF `data (merged kro+chris).grf`: **406.675 identisch, 0 nur links, 0 nur rechts, 0 unterschiedlich**. Dauer Merge 78 s, `diff` zweier 4–5-GB-Archive 13 s. Das Ergebnis (0x300, zlib, 4,49 GB) ist damit dieselbe Datei im Inhalt, die du in GRF Editor gebaut hast.
+- **Abnahme 2 (`rdata` über `data`, kRO-Client 2024):** 205.609 Dateien (24.756 aus `rdata`, 180.853 aus `data`, 3.252 neue Pfade, 21.504 überschrieben, davon 4.562 mit tatsächlich anderem Inhalt); der leere Marker von `data.grf` wird nicht kopiert (Roadmap-Erwartung 205.610 = 205.609 Dateien + 1 Marker, bestätigt). `diff` gegen `rdata`: 24.756 identisch, 0 unterschiedlich (jeder Pfad von `rdata` gewinnt). Der verschlüsselte Eintrag und `worm_tail_damage.wav` werden unverändert übernommen. Ausgabe 0x200 + zlib 9: 4.001.949.159 B (passt unter 4 GiB), 63 s.
+- Synthetische Tests (Core 6, CLI 1): Priorität und Reihenfolge, Duplikate in einem Archiv (später gewinnt), Groß-/Kleinschreibung und Separator beim Vergleich, 0x300-Quelle wählt 0x300, Dedupe über Archive, reproduzierbar, Patch über Alt = Neu, Ablehnung (kein Eingabearchiv als Ziel, kein vorhandenes Ziel, nichts zu patchen).
+- **Nicht gemessen:** die Reihenfolge der `DATA.INI`-Indizes im Client (die Priorität „erstes Archiv gewinnt“ ist die Annahme aus deiner Aussage und gängiger Praxis; ein Spieltest mit zwei Archiven, die dieselbe Datei verschieden enthalten, würde es belegen); Ordner als Eingabe von `diff`/`merge` (stattdessen erst mit `build` ein Archiv erzeugen).
 - Zwei Archive/Ordner vergleichen, `rdata` über `data` legen, Patch-GRF erzeugen.
 - **Abnahme:** `merge data.grf rdata.grf` ergibt 205.610 Einträge (202.358 + 3.252 neue) = 205.609 Dateien + 1 leerer Marker; für jeden Pfad gewinnt `rdata`; Gegenprobe mit entpackten Ordnern. Priorität bei mehreren Archiven: eigene Custom-GRFs zuerst, `data.grf` zuletzt (Index-Zählung des Clients wird in der VM gemessen).
 
@@ -87,7 +93,7 @@ Jeder Meilenstein hat eine **Abnahme** (messbar). Nichts gilt als fertig, bevor 
 
 ## Testdaten
 Lokale Archive (nicht im Repo):
-- `RO/1 CLIENT-SIDE/client-dev/full/` (`core.grf`, `cdata.grf`, `cpal.grf`, `data.grf`, `datacomp.grf`)
+- `RO/1 CLIENT-SIDE/client-dev/full/` (`core.grf`, `cdata.grf`, `cpal.grf`, `data.grf`, `datacomp.grf`); **`cdata.grf` dort ist seit 2026-11-17 neu gebaut** (Serveradresse `<host-ip>`, alles zlib). Die Tests nutzen das Original `RO/1 CLIENT-SIDE/0 GRFs/reference/cdata-2024-original.grf` (SHA-256 in `tests/golden/SHA256SUMS`); diese Datei nicht ändern.
 - `RO/1 CLIENT-SIDE/client-dev/grf/` (entpackt: `core`, `cdata`, `cpal`, `data-official`)
 - `RO/1 CLIENT-SIDE/0 OTHER CLIENTS/client-kro/` (`data.grf` 26.10.2024, `rdata.grf`)
 - `RO/1 CLIENT-SIDE/0 GRFs/` (eigene GRFs: `data (merged kro+chris).grf` = aktuellste Hauptdatei, `data kro latest.grf` = neue kRO-0x300-Referenz, `official_data (chris).grf`; später Komprimierung/Optimierung der Merge-GRF)

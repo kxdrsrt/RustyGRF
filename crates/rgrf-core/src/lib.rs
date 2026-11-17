@@ -9,6 +9,7 @@ pub mod error;
 pub mod extract;
 pub mod hash;
 pub mod io;
+pub mod merge;
 pub mod name;
 mod pipeline;
 pub mod progress;

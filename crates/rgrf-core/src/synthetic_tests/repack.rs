@@ -3,7 +3,9 @@
 use super::*;
 use crate::codec::{Codec, sniff};
 use crate::encode::Method;
-use crate::repack::{Dedupe, RepackOptions, plan_units, prepare, repack, verify_output};
+use crate::repack::{
+    Dedupe, RepackOptions, Sel, Selection, plan_units, prepare, repack, verify_output,
+};
 use crate::writer::Format;
 
 fn text(n: usize, seed: u8) -> Vec<u8> {
@@ -343,7 +345,12 @@ fn archives_with_a_key_block_are_refused() {
 fn the_output_check_detects_a_damaged_result() {
     let src = mixed_source();
     let o = opts(Method::Zlib { level: 9 }, Format::V200);
-    let units = plan_units(&src, &o, &Control::default()).unwrap();
+    let sources = [&src];
+    let sel = Selection {
+        sources: &sources,
+        sel: (0..src.len()).map(|idx| Sel { src: 0, idx }).collect(),
+    };
+    let units = plan_units(&sel, &o, &Control::default()).unwrap();
     let mut unit_of = vec![None; src.len()];
     for (u, unit) in units.iter().enumerate() {
         for &m in &unit.members {
@@ -353,12 +360,12 @@ fn the_output_check_detects_a_damaged_result() {
     let expected: Vec<_> = units
         .iter()
         .enumerate()
-        .map(|(u, unit)| prepare(&src, u, unit, &o).unwrap().expected)
+        .map(|(u, unit)| prepare(&sel, u, unit, &o).unwrap().expected)
         .collect();
     let (_, out, dir) = run(&src, "tamper", &o);
     let path = dir.join("out.grf");
     verify_output(
-        &src,
+        &sel,
         &units,
         &unit_of,
         &expected,
@@ -373,7 +380,7 @@ fn the_output_check_detects_a_damaged_result() {
     bytes[at] ^= 0xFF;
     std::fs::write(&path, bytes).unwrap();
     let err = verify_output(
-        &src,
+        &sel,
         &units,
         &unit_of,
         &expected,

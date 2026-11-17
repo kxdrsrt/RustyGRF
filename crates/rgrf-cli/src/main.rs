@@ -138,6 +138,33 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Compare two archives by path and content (exit 0 identical, 2 differences)
+    Diff {
+        a: PathBuf,
+        b: PathBuf,
+        /// Print every path (default: the first 50 per group)
+        #[arg(long)]
+        all: bool,
+    },
+    /// Merge archives into a new one. The FIRST archive wins for a path (like the lowest index in
+    /// DATA.INI); give your custom GRFs first and data.grf last
+    Merge {
+        #[arg(required = true, num_args = 1..)]
+        grfs: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[command(flatten)]
+        write: WriteArgs,
+    },
+    /// Write an archive with only what is new or different in NEW compared with OLD
+    Patch {
+        old: PathBuf,
+        new: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[command(flatten)]
+        write: WriteArgs,
+    },
     /// Build an archive from a folder (the folder is the archive root, e.g. it contains `data/`)
     Build {
         folder: PathBuf,
@@ -187,6 +214,67 @@ enum MethodArg {
     Zlib,
     Zopfli,
     Lzma,
+}
+
+#[derive(clap::Args)]
+struct WriteArgs {
+    /// zlib (default, every client), zopfli (zlib-compatible, smaller, slow) or lzma (only with
+    /// the LZMA-capable cps.dll in the client)
+    #[arg(long, value_enum, default_value = "zlib")]
+    method: MethodArg,
+    /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
+    #[arg(long)]
+    level: Option<u32>,
+    /// 0x200 (32-bit offsets, max 4 GiB) or 0x300 (default: 0x300 if any input is 0x300)
+    #[arg(long, value_parser = parse_format)]
+    format: Option<Format>,
+    /// Pad streams to a multiple of 8 (default: yes for 0x200, no for 0x300)
+    #[arg(long, conflicts_with = "no_align")]
+    align: bool,
+    #[arg(long)]
+    no_align: bool,
+    /// none: no sharing; source: keep the sharing of the inputs (default); content: share blocks
+    /// of identical content, also across inputs
+    #[arg(long, value_enum, default_value = "source")]
+    dedupe: DedupeArg,
+    /// Always use the new stream, never keep the original stream of the same codec
+    #[arg(long)]
+    recompress_all: bool,
+    /// Skip decoding the written archive for comparison (not recommended)
+    #[arg(long)]
+    no_verify: bool,
+    /// Replace an existing output file
+    #[arg(long)]
+    overwrite: bool,
+    /// Only plan, write nothing
+    #[arg(long)]
+    dry_run: bool,
+}
+
+impl WriteArgs {
+    fn options(&self) -> Result<RepackOptions> {
+        Ok(RepackOptions {
+            method: method_from(self.method, self.level)?,
+            format: self.format,
+            align: if self.align {
+                Some(true)
+            } else if self.no_align {
+                Some(false)
+            } else {
+                None
+            },
+            dedupe: match self.dedupe {
+                DedupeArg::None => Dedupe::None,
+                DedupeArg::Source => Dedupe::Source,
+                DedupeArg::Content => Dedupe::Content,
+            },
+            recompress_all: self.recompress_all,
+            verify: !self.no_verify,
+            overwrite: self.overwrite,
+            dry_run: self.dry_run,
+            max_file_len: None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -403,6 +491,18 @@ fn run(cli: &Cli) -> Result<i32> {
             };
             build_cmd(cli, folder, output, &opts)
         }
+        Cmd::Diff { a, b, all } => diff_cmd(cli, a, b, *all),
+        Cmd::Merge {
+            grfs,
+            output,
+            write,
+        } => merge_cmd(cli, grfs, output, &write.options()?),
+        Cmd::Patch {
+            old,
+            new,
+            output,
+            write,
+        } => patch_cmd(cli, old, new, output, &write.options()?),
         Cmd::Repack {
             grf,
             output,
@@ -895,6 +995,215 @@ fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Res
         }
     }
     Ok(if warn { 2 } else { 0 })
+}
+
+fn show_names(cli: &Cli, title: &str, names: &[GrfPath], all: bool) {
+    if names.is_empty() {
+        return;
+    }
+    println!("{title} ({}):", names.len());
+    let n = if all {
+        names.len()
+    } else {
+        names.len().min(50)
+    };
+    for p in &names[..n] {
+        println!("  {}", p.display(cli.names));
+    }
+    if n < names.len() {
+        println!("  ... and {} more (--all)", names.len() - n);
+    }
+}
+
+fn diff_cmd(cli: &Cli, a: &Path, b: &Path, all: bool) -> Result<i32> {
+    let (x, _) = open(a)?;
+    let (y, _) = open(b)?;
+    let started = Instant::now();
+    let r = rgrf_core::merge::diff(&x, &y, &Control::default())?;
+    let secs = started.elapsed().as_secs_f64();
+    let names = |v: &[GrfPath]| -> Vec<String> { v.iter().map(|p| p.display(cli.names)).collect() };
+    if cli.json {
+        print_json(&json!({
+            "schema_version": SCHEMA_VERSION,
+            "identical": r.is_identical(),
+            "same": r.same,
+            "only_a": names(&r.only_a), "only_b": names(&r.only_b), "changed": names(&r.changed),
+            "shadowed_a": r.shadowed_a, "shadowed_b": r.shadowed_b, "seconds": secs,
+        }))?;
+    } else {
+        println!("A: {}\nB: {}", a.display(), b.display());
+        show_names(cli, "Only in A", &r.only_a, all);
+        show_names(cli, "Only in B", &r.only_b, all);
+        show_names(cli, "Different content", &r.changed, all);
+        println!(
+            "{} identical, {} only in A, {} only in B, {} different ({:.1}s){}",
+            r.same,
+            r.only_a.len(),
+            r.only_b.len(),
+            r.changed.len(),
+            secs,
+            if r.shadowed_a + r.shadowed_b > 0 {
+                format!(
+                    "; ignored {} + {} entries hidden by a later entry with the same path",
+                    r.shadowed_a, r.shadowed_b
+                )
+            } else {
+                String::new()
+            }
+        );
+    }
+    Ok(if r.is_identical() { 0 } else { 2 })
+}
+
+fn write_summary(r: &rgrf_core::repack::RepackReport, output: &Path, secs: f64) {
+    println!(
+        "{} {} (0x{:03x}) in {:.1}s",
+        if r.dry_run { "Plan for" } else { "Wrote" },
+        output.display(),
+        r.format,
+        secs
+    );
+    println!(
+        "Files:    {}; data blocks {}, files sharing a block {}",
+        r.files, r.blocks, r.shared_files
+    );
+    if !r.dry_run {
+        println!(
+            "Streams:  kept original {}, re-encoded {}, copied unchanged: {} stored uncompressed, {} encrypted, {} damaged",
+            r.kept_original,
+            r.recompressed,
+            r.stored_blocks,
+            r.encrypted_blocks,
+            r.damaged.len()
+        );
+        println!(
+            "Size:     {} bytes (inputs together {} bytes)",
+            r.output_file_len, r.source_file_len
+        );
+        println!(
+            "Checked:  {}",
+            if r.verified {
+                "every entry decoded and compared with its input"
+            } else {
+                "no (skipped)"
+            }
+        );
+    }
+}
+
+fn write_json(r: &rgrf_core::repack::RepackReport, output: &Path, secs: f64) -> Value {
+    json!({
+        "dry_run": r.dry_run, "output": output.display().to_string(),
+        "format": format!("0x{:03x}", r.format),
+        "files": r.files, "blocks": r.blocks, "shared_files": r.shared_files,
+        "encrypted_blocks": r.encrypted_blocks, "damaged_blocks": r.damaged.len(),
+        "stored_blocks": r.stored_blocks,
+        "kept_original": r.kept_original, "recompressed": r.recompressed,
+        "input_file_bytes": r.source_file_len, "output_file_bytes": r.output_file_len,
+        "output_stream_bytes": r.output_stream_bytes, "verified": r.verified, "seconds": secs,
+    })
+}
+
+fn open_all(paths: &[PathBuf], output: &Path) -> Result<Vec<Archive>> {
+    let mut archives = Vec::new();
+    for p in paths {
+        if same_file(p, output) {
+            bail!("the output must not be one of the input archives");
+        }
+        archives.push(open(p)?.0);
+    }
+    Ok(archives)
+}
+
+fn merge_cmd(cli: &Cli, grfs: &[PathBuf], output: &Path, opts: &RepackOptions) -> Result<i32> {
+    let archives = open_all(grfs, output)?;
+    let refs: Vec<&Archive> = archives.iter().collect();
+    let meter = Meter::new(cli);
+    let cb = meter.callback();
+    let ctl = Control {
+        cancel: None,
+        progress: Some(&cb),
+    };
+    let started = Instant::now();
+    let r = rgrf_core::merge::merge(&refs, output, opts, &ctl);
+    meter.done();
+    let r = r?;
+    let secs = started.elapsed().as_secs_f64();
+    let warn = !r.repack.damaged.is_empty() || r.repack.encrypted_blocks > 0;
+    if cli.json {
+        let mut v = write_json(&r.repack, output, secs);
+        v["schema_version"] = SCHEMA_VERSION.into();
+        v["sources"] = grfs
+            .iter()
+            .zip(&r.sources)
+            .map(|(p, s)| {
+                json!({
+                    "path": p.display().to_string(), "files": s.files, "used": s.used,
+                    "overridden": s.overridden, "shadowed": s.shadowed,
+                    "markers_skipped": s.markers_skipped,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into();
+        print_json(&v)?;
+    } else {
+        write_summary(&r.repack, output, secs);
+        println!(
+            "Inputs (highest priority first): files / used in the result / replaced by a higher-priority input"
+        );
+        for (p, s) in grfs.iter().zip(&r.sources) {
+            println!(
+                "  {:>9} {:>9} {:>9}  {}{}",
+                s.files,
+                s.used,
+                s.overridden,
+                p.display(),
+                if s.markers_skipped > 0 {
+                    format!("  ({} empty markers not copied)", s.markers_skipped)
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+    Ok(if warn { 2 } else { 0 })
+}
+
+fn patch_cmd(
+    cli: &Cli,
+    old: &Path,
+    new: &Path,
+    output: &Path,
+    opts: &RepackOptions,
+) -> Result<i32> {
+    let archives = open_all(&[old.to_path_buf(), new.to_path_buf()], output)?;
+    let meter = Meter::new(cli);
+    let cb = meter.callback();
+    let ctl = Control {
+        cancel: None,
+        progress: Some(&cb),
+    };
+    let started = Instant::now();
+    let r = rgrf_core::merge::patch(&archives[0], &archives[1], output, opts, &ctl);
+    meter.done();
+    let r = r?;
+    let secs = started.elapsed().as_secs_f64();
+    if cli.json {
+        let mut v = write_json(&r.repack, output, secs);
+        v["schema_version"] = SCHEMA_VERSION.into();
+        v["added"] = r.added.into();
+        v["changed"] = r.changed.into();
+        v["removed"] = r.removed.into();
+        print_json(&v)?;
+    } else {
+        write_summary(&r.repack, output, secs);
+        println!(
+            "Patch:    {} new, {} changed; {} removed in NEW (a GRF cannot delete, they stay visible from OLD)",
+            r.added, r.changed, r.removed
+        );
+        println!("Use:      list the patch before OLD in DATA.INI");
+    }
+    Ok(0)
 }
 
 fn method_from(method: MethodArg, level: Option<u32>) -> Result<Method> {

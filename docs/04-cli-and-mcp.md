@@ -20,10 +20,9 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 | `rgrf hash <grf> [pattern]` | CRC32/MD5 je Eintrag |
 | `rgrf build <ordner> -o <grf>` | **umgesetzt (M2):** GRF aus Ordner (Ordner = Archivwurzel, enthält z. B. `data/`); gleiche Optionen wie `repack` (`--method`, `--level`, `--format` Standard 0x200, `--align/--no-align`, `--dedupe` = gleicher Inhalt teilt einen Block, `--no-verify`, `--overwrite`, `--dry-run`); Dateinamen NFC, `.DS_Store`/`._*`/`Thumbs.db`/`desktop.ini`/Symlinks werden übersprungen und gemeldet; Fehler bei nicht darstellbaren Namen, Groß-/Kleinschreibungs-Kollisionen, Dateien ≥ 4 GiB, Ausgabe im Quellordner |
 | `rgrf repack <grf> -o <grf>` | **umgesetzt (M2):** neu komprimieren/umformatieren, Inhalt unverändert; `--method zlib\|zopfli\|lzma`, `--level`, `--format 0x200\|0x300`, `--align/--no-align`, `--dedupe none\|source\|content`, `--recompress-all`, `--no-verify`, `--overwrite`, `--dry-run` |
-| `rgrf build <ordner> -o <grf> [--method zlib\|zopfli\|lzma] [--level N]` | GRF aus Verzeichnis bauen |
-| `rgrf diff <a> <b>` | Unterschiede (neu/gelöscht/geändert) |
-| `rgrf merge <basis> <overlay> -o <grf>` | Overlay hat Vorrang (z. B. `rdata` über `data`) |
-| `rgrf patch <alt> <neu> -o <gpf>` | Patch erzeugen |
+| `rgrf diff <a> <b> [--all]` | **umgesetzt (M3):** Pfade nur in A / nur in B / mit anderem Inhalt (SHA-256 des dekodierten Inhalts, Pfadvergleich wie der Client: Groß-/Kleinschreibung und `/`=`\` egal); Exit 0 identisch, 2 Unterschiede |
+| `rgrf merge <grf> <grf>… -o <grf>` | **umgesetzt (M3):** das **erste** Archiv gewinnt je Pfad (wie der niedrigste Index in `DATA.INI`: eigene Custom-GRFs zuerst, `data.grf` zuletzt); Ausgabereihenfolge = Reihenfolge des Archivs mit der niedrigsten Priorität, dann neue Pfade der nächsten; gleiche Schreiboptionen wie `repack` (`--method`, `--level`, `--format` Standard 0x300, wenn eine Quelle 0x300 ist, sonst 0x200, `--dedupe`, …); leere Marker werden nicht kopiert (gemeldet); je Quelle: Dateien / übernommen / überschrieben |
+| `rgrf patch <alt> <neu> -o <grf>` | **umgesetzt (M3):** Archiv nur mit neuen und geänderten Dateien aus `<neu>`; in `DATA.INI` **vor** `<alt>` einreihen. In `<neu>` entfernte Pfade lassen sich in einem GRF nicht löschen (gemeldet) |
 
 Verhalten:
 - Schreibbefehle arbeiten in eine temporäre Datei, prüfen sie (`verify`) und benennen dann um.

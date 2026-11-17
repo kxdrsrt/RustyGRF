@@ -3,6 +3,7 @@
 use crate::archive::Archive;
 
 mod build;
+mod merge;
 mod raw;
 mod repack;
 mod v300;
