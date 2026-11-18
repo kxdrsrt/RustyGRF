@@ -1,5 +1,5 @@
 //! Format-aware tools: `grf_inspect` (what is inside a SPR, ACT, map or model file) and
-//! `grf_lua_decompile` (compiled Lua 5.1 back to source). Both only read.
+//! `grf_lua_decompile` (compiled Lua 5.0 / 5.1 back to source). Both only read.
 
 use rgrf_core::{GrfPath, NameMode};
 use rgrf_formats::act::Act;

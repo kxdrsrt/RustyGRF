@@ -152,7 +152,7 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
     Ok(if failed.is_empty() { 0 } else { 3 })
 }
 
-/// `rgrf lua decompile`: source (or the bytecode listing) of a compiled Lua 5.1 file.
+/// `rgrf lua decompile`: source (or the bytecode listing) of a compiled Lua 5.0 or 5.1 file.
 pub fn decompile(
     input: &Path,
     entry: Option<&str>,
