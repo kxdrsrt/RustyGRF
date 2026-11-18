@@ -83,6 +83,10 @@ fn previews_of_real_files() {
         Preview::Info { lines, .. } => {
             assert!(lines[0].contains("RSW 2.1"), "{lines:?}");
             assert!(lines[1].contains("1304 models"), "{lines:?}");
+            assert!(
+                lines.iter().any(|l| l.contains("\u{b098}\u{bb34}")),
+                "Korean folder names are readable: {lines:?}"
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -119,6 +123,20 @@ fn previews_of_real_files() {
     match s.preview(tga, None).unwrap() {
         Preview::Image { mime, data } => {
             assert_eq!((mime.as_str(), data.is_empty()), ("image/png", false))
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // an ADPCM sound is converted to PCM (44-byte header + 16-bit samples)
+    let wav = find(&mut s, "se_frog02.wav");
+    match s.preview(wav, None).unwrap() {
+        Preview::Audio { data, .. } => {
+            use base64::Engine;
+            let pcm = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap();
+            assert_eq!(&pcm[20..22], &[1, 0], "PCM format tag");
+            assert!(pcm.len() > 80_000);
         }
         other => panic!("{other:?}"),
     }

@@ -6,10 +6,25 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["The RustyGRF Authors"]
 publish = false
+default-run = "rustygrf-gui"
 
 [lib]
 name = "rustygrf_gui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# `devserver`: serves the page with the real backend on localhost, so the UI can be tested in a
+# browser without opening a window (see src/bin/devserver.rs). Not part of the app.
+devserver = []
+
+[[bin]]
+name = "rustygrf-gui"
+path = "src/main.rs"
+
+[[bin]]
+name = "devserver"
+path = "src/bin/devserver.rs"
+required-features = ["devserver"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.5", features = [] }

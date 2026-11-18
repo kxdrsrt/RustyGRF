@@ -275,3 +275,38 @@ fn every_tga_decodes() {
         &bad[..bad.len().min(5)]
     );
 }
+
+/// Every WAV can be played by a webview: PCM as it is, the few ADPCM files decoded. (Measured on
+/// the kRO archive: 3,326 PCM, 5 IMA ADPCM, 1 Microsoft ADPCM; the ADPCM decoders match Apple's
+/// `afconvert` sample for sample on the common length.)
+#[test]
+fn every_wav_is_playable() {
+    use rgrf_formats::wav::{Playable, playable};
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let idx = arc.select(Some("*.wav"), NameMode::Cp1252);
+    assert!(idx.len() > 3000);
+    let results: Vec<(String, Result<Playable, String>)> = idx
+        .par_iter()
+        .map(|&i| {
+            let name = arc.entries()[i].name.display(NameMode::Cp1252);
+            let d = arc.read(i).unwrap().data;
+            (name, playable(&d).map_err(|e| e.to_string()))
+        })
+        .collect();
+    let decoded = results
+        .iter()
+        .filter(|(_, r)| matches!(r, Ok(Playable::Decoded(_))))
+        .count();
+    let bad: Vec<_> = results
+        .iter()
+        .filter_map(|(n, r)| r.as_ref().err().map(|e| format!("{n}: {e}")))
+        .collect();
+    eprintln!(
+        "{} WAV, {decoded} decoded from ADPCM, {} errors: {bad:?}",
+        idx.len(),
+        bad.len()
+    );
+    assert_eq!(decoded, 6);
+    assert!(bad.is_empty(), "{bad:?}");
+}

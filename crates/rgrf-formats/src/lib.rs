@@ -15,5 +15,6 @@ pub mod rsw;
 pub mod spr;
 pub mod tga;
 pub mod version;
+pub mod wav;
 
 pub use version::Version;

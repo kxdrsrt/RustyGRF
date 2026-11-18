@@ -808,9 +808,19 @@ impl Session {
                 mime: "audio/ogg".into(),
                 data: b64(&data),
             },
-            "wav" => Preview::Audio {
-                mime: "audio/wav".into(),
-                data: b64(&data),
+            "wav" => match rgrf_formats::wav::playable(&data) {
+                Ok(rgrf_formats::wav::Playable::AsIs) => Preview::Audio {
+                    mime: "audio/wav".into(),
+                    data: b64(&data),
+                },
+                // ADPCM sounds are converted so that every webview can play them
+                Ok(rgrf_formats::wav::Playable::Decoded(pcm)) => Preview::Audio {
+                    mime: "audio/wav".into(),
+                    data: b64(&pcm),
+                },
+                Err(e) => Preview::Message {
+                    text: format!("This sound cannot be played here: {e}"),
+                },
             },
             "mp3" => Preview::Audio {
                 mime: "audio/mpeg".into(),
@@ -902,8 +912,8 @@ impl Session {
                     format!(
                         "RSW {} - ground {}, altitude {}",
                         r.version,
-                        rsw::text(&r.ground),
-                        rsw::text(&r.altitude)
+                        self.shown(&rsw::text(&r.ground)),
+                        self.shown(&rsw::text(&r.altitude))
                     ),
                     format!(
                         "{m} models ({} files), {l} lights, {s} sounds ({} files), {e} effects",
@@ -912,10 +922,10 @@ impl Session {
                     ),
                 ];
                 lines.push("Models:".into());
-                lines.extend(r.model_files());
+                lines.extend(r.model_files().iter().map(|f| self.shown(f)));
                 if !r.sound_files().is_empty() {
                     lines.push("Sounds:".into());
-                    lines.extend(r.sound_files());
+                    lines.extend(r.sound_files().iter().map(|f| self.shown(f)));
                 }
                 Preview::Info {
                     title: "World".into(),
@@ -928,7 +938,7 @@ impl Session {
                 for x in &m.meshes {
                     lines.push(format!(
                         "mesh {} ({} vertices, {} faces)",
-                        x.name.iter().map(|&b| char::from(b)).collect::<String>(),
+                        self.shown(&x.name.iter().map(|&b| char::from(b)).collect::<String>()),
                         x.vertices,
                         x.faces
                     ));
@@ -937,7 +947,7 @@ impl Session {
                 lines.extend(
                     m.all_textures()
                         .iter()
-                        .map(|t| t.iter().map(|&b| char::from(b)).collect::<String>()),
+                        .map(|t| self.shown(&t.iter().map(|&b| char::from(b)).collect::<String>())),
                 );
                 Preview::Info {
                     title: "Model".into(),
@@ -967,6 +977,15 @@ impl Session {
                 size: data.len() as u32,
             },
         })
+    }
+
+    /// A name read as one char per byte, shown in the chosen name mode (Korean by default).
+    fn shown(&self, latin1: &str) -> String {
+        let bytes: Option<Vec<u8>> = latin1
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).ok())
+            .collect();
+        bytes.map_or_else(|| latin1.to_owned(), |b| GrfPath::new(b).display(self.mode))
     }
 
     fn preview_spr(&self, data: &[u8]) -> Result<Preview, String> {
