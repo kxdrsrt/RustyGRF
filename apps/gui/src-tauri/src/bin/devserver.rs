@@ -137,6 +137,18 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_act_interval(arg(a, "index")?, arg(a, "action")?, arg(a, "ms")?)?;
             to_json(s.pending())
         }),
+        "history" => with(state, |s| {
+            let (can_undo, can_redo) = s.history();
+            Ok(json!({ "can_undo": can_undo, "can_redo": can_redo }))
+        }),
+        "undo_change" => with(state, |s| {
+            s.undo();
+            to_json(s.pending())
+        }),
+        "redo_change" => with(state, |s| {
+            s.redo();
+            to_json(s.pending())
+        }),
         "pending" => with(state, |s| to_json(s.pending())),
         "discard_pending" => with(state, |s| {
             s.discard_pending();

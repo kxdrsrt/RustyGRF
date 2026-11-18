@@ -344,6 +344,41 @@ async fn save_edited(app: AppHandle, state: State<'_, AppState>, dst: String) ->
     .await
 }
 
+#[derive(Serialize)]
+struct History {
+    can_undo: bool,
+    can_redo: bool,
+}
+
+/// Whether the staged changes can be undone or redone.
+#[tauri::command]
+async fn history(state: State<'_, AppState>) -> Res<History> {
+    with_session(&state, |s| {
+        let (can_undo, can_redo) = s.history();
+        Ok(History { can_undo, can_redo })
+    })
+    .await
+}
+
+/// Takes back the last staged change; returns the changes that are staged afterwards.
+#[tauri::command]
+async fn undo_change(state: State<'_, AppState>) -> Res<Vec<PendingRow>> {
+    with_session(&state, |s| {
+        s.undo();
+        Ok(s.pending())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn redo_change(state: State<'_, AppState>) -> Res<Vec<PendingRow>> {
+    with_session(&state, |s| {
+        s.redo();
+        Ok(s.pending())
+    })
+    .await
+}
+
 #[tauri::command]
 fn cancel_job(state: State<'_, AppState>) {
     if let Ok(job) = state.job.lock()
@@ -413,6 +448,9 @@ pub fn run() {
             stage_act_edit,
             pending,
             discard_pending,
+            history,
+            undo_change,
+            redo_change,
             save_edited,
             cancel_job,
             startup_path,

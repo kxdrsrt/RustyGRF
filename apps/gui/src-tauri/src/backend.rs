@@ -2,6 +2,7 @@
 //! `lib.rs` only wraps these functions as commands.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::act_editor::{self, ActEdit, ActFrameView};
 use base64::Engine;
@@ -33,6 +34,8 @@ use serde::{Deserialize, Serialize};
 const MAX_PREVIEW_BYTES: u32 = 48 * 1024 * 1024;
 const MAX_TEXT_CHARS: usize = 200_000;
 const MAX_SPR_FRAMES: usize = 96;
+/// Undo steps kept per open archive.
+const MAX_UNDO: usize = 200;
 
 pub struct Session {
     pub path: PathBuf,
@@ -41,6 +44,9 @@ pub struct Session {
     names: Vec<String>,
     filtered: Vec<usize>,
     pending: Vec<Change>,
+    /// Earlier states of `pending` (newest last) for undo, and states undone for redo.
+    undo: Vec<Vec<Change>>,
+    redo: Vec<Vec<Change>>,
 }
 
 /// A change waiting to be saved into a new archive (the open archive is never modified).
@@ -54,7 +60,7 @@ enum Change {
     /// Edited content of a sprite or animation, with what was changed in it.
     PutBytes {
         name: GrfPath,
-        data: Vec<u8>,
+        data: Arc<Vec<u8>>,
         what: Vec<String>,
     },
     Remove {
@@ -390,7 +396,7 @@ pub fn save_edited(
             },
             Change::PutBytes { name, data, .. } => Edit::Put {
                 name: name.clone(),
-                data: data.clone(),
+                data: (**data).clone(),
             },
             Change::Remove { name } => Edit::Remove { name: name.clone() },
         });
@@ -587,7 +593,106 @@ impl Session {
             names,
             filtered,
             pending: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
         })
+    }
+
+    pub fn stage_replace(&mut self, index: usize, file: &Path) -> Result<(), String> {
+        self.transact(|s| s.stage_replace_impl(index, file))
+    }
+
+    pub fn stage_add(&mut self, path: &str, file: &Path) -> Result<(), String> {
+        self.transact(|s| s.stage_add_impl(path, file))
+    }
+
+    pub fn stage_spr_image(
+        &mut self,
+        index: usize,
+        frame: usize,
+        png: &Path,
+    ) -> Result<(), String> {
+        self.transact(|s| s.stage_spr_image_impl(index, frame, png))
+    }
+
+    pub fn stage_spr_add(&mut self, index: usize, png: &Path) -> Result<(), String> {
+        self.transact(|s| s.stage_spr_add_impl(index, png))
+    }
+
+    pub fn stage_spr_remove(&mut self, index: usize, frame: usize) -> Result<(), String> {
+        self.transact(|s| s.stage_spr_remove_impl(index, frame))
+    }
+
+    pub fn stage_spr_palette(&mut self, index: usize, pal: &Path) -> Result<(), String> {
+        self.transact(|s| s.stage_spr_palette_impl(index, pal))
+    }
+
+    pub fn stage_act_interval(
+        &mut self,
+        index: usize,
+        action: usize,
+        ms: f32,
+    ) -> Result<(), String> {
+        self.transact(|s| s.stage_act_interval_impl(index, action, ms))
+    }
+
+    pub fn stage_remove(&mut self, indices: &[usize]) -> Result<usize, String> {
+        self.transact(|s| s.stage_remove_impl(indices))
+    }
+
+    pub fn stage_act_edit(
+        &mut self,
+        index: usize,
+        action: usize,
+        frame: usize,
+        edit: &ActEdit,
+    ) -> Result<(), String> {
+        self.transact(|s| s.stage_act_edit_impl(index, action, frame, edit))
+    }
+
+    /// Runs a change of the pending list as one undo step; if it fails nothing is changed.
+    fn transact<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        let before = self.pending.clone();
+        match f(self) {
+            Ok(v) => {
+                self.undo.push(before);
+                if self.undo.len() > MAX_UNDO {
+                    self.undo.remove(0);
+                }
+                self.redo.clear();
+                Ok(v)
+            }
+            Err(e) => {
+                self.pending = before;
+                Err(e)
+            }
+        }
+    }
+
+    /// Takes back the last change; false when there is nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        match self.undo.pop() {
+            Some(prev) => {
+                self.redo.push(std::mem::replace(&mut self.pending, prev));
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn redo(&mut self) -> bool {
+        match self.redo.pop() {
+            Some(next) => {
+                self.undo.push(std::mem::replace(&mut self.pending, next));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// (can undo, can redo)
+    pub fn history(&self) -> (bool, bool) {
+        (!self.undo.is_empty(), !self.redo.is_empty())
     }
 
     fn stage(&mut self, change: Change) {
@@ -609,7 +714,7 @@ impl Session {
     }
 
     /// The content of entry `index` will be the content of `file`.
-    pub fn stage_replace(&mut self, index: usize, file: &Path) -> Result<(), String> {
+    fn stage_replace_impl(&mut self, index: usize, file: &Path) -> Result<(), String> {
         let name = self.entry_name(index)?;
         check_file(file)?;
         self.stage(Change::Put {
@@ -620,7 +725,7 @@ impl Session {
     }
 
     /// Adds `file` under the archive path `path` (or replaces the entry that has it).
-    pub fn stage_add(&mut self, path: &str, file: &Path) -> Result<(), String> {
+    fn stage_add_impl(&mut self, path: &str, file: &Path) -> Result<(), String> {
         let text = path.trim().replace('/', "\\");
         if text.is_empty() || text.ends_with('\\') {
             return Err("enter the path inside the archive, e.g. data\\texture\\a.bmp".into());
@@ -645,7 +750,7 @@ impl Session {
         let name = self.entry_name(index)?;
         let key = name.key();
         match self.pending.iter().find(|c| c.name().key() == key) {
-            Some(Change::PutBytes { data, what, .. }) => Ok((name, data.clone(), what.clone())),
+            Some(Change::PutBytes { data, what, .. }) => Ok((name, (**data).clone(), what.clone())),
             Some(Change::Put { file, .. }) => {
                 let data = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
                 Ok((name, data, vec![format!("replaced by {}", file.display())]))
@@ -656,7 +761,7 @@ impl Session {
     }
 
     /// Replaces image `frame` of a sprite with a PNG (palette sprites map its colours to the palette).
-    pub fn stage_spr_image(
+    fn stage_spr_image_impl(
         &mut self,
         index: usize,
         frame: usize,
@@ -672,28 +777,28 @@ impl Session {
         ));
         self.stage(Change::PutBytes {
             name,
-            data: out,
+            data: Arc::new(out),
             what,
         });
         Ok(())
     }
 
     /// Appends a PNG to a sprite as a new image.
-    pub fn stage_spr_add(&mut self, index: usize, png: &Path) -> Result<(), String> {
+    fn stage_spr_add_impl(&mut self, index: usize, png: &Path) -> Result<(), String> {
         let (name, data, mut what) = self.working_bytes(index)?;
         let png_bytes = std::fs::read(png).map_err(|e| format!("{}: {e}", png.display()))?;
         what.push(format!("image added from {}", file_name_of(png)));
         let out = add_spr_image(&data, &png_bytes)?;
         self.stage(Change::PutBytes {
             name,
-            data: out,
+            data: Arc::new(out),
             what,
         });
         Ok(())
     }
 
     /// Removes image `frame` of a sprite; the animation next to it follows when it exists.
-    pub fn stage_spr_remove(&mut self, index: usize, frame: usize) -> Result<(), String> {
+    fn stage_spr_remove_impl(&mut self, index: usize, frame: usize) -> Result<(), String> {
         let (name, data, mut what) = self.working_bytes(index)?;
         let act_index = self.sibling(index, "act");
         let act = act_index.map(|i| self.working_bytes(i)).transpose()?;
@@ -702,14 +807,14 @@ impl Session {
         what.push(format!("image {frame} removed"));
         self.stage(Change::PutBytes {
             name,
-            data: spr_out,
+            data: Arc::new(spr_out),
             what,
         });
         if let (Some((aname, _, mut awhat)), Some(bytes)) = (act, act_out) {
             awhat.push(format!("layers follow the removal of sprite image {frame}"));
             self.stage(Change::PutBytes {
                 name: aname,
-                data: bytes,
+                data: Arc::new(bytes),
                 what: awhat,
             });
         }
@@ -717,14 +822,14 @@ impl Session {
     }
 
     /// Gives a sprite the palette of a `.pal` file.
-    pub fn stage_spr_palette(&mut self, index: usize, pal: &Path) -> Result<(), String> {
+    fn stage_spr_palette_impl(&mut self, index: usize, pal: &Path) -> Result<(), String> {
         let (name, data, mut what) = self.working_bytes(index)?;
         let pal_bytes = std::fs::read(pal).map_err(|e| format!("{}: {e}", pal.display()))?;
         what.push(format!("palette from {}", file_name_of(pal)));
         let out = set_spr_palette(&data, &pal_bytes)?;
         self.stage(Change::PutBytes {
             name,
-            data: out,
+            data: Arc::new(out),
             what,
         });
         Ok(())
@@ -747,7 +852,7 @@ impl Session {
     }
 
     /// Changes a layer, anchor or frame of an animation.
-    pub fn stage_act_edit(
+    fn stage_act_edit_impl(
         &mut self,
         index: usize,
         action: usize,
@@ -773,14 +878,14 @@ impl Session {
         }
         self.stage(Change::PutBytes {
             name,
-            data: out,
+            data: Arc::new(out),
             what,
         });
         Ok(())
     }
 
     /// Sets the frame interval of an action of an animation, in milliseconds.
-    pub fn stage_act_interval(
+    fn stage_act_interval_impl(
         &mut self,
         index: usize,
         action: usize,
@@ -791,13 +896,13 @@ impl Session {
         what.push(format!("action {action}: {ms} ms per frame"));
         self.stage(Change::PutBytes {
             name,
-            data: out,
+            data: Arc::new(out),
             what,
         });
         Ok(())
     }
 
-    pub fn stage_remove(&mut self, indices: &[usize]) -> Result<usize, String> {
+    fn stage_remove_impl(&mut self, indices: &[usize]) -> Result<usize, String> {
         let names = indices
             .iter()
             .map(|&i| self.entry_name(i))
@@ -809,7 +914,10 @@ impl Session {
     }
 
     pub fn discard_pending(&mut self) {
-        self.pending.clear();
+        let _ = self.transact(|s| {
+            s.pending.clear();
+            Ok(())
+        });
     }
 
     pub fn pending(&self) -> Vec<PendingRow> {
@@ -1653,6 +1761,49 @@ mod tests {
         let i = find(&mut r, "a.spr");
         let spr = Spr::parse(&r.read(i).unwrap()).unwrap();
         assert_eq!((spr.indexed.len(), spr.palette.unwrap()[5]), (1, 0));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn undo_and_redo_take_back_staged_changes() {
+        let (dir, grf) = sample("undo");
+        let mut s = Session::open(&grf).unwrap();
+        let find = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+        let (spr_i, act_i) = (find(&mut s, "a.spr"), find(&mut s, "a.act"));
+        assert_eq!(s.history(), (false, false));
+        assert!(!s.undo() && !s.redo());
+
+        s.stage_act_interval(act_i, 0, 100.0).unwrap();
+        s.stage_act_interval(act_i, 1, 50.0).unwrap();
+        let png = dir.join("none.png");
+        // a failing change is not a step and leaves the list as it was
+        assert!(s.stage_spr_image(spr_i, 0, &png).is_err());
+        assert_eq!((s.pending().len(), s.history()), (1, (true, false)));
+
+        let interval = |s: &Session, action: usize| {
+            Act::parse(&s.read_working(act_i).unwrap()).unwrap().actions[action].interval
+        };
+        assert_eq!((interval(&s, 0), interval(&s, 1)), (4.0, 2.0));
+        assert!(s.undo());
+        assert_eq!((interval(&s, 0), interval(&s, 1)), (4.0, 4.0));
+        assert_eq!(s.history(), (true, true));
+        assert!(s.undo());
+        assert!(s.pending().is_empty());
+        assert!(s.redo() && s.redo() && !s.redo());
+        assert_eq!(interval(&s, 1), 2.0);
+
+        // a new change after an undo drops what could be redone
+        assert!(s.undo());
+        s.stage_remove(&[spr_i]).unwrap();
+        assert_eq!(s.history(), (true, false));
+        // discarding everything can be undone, too
+        s.discard_pending();
+        assert!(s.pending().is_empty());
+        assert!(s.undo());
+        assert_eq!(s.pending().len(), 2);
         let _ = fs::remove_dir_all(dir);
     }
 

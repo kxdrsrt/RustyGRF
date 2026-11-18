@@ -370,6 +370,14 @@ function updateEditBar() {
   $("btn-replace").disabled = S.selected == null;
   $("btn-remove").disabled = !S.info;
   $("btn-changes").textContent = `Changes (${S.changes.length})…`;
+  if (S.info) {
+    invoke("history")
+      .then((h) => {
+        for (const id of ["btn-undo", "act-undo"]) if ($(id)) $(id).disabled = !h.can_undo;
+        for (const id of ["btn-redo", "act-redo"]) if ($(id)) $(id).disabled = !h.can_redo;
+      })
+      .catch(() => {});
+  }
 }
 
 const changeKey = (name) => name.toLowerCase().replace(/\//g, "\\");
@@ -379,6 +387,17 @@ function setPending(rows) {
   S.changed = new Map(rows.map((r) => [changeKey(r.name), r.kind]));
   updateEditBar();
   render();
+}
+
+async function doHistory(redo) {
+  try {
+    setPending(await invoke(redo ? "redo_change" : "undo_change"));
+    setStatus(redo ? "Change redone" : "Change undone");
+    if ($("act-dlg").open) await loadActFrame();
+    refreshPreview($("act-dlg").open ? E.action : undefined);
+  } catch (e) {
+    await note("Could not change the history", errText(e), true);
+  }
 }
 
 /** Shows the selected entry again, so it reflects the staged changes. */
@@ -500,6 +519,8 @@ function drawActEditor() {
     el("span", { text: `Frame ${v.frame + 1} / ${v.frames}` }),
     el("button", { type: "button", class: "small", text: "▶", disabled: v.frame >= v.frames - 1, onclick: () => { E.frame += 1; loadActFrame(); } }),
     el("span", { class: "muted", text: `${v.interval_ms} ms per frame, ACT ${v.version}` }),
+    el("button", { type: "button", class: "small", id: "act-undo", text: "Undo", onclick: () => doHistory(false) }),
+    el("button", { type: "button", class: "small", id: "act-redo", text: "Redo", onclick: () => doHistory(true) }),
     el("button", { type: "button", class: "small", text: "Copy frame", title: "Insert a copy after this frame", onclick: () => actEdit({ op: "copy_frame" }) }),
     el("button", { type: "button", class: "small", text: "Remove frame", disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
   );
@@ -542,6 +563,7 @@ function drawActEditor() {
       )
     : el("p", { class: "muted", text: `ACT ${v.version} has no anchors.` });
   $("act-body").replaceChildren(el("div", { class: "acted" }, bar, left, el("div", {}, layers, anchors)));
+  updateEditBar();
 }
 
 async function setInterval_(row, action, current) {
@@ -792,6 +814,17 @@ $("btn-replace").addEventListener("click", doReplace);
 $("btn-add").addEventListener("click", doAdd);
 $("btn-remove").addEventListener("click", doRemove);
 $("btn-changes").addEventListener("click", doChanges);
+$("btn-undo").addEventListener("click", () => doHistory(false));
+$("btn-redo").addEventListener("click", () => doHistory(true));
+document.addEventListener("keydown", (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || !S.info) return;
+  const t = e.target;
+  // inside a text field Cmd/Ctrl+Z keeps its normal meaning
+  if (t instanceof HTMLInputElement && !["checkbox", "color", "button"].includes(t.type)) return;
+  if (t instanceof HTMLTextAreaElement) return;
+  e.preventDefault();
+  doHistory(e.shiftKey);
+});
 $("btn-build").addEventListener("click", doBuild);
 $("btn-extract").addEventListener("click", doExtract);
 $("btn-verify").addEventListener("click", doVerify);

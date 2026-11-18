@@ -124,6 +124,13 @@ if (!window.__TAURI__) {
           case "stage_act_interval":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action}: ${a.ms} ms per frame` });
             return pendingRows;
+          case "history":
+            return { can_undo: pendingRows.length > 0, can_redo: false };
+          case "undo_change":
+            pendingRows.pop();
+            return pendingRows;
+          case "redo_change":
+            return pendingRows;
           case "pending":
             return pendingRows;
           case "discard_pending":
