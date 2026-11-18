@@ -84,3 +84,7 @@ Weitere Werkzeuge:
 3. Nach jedem Meilenstein: `cargo fmt`, `cargo clippy -D warnings`, `cargo nextest`, `cargo deny check`, danach Review (Code-Review, bei Sicherheit/Concurrency zusätzlich Zweitmeinung).
 4. Nichts committen, was Spieldaten enthält. Keine Archive ins Repo.
 5. Doku und Plan aktuell halten, offene Fragen in `03-roadmap.md` führen.
+
+## Client aus der Mac-Freigabe starten: Laufwerksbuchstabe statt UNC (2026-11-19)
+**Beobachtung (gemessen):** Mit `\\Mac\Home\…\client-dev\full` als Arbeitsverzeichnis meldet der Client nach **Ctrl+S** (Screenshot mit SNS-Teilen, Twitter-Fenster) im Chat `\\Mac\Home\…\ScreenShot\ForSnsscreen000.jpg is Saved.` und danach „Resource File Loading fail“ für dieselbe Datei und für `texture\\\mac\home\…`. Die Datei ist da (21 KB), nur das Laden für das Teilen-Fenster schlägt fehl. Im Programm (`alpha.exe`, Build 2019-03-07) stehen die Texte `%s\ScreenShot`, `ForSns`, ` is Saved.` und `Resource File Loading fail`; der Ordner entsteht also aus dem Arbeitsverzeichnis.
+
