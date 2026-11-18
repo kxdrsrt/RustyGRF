@@ -19,6 +19,7 @@ const S = {
   pending: false,
   previewToken: 0,
   changes: [], // changes waiting to be saved
+  changed: new Map(), // lower-case path -> replace | add | remove
 };
 
 function el(tag, attrs = {}, ...children) {
@@ -99,6 +100,7 @@ async function openPath(path) {
   $("viewport").hidden = false;
   for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes"]) $(id).disabled = false;
   S.changes = [];
+  S.changed = new Map();
   updateEditBar();
   $("search").value = "";
   $("names").value = "cp949";
@@ -173,7 +175,7 @@ function render() {
     const dir = cut >= 0 ? r.name.slice(0, cut) : "";
     const row = el(
       "div",
-      { class: `row${pos === S.selected ? " selected" : ""}`, style: `top:${pos * ROW_H}px`, title: r.name, "data-pos": pos },
+      { class: `row${pos === S.selected ? " selected" : ""}${S.changed.has(changeKey(r.name)) ? ` changed ${S.changed.get(changeKey(r.name))}` : ""}`, style: `top:${pos * ROW_H}px`, title: r.name, "data-pos": pos },
       el("span", { class: "icon", text: ICONS[r.kind] || "·" }),
       el("span", { class: "name" }, base, el("span", { class: "muted", text: dir ? `  ${dir}` : "" })),
       el("span", { class: "size", text: fmtBytes(r.size) }),
@@ -240,6 +242,8 @@ async function showPreview(row, action) {
   if (token !== S.previewToken) return; // the selection moved on
   const meta = el("div", { class: "meta" });
   meta.textContent = `${fmtBytes(details.size)} unpacked, ${fmtBytes(details.stored)} stored (${details.codec}), offset ${fmtNum(details.offset)}`;
+  const staged = S.changed.get(changeKey(details.name));
+  if (staged) meta.textContent += ` — staged: ${staged === "remove" ? "removed" : staged === "add" ? "added" : "changed"}, shown as it will be saved`;
   head.replaceChildren(el("div", { class: "title", text: details.name }), meta);
   body.replaceChildren(...renderPreview(preview, row, meta).filter(Boolean));
 }
@@ -348,9 +352,19 @@ function updateEditBar() {
   $("btn-changes").textContent = `Changes (${S.changes.length})…`;
 }
 
+const changeKey = (name) => name.toLowerCase().replace(/\//g, "\\");
+
 function setPending(rows) {
   S.changes = rows;
+  S.changed = new Map(rows.map((r) => [changeKey(r.name), r.kind]));
   updateEditBar();
+  render();
+}
+
+/** Shows the selected entry again, so it reflects the staged changes. */
+function refreshPreview(action) {
+  const r = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  if (r) showPreview(r, action);
 }
 
 async function replaceImage(row, frame) {
@@ -358,7 +372,8 @@ async function replaceImage(row, frame) {
   if (!png) return;
   try {
     setPending(await invoke("stage_spr_image", { index: row.index, frame, png }));
-    setStatus(`Image ${frame} of ${row.name} staged (colours are mapped to the sprite's palette). The preview shows the saved archive; save with Changes….`);
+    setStatus(`Image ${frame} of ${row.name} staged (colours are mapped to the sprite's palette); the preview shows the result. Save with Changes….`);
+    refreshPreview();
   } catch (e) {
     await note("Could not replace the image", errText(e), true);
   }
@@ -371,6 +386,7 @@ async function setInterval_(row, action, current) {
   try {
     setPending(await invoke("stage_act_interval", { index: row.index, action, ms: Number(input.value) }));
     setStatus(`Interval of action ${action} staged; save with Changes….`);
+    refreshPreview(action);
   } catch (e) {
     await note("Could not set the interval", errText(e), true);
   }
@@ -384,6 +400,7 @@ async function doReplace() {
   try {
     setPending(await invoke("stage_replace", { index: sel.index, file }));
     setStatus(`Replacement staged for ${sel.name}; save it with Changes…`);
+    refreshPreview();
   } catch (e) {
     await note("Could not stage the replacement", errText(e), true);
   }
@@ -416,6 +433,7 @@ async function doRemove() {
   try {
     setPending(await invoke("stage_remove", { indices: what === "one" ? [sel.index] : [] }));
     setStatus(`${what === "one" ? "1 entry" : `${fmtNum(S.total)} entries`} marked for removal`);
+    refreshPreview();
   } catch (e) {
     await note("Could not stage the removal", errText(e), true);
   }
@@ -433,6 +451,7 @@ async function doChanges() {
     await invoke("discard_pending");
     setPending([]);
     setStatus("Changes discarded");
+    refreshPreview();
   } else if (act === "save") {
     await saveEdited();
   }
@@ -618,6 +637,7 @@ $("search").addEventListener("input", (e) => {
 $("names").addEventListener("change", async (e) => {
   try {
     await invoke("set_names", { mode: e.target.value });
+    setPending(await invoke("pending"));
     $("search").value = "";
     await runSearch("");
   } catch (err) {

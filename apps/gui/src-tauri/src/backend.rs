@@ -571,6 +571,11 @@ impl Session {
         Ok(())
     }
 
+    /// The content of entry `index` as it will be saved: the staged edit if there is one, else the archive's.
+    fn read_working(&self, index: usize) -> Result<Vec<u8>, String> {
+        self.working_bytes(index).map(|(_, data, _)| data)
+    }
+
     /// The content the next edit of entry `index` starts from: an earlier staged edit, else the archive.
     fn working_bytes(&self, index: usize) -> Result<(GrfPath, Vec<u8>, Vec<String>), String> {
         let name = self.entry_name(index)?;
@@ -779,7 +784,7 @@ impl Session {
                 text: "Empty marker entry".into(),
             });
         }
-        let data = match self.read(index) {
+        let data = match self.read_working(index) {
             Ok(d) => d,
             Err(e) => return Ok(Preview::Message { text: e }),
         };
@@ -1034,7 +1039,7 @@ impl Session {
                 },
             });
         };
-        let spr = Spr::parse(&self.read(si)?).map_err(|e| e.to_string())?;
+        let spr = Spr::parse(&self.read_working(si)?).map_err(|e| e.to_string())?;
         let actions = act.actions.len();
         let action = action.min(actions.saturating_sub(1));
         let Some(a) = act.actions.get(action) else {
@@ -1385,6 +1390,12 @@ mod tests {
         let png = dir.join("red.png");
         fs::write(&png, rgba_to_png(&red).unwrap()).unwrap();
         s.stage_spr_image(spr_i, 0, &png).unwrap();
+        // the preview shows the staged content, not the archive's
+        match s.preview(spr_i, None).unwrap() {
+            Preview::Frames { frames, .. } => assert_eq!(frames[0].width, 3),
+            other => panic!("{other:?}"),
+        }
+
         assert!(s.stage_spr_image(spr_i, 5, &png).is_err(), "no such image");
         s.stage_act_interval(act_i, 1, 100.0).unwrap();
         assert!(s.stage_act_interval(act_i, 9, 100.0).is_err());
@@ -1404,6 +1415,12 @@ mod tests {
 
         let out = dir.join("out.grf");
         save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let readme = find(&mut s, "readme.txt");
+        s.stage_remove(&[readme]).unwrap();
+        assert!(matches!(
+            s.preview(readme, None).unwrap(),
+            Preview::Message { text } if text.contains("removal")
+        ));
         let mut r = Session::open(&out).unwrap();
         let (spr_i, act_i) = (find(&mut r, "a.spr"), find(&mut r, "a.act"));
         let spr = Spr::parse(&r.read(spr_i).unwrap()).unwrap();

@@ -130,6 +130,8 @@ main {
   white-space: nowrap;
   cursor: default;
 }
+.row.changed { box-shadow: inset 3px 0 0 var(--accent); }
+.row.changed.remove .name { text-decoration: line-through; opacity: 0.7; }
 .row:hover { background: var(--hover); }
 .row.selected { background: var(--select); }
 .row .name { overflow: hidden; text-overflow: ellipsis; }
