@@ -8,7 +8,9 @@ use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_core::build::{BuildOptions, build};
 use rgrf_core::encode::Method;
 use rgrf_core::extract::{ExtractOptions, OnCollision, extract};
+use rgrf_core::merge::merge_with;
 use rgrf_core::progress::Control;
+use rgrf_core::repack::RepackOptions;
 use rgrf_core::verify::{Severity, VerifyOptions, verify};
 use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
@@ -183,6 +185,81 @@ pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, 
             .map(|s| format!("{}: {}", s.path.display(), s.reason))
             .collect(),
     })
+}
+
+#[derive(Deserialize, Debug)]
+pub struct MergeRequest {
+    /// Highest priority first: for every path the first archive that has it wins.
+    pub sources: Vec<PathBuf>,
+    pub dst: PathBuf,
+    /// The last archive is the base; the others only replace files it already has.
+    pub replace_only: bool,
+    pub overwrite: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct MergeSourceSummary {
+    pub path: String,
+    pub files: usize,
+    pub used: usize,
+    pub overridden: usize,
+    pub ignored_new: usize,
+}
+
+#[derive(Serialize, Debug)]
+pub struct MergeSummary {
+    pub files: usize,
+    pub file_bytes: u64,
+    pub verified: bool,
+    pub damaged: usize,
+    pub sources: Vec<MergeSourceSummary>,
+}
+
+/// Merges archives into a new one (the inputs are never changed) and verifies the result.
+pub fn merge_archives(req: &MergeRequest, ctl: &Control) -> Result<MergeSummary, String> {
+    if req.sources.len() < 2 {
+        return Err("choose at least two archives".into());
+    }
+    if req.sources.iter().any(|p| same_file(p, &req.dst)) {
+        return Err("the target must not be one of the input archives".into());
+    }
+    let archives = req
+        .sources
+        .iter()
+        .map(|p| Archive::open(p).map_err(|e| format!("{}: {e}", p.display())))
+        .collect::<Result<Vec<_>, _>>()?;
+    let refs: Vec<&Archive> = archives.iter().collect();
+    let opts = RepackOptions {
+        overwrite: req.overwrite,
+        ..RepackOptions::default()
+    };
+    let rep =
+        merge_with(&refs, &req.dst, &opts, req.replace_only, ctl).map_err(|e| e.to_string())?;
+    Ok(MergeSummary {
+        files: rep.repack.files,
+        file_bytes: rep.repack.output_file_len,
+        verified: rep.repack.verified,
+        damaged: rep.repack.damaged.len(),
+        sources: req
+            .sources
+            .iter()
+            .zip(&rep.sources)
+            .map(|(p, s)| MergeSourceSummary {
+                path: p.display().to_string(),
+                files: s.files,
+                used: s.used,
+                overridden: s.overridden,
+                ignored_new: s.ignored_new,
+            })
+            .collect(),
+    })
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
 }
 
 #[derive(Serialize, Debug)]
@@ -943,6 +1020,57 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn merges_archives_by_priority() {
+        let dir = tmp("merge");
+        let mk = |name: &str, files: &[(&str, &str)]| {
+            let root = dir.join(format!("src-{name}"));
+            for (f, c) in files {
+                let p = root.join(f);
+                fs::create_dir_all(p.parent().unwrap()).unwrap();
+                fs::write(p, c).unwrap();
+            }
+            let out = dir.join(format!("{name}.grf"));
+            let none = Control::default();
+            let req = BuildRequest {
+                src: root,
+                dst: out.clone(),
+                method: "zlib".into(),
+                format: "0x200".into(),
+                dedupe: false,
+                overwrite: false,
+            };
+            build_archive(&req, &none).unwrap();
+            out
+        };
+        let base = mk("base", &[("data/a.txt", "old a"), ("data/b.txt", "b")]);
+        let patch = mk("patch", &[("data/a.txt", "new a"), ("data/c.txt", "c")]);
+        let req = |replace_only: bool, dst: &str, sources: Vec<PathBuf>| MergeRequest {
+            sources,
+            dst: dir.join(dst),
+            replace_only,
+            overwrite: false,
+        };
+        let none = Control::default();
+        let r = merge_archives(
+            &req(false, "m.grf", vec![patch.clone(), base.clone()]),
+            &none,
+        )
+        .unwrap();
+        assert_eq!((r.files, r.verified), (3, true));
+        assert_eq!(r.sources[0].used, 2);
+        assert_eq!(r.sources[1].overridden, 1);
+        let r = merge_archives(
+            &req(true, "r.grf", vec![patch.clone(), base.clone()]),
+            &none,
+        )
+        .unwrap();
+        assert_eq!((r.files, r.sources[0].ignored_new), (2, 1));
+        assert!(merge_archives(&req(false, "x.grf", vec![base.clone()]), &none).is_err());
+        assert!(merge_archives(&req(false, "base.grf", vec![patch, base]), &none).is_err());
         let _ = fs::remove_dir_all(dir);
     }
 

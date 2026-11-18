@@ -82,6 +82,13 @@ if (!window.__TAURI__) {
             }
             return { files: 100, blocks: 98, shared: 2, unpacked_bytes: 52428800, file_bytes: 18874368, verified: true, skipped: [] };
           }
+          case "merge_archives": {
+            for (const done of [20, 70, 100]) {
+              await new Promise((r) => setTimeout(r, 300));
+              listeners["job-progress"]?.({ payload: { done, total: 100 } });
+            }
+            return { files: 3, file_bytes: 2048, verified: true, damaged: 0, sources: a.req.sources.map((path, i) => ({ path, files: 2, used: i ? 1 : 2, overridden: i ? 1 : 0, ignored_new: 0 })) };
+          }
           case "cancel_job":
             return null;
           case "verify":
@@ -90,7 +97,7 @@ if (!window.__TAURI__) {
         throw new Error(`mock: unknown command ${cmd}`);
       },
     },
-    dialog: { open: async (o) => (o?.directory ? "/tmp/extract-here" : "/mock/test.grf"), save: async (o) => `/tmp/${o?.defaultPath || "out.grf"}` },
+    dialog: { open: async (o) => (o?.multiple && !o?.directory && /merge/i.test(o.title || "") ? ["/mock/translation.grf", "/mock/core.grf"] : o?.directory ? "/tmp/extract-here" : "/mock/test.grf"), save: async (o) => `/tmp/${o?.defaultPath || "out.grf"}` },
     event: { listen: (name, fn) => void (listeners[name] = fn) },
   };
 }

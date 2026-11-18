@@ -9,6 +9,7 @@ Desktop-Oberfläche auf dem Rust-Kern (`rgrf-core`, `rgrf-formats`). Eigenes Car
 - Namensanzeige: Standard **Koreanisch** (CP949, z. B. `유저인터페이스`), umschaltbar auf Latin-1 (so zeigt es GRF Editor) oder UTF-8. Gilt auch für die Suche; Extrahieren schreibt immer Latin-1-Namen (rundlauffähig mit `rgrf build`).
 - Startpfad: `rustygrf-gui <datei.grf>` öffnet das Archiv direkt (Grundlage für „Öffnen mit“).
 - **Build…** packt einen Ordner zu einer GRF (zlib/0x200 als Standard, Zopfli und LZMA nur ausdrücklich gewählt), mit Fortschrittsbalken, Abbrechen und anschließender Prüfung gegen die Dateien auf der Platte. Abbruch hinterlässt keine Datei. Ein Auftrag zur Zeit.
+- **Merge…** führt mehrere GRFs zu einer neuen zusammen (Reihenfolge = Priorität, per ↑/↓ änderbar; „Replace only“: letzte GRF ist die Basis, die anderen fügen keine neuen Pfade hinzu), mit Fortschritt, Abbruch, Prüfung und Statistik je Eingabe. Die Eingaben bleiben unverändert, die Ausgabe darf keine der Eingaben sein.
 - Einziges npm-Paket: `@tauri-apps/cli` (Entwicklungsabhängigkeit).
 
 ## Starten und Bauen

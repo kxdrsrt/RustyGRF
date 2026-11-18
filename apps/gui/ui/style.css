@@ -193,6 +193,12 @@ dialog h2 { margin: 0 0 10px; font-size: 15px; }
 .form { display: grid; gap: 8px; margin: 10px 0; }
 .form label { display: flex; align-items: center; gap: 6px; }
 dialog progress { width: min(420px, 80vw); height: 10px; accent-color: var(--accent); }
+.prio { margin: 10px 0; padding-left: 22px; display: grid; gap: 4px; }
+.prio li::marker { color: var(--muted); }
+.prio li { padding-left: 4px; }
+.prio li > * { vertical-align: middle; }
+.prio .name { display: inline-block; min-width: 260px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
+.prio button { padding: 0 8px; margin-right: 4px; }
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; grid-template-rows: 45% 1fr; }

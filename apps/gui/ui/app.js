@@ -363,6 +363,55 @@ async function doBuild() {
   }
 }
 
+async function doMerge() {
+  const picked = await T.dialog.open({ multiple: true, directory: false, title: "Archives to merge (at least two)", filters: [{ name: "GRF archives", extensions: ["grf", "gpf"] }] });
+  const paths = Array.isArray(picked) ? [...picked] : picked ? [picked] : [];
+  if (paths.length < 2) {
+    if (paths.length) await note("Merge", "Choose at least two archives.", true);
+    return;
+  }
+  const replaceOnly = el("input", { type: "checkbox" });
+  const list = el("ol", { class: "prio" });
+  const draw = () =>
+    list.replaceChildren(
+      ...paths.map((p, i) =>
+        el(
+          "li",
+          {},
+          el("span", { class: "name", text: p.split(/[\\/]/).pop(), title: p }),
+          el("button", { type: "button", text: "↑", title: "Higher priority", disabled: i === 0, onclick: () => { [paths[i - 1], paths[i]] = [paths[i], paths[i - 1]]; draw(); } }),
+          el("button", { type: "button", text: "↓", title: "Lower priority", disabled: i === paths.length - 1, onclick: () => { [paths[i + 1], paths[i]] = [paths[i], paths[i + 1]]; draw(); } }),
+        ),
+      ),
+    );
+  draw();
+  const body = [
+    el("p", { text: "Order = priority: for a path in several archives, the top one wins. The inputs are not changed." }),
+    list,
+    el("div", { class: "form" }, el("label", {}, replaceOnly, " Replace only: the last archive is the base, the others add no new paths")),
+  ];
+  const go = await ask("Merge archives", body, [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const dst = await T.dialog.save({ title: "Save merged archive as", defaultPath: "merged.grf", filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  if (!dst) return;
+  const job = showJob("Merging archives");
+  setStatus(`Merging into ${dst} …`);
+  try {
+    const r = await invoke("merge_archives", { req: { sources: paths, dst, replace_only: replaceOnly.checked, overwrite: true } });
+    job.close();
+    setStatus(`Merged into ${dst}: ${fmtNum(r.files)} files`);
+    const lines = r.sources.map((s) => `${fmtNum(s.files)} files, ${fmtNum(s.used)} used, ${fmtNum(s.overridden)} replaced${s.ignored_new ? `, ${fmtNum(s.ignored_new)} new paths ignored` : ""}  ${s.path.split(/[\\/]/).pop()}`);
+    const out = [el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}.${r.damaged ? ` ${r.damaged} damaged block(s) copied unchanged.` : ""}` }), el("pre", { text: lines.join("\n") })];
+    const open = await ask("Archives merged", out, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    if (open) await openPath(dst);
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? "Merge cancelled" : "Merge failed");
+    await note(cancelled ? "Merge cancelled" : "Could not merge", cancelled ? "Nothing was written." : errText(e), !cancelled);
+  }
+}
+
 /** A progress dialog for a long job; the page feeds it with `job-progress` events. */
 function showJob(title) {
   const bar = el("progress", { max: 100, value: 0 });
@@ -423,6 +472,7 @@ async function doVerify() {
 let searchTimer = 0;
 $("btn-open").addEventListener("click", chooseArchive);
 $("btn-open-2").addEventListener("click", chooseArchive);
+$("btn-merge").addEventListener("click", doMerge);
 $("btn-build").addEventListener("click", doBuild);
 $("btn-extract").addEventListener("click", doExtract);
 $("btn-verify").addEventListener("click", doVerify);

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use backend::{
-    ArchiveInfo, BuildRequest, BuildSummary, Details, ExtractSummary, Preview, Row, Session,
-    VerifySummary,
+    ArchiveInfo, BuildRequest, BuildSummary, Details, ExtractSummary, MergeRequest, MergeSummary,
+    Preview, Row, Session, VerifySummary,
 };
 use rgrf_core::progress::{CancelToken, Control, Progress};
 use serde::Serialize;
@@ -118,20 +118,19 @@ struct JobProgress {
     total: u64,
 }
 
-/// Packs a folder into a GRF. Progress goes to the page as `job-progress` events.
-#[tauri::command]
-async fn build_archive(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    req: BuildRequest,
-) -> Res<BuildSummary> {
+/// Runs a long job on a worker thread, with cancel token and `job-progress` events for the page.
+async fn run_job<T, F>(app: AppHandle, state: &State<'_, AppState>, job: F) -> Res<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&Control) -> Res<T> + Send + 'static,
+{
     let token = CancelToken::new();
     {
-        let mut job = state.job.lock().map_err(|_| "internal error")?;
-        if job.is_some() {
+        let mut slot = state.job.lock().map_err(|_| "internal error")?;
+        if slot.is_some() {
             return Err("another job is already running".into());
         }
-        *job = Some(token.clone());
+        *slot = Some(token.clone());
     }
     let result = tauri::async_runtime::spawn_blocking(move || {
         // report about every percent only, so the page is not flooded with events
@@ -152,14 +151,34 @@ async fn build_archive(
             cancel: Some(&token),
             progress: Some(&report),
         };
-        backend::build_archive(&req, &ctl)
+        job(&ctl)
     })
     .await
     .map_err(|e| e.to_string());
-    if let Ok(mut job) = state.job.lock() {
-        *job = None;
+    if let Ok(mut slot) = state.job.lock() {
+        *slot = None;
     }
     result?
+}
+
+/// Packs a folder into a GRF.
+#[tauri::command]
+async fn build_archive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: BuildRequest,
+) -> Res<BuildSummary> {
+    run_job(app, &state, move |ctl| backend::build_archive(&req, ctl)).await
+}
+
+/// Merges several archives into a new one.
+#[tauri::command]
+async fn merge_archives(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: MergeRequest,
+) -> Res<MergeSummary> {
+    run_job(app, &state, move |ctl| backend::merge_archives(&req, ctl)).await
 }
 
 #[tauri::command]
@@ -194,6 +213,7 @@ pub fn run() {
             extract,
             verify,
             build_archive,
+            merge_archives,
             cancel_job,
             startup_path
         ])
