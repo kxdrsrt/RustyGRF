@@ -25,6 +25,7 @@ use rgrf_core::{Archive, DecodeStatus, Entry, GrfPath, NameMode};
 use serde_json::{Value, json};
 
 mod act_cmd;
+mod edit_cmd;
 mod spr_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -247,6 +248,60 @@ enum ActCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Move all layers and anchors (writes a new file)
+    Translate {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Only this action (default: all)
+        #[arg(long)]
+        action: Option<usize>,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        dx: f32,
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        dy: f32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Set the frame time of an action (units of 25 ms: 6 = 150 ms)
+    Interval {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long)]
+        action: usize,
+        #[arg(long)]
+        value: f32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Copy an action to a new position
+    CopyAction {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long)]
+        from: usize,
+        /// Position of the copy (0 up to the number of actions)
+        #[arg(long)]
+        to: usize,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Remove an action
+    RemoveAction {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long)]
+        action: usize,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -274,6 +329,70 @@ enum SprCmd {
         /// SPR version: 2.1 (default, RLE as in the client files), 2.0 (raw), 1.1 or 1.0 (palette images only)
         #[arg(long, default_value = "2.1")]
         version: rgrf_formats::spr::Version,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Replace one image with a PNG (writes a new file)
+    Replace {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Image kind: indexed (palette) or rgba (true colour)
+        #[arg(long, value_enum, default_value = "indexed")]
+        kind: edit_cmd::KindArg,
+        /// Index among the images of that kind (see `spr info`)
+        #[arg(long)]
+        frame: usize,
+        #[arg(long)]
+        png: PathBuf,
+        /// Map PNG colours to the sprite's palette (nearest colour, alpha below 128 is transparent)
+        #[arg(long)]
+        nearest: bool,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Append an image from a PNG (writes a new file, prints the index)
+    Add {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long, value_enum, default_value = "indexed")]
+        kind: edit_cmd::KindArg,
+        #[arg(long)]
+        png: PathBuf,
+        #[arg(long)]
+        nearest: bool,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Remove one image; with --act/--act-output the layers of that ACT follow
+    Remove {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long, value_enum, default_value = "indexed")]
+        kind: edit_cmd::KindArg,
+        #[arg(long)]
+        frame: usize,
+        /// The .act that belongs to the sprite (layers using the image become empty, later ones move down)
+        #[arg(long, requires = "act_output")]
+        act: Option<PathBuf>,
+        #[arg(long, requires = "act")]
+        act_output: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Use the colours of a .pal file (the images keep their indices)
+    SetPalette {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long)]
+        pal: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
         #[arg(long)]
         overwrite: bool,
     },
@@ -542,6 +661,82 @@ fn run(cli: &Cli) -> Result<i32> {
             ActCmd::Info { input, entry } => {
                 act_cmd::info(input, entry.as_deref(), cli.names, cli.json)
             }
+            ActCmd::Translate {
+                input,
+                entry,
+                action,
+                dx,
+                dy,
+                output,
+                overwrite,
+            } => edit_cmd::act_translate(
+                input,
+                entry.as_deref(),
+                *action,
+                *dx,
+                *dy,
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::Interval {
+                input,
+                entry,
+                action,
+                value,
+                output,
+                overwrite,
+            } => edit_cmd::act_interval(
+                input,
+                entry.as_deref(),
+                *action,
+                *value,
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::CopyAction {
+                input,
+                entry,
+                from,
+                to,
+                output,
+                overwrite,
+            } => edit_cmd::act_copy_action(
+                input,
+                entry.as_deref(),
+                *from,
+                *to,
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::RemoveAction {
+                input,
+                entry,
+                action,
+                output,
+                overwrite,
+            } => edit_cmd::act_remove_action(
+                input,
+                entry.as_deref(),
+                *action,
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
             ActCmd::Render {
                 input,
                 entry,
@@ -574,6 +769,82 @@ fn run(cli: &Cli) -> Result<i32> {
             } => spr_cmd::export(
                 input,
                 entry.as_deref(),
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            SprCmd::Replace {
+                input,
+                entry,
+                kind,
+                frame,
+                png,
+                nearest,
+                output,
+                overwrite,
+            } => edit_cmd::spr_replace(
+                input,
+                entry.as_deref(),
+                *kind,
+                *frame,
+                png,
+                *nearest,
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            SprCmd::Add {
+                input,
+                entry,
+                kind,
+                png,
+                nearest,
+                output,
+                overwrite,
+            } => edit_cmd::spr_add(
+                input,
+                entry.as_deref(),
+                *kind,
+                png,
+                *nearest,
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            SprCmd::Remove {
+                input,
+                entry,
+                kind,
+                frame,
+                act,
+                act_output,
+                output,
+                overwrite,
+            } => edit_cmd::spr_remove(
+                input,
+                entry.as_deref(),
+                *kind,
+                *frame,
+                act.as_deref(),
+                act_output.as_deref(),
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            SprCmd::SetPalette {
+                input,
+                entry,
+                pal,
+                output,
+                overwrite,
+            } => edit_cmd::spr_set_palette(
+                input,
+                entry.as_deref(),
+                pal,
                 output,
                 *overwrite,
                 cli.names,

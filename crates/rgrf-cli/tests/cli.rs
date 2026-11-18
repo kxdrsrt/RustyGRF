@@ -690,3 +690,272 @@ fn act_from_a_real_grf_entry() {
     assert!(dir.join("p.png").metadata().unwrap().len() > 100);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn spr_and_act_edit_commands() {
+    use rgrf_formats::act::{Act, Action, Frame, Layer, V2_5};
+    use rgrf_formats::png_io::rgba_to_png;
+    use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};
+
+    let mut pal = Box::new([0u8; PALETTE_LEN]);
+    pal[4..8].copy_from_slice(&[255, 0, 0, 0]); // 1 red
+    pal[8..12].copy_from_slice(&[0, 255, 0, 0]); // 2 green
+    let one = |v: u8| IndexedImage {
+        width: 1,
+        height: 1,
+        pixels: vec![v],
+    };
+    let spr = Spr {
+        version: Version::V2_1,
+        indexed: vec![one(1), one(2), one(1)],
+        rgba: vec![],
+        palette: Some(pal),
+        warnings: vec![],
+    };
+    let layer = |i: i32| Layer {
+        sprite_index: i,
+        ..Layer::default()
+    };
+    let act = Act {
+        version: V2_5,
+        reserved: [0; 10],
+        actions: vec![
+            Action {
+                frames: vec![Frame {
+                    layers: vec![layer(0), layer(1), layer(2)],
+                    ..Frame::default()
+                }],
+                interval: 4.0,
+            },
+            Action::default(),
+        ],
+        sounds: vec![],
+        trailing: vec![],
+        warnings: vec![],
+    };
+    let dir = tmpdir("edit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    std::fs::write(p("a.spr"), spr.to_bytes(Version::V2_1).unwrap()).unwrap();
+    std::fs::write(p("a.act"), act.to_bytes(V2_5).unwrap()).unwrap();
+    // a nearly green true-colour PNG
+    std::fs::write(
+        p("g.png"),
+        rgba_to_png(&RgbaImage {
+            width: 1,
+            height: 1,
+            pixels: vec![10, 250, 10, 255],
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let read_spr = |n: &str| Spr::parse(&std::fs::read(p(n)).unwrap()).unwrap();
+    let read_act = |n: &str| Act::parse(&std::fs::read(p(n)).unwrap()).unwrap();
+
+    // true-colour PNG into a palette image needs --nearest
+    let o = rgrf(&[
+        "spr",
+        "replace",
+        &p("a.spr"),
+        "--frame",
+        "0",
+        "--png",
+        &p("g.png"),
+        "-o",
+        &p("r.spr"),
+    ]);
+    assert_eq!(o.status.code(), Some(1));
+    let o = rgrf(&[
+        "spr",
+        "replace",
+        &p("a.spr"),
+        "--frame",
+        "0",
+        "--png",
+        &p("g.png"),
+        "--nearest",
+        "-o",
+        &p("r.spr"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(read_spr("r.spr").indexed[0].pixels, vec![2]);
+    // never overwrites, never touches the input
+    assert_eq!(
+        rgrf(&[
+            "spr",
+            "replace",
+            &p("a.spr"),
+            "--frame",
+            "0",
+            "--png",
+            &p("g.png"),
+            "--nearest",
+            "-o",
+            &p("r.spr")
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+    assert_eq!(read_spr("a.spr").indexed[0].pixels, vec![1]);
+
+    let o = rgrf(&[
+        "spr",
+        "add",
+        &p("a.spr"),
+        "--png",
+        &p("g.png"),
+        "--nearest",
+        "-o",
+        &p("add.spr"),
+    ]);
+    assert!(o.status.success());
+    assert!(String::from_utf8_lossy(&o.stdout).contains("index 3"));
+    assert_eq!(read_spr("add.spr").indexed.len(), 4);
+
+    // removing image 1 empties the layer using it and moves the next one down
+    let o = rgrf(&[
+        "spr",
+        "remove",
+        &p("a.spr"),
+        "--frame",
+        "1",
+        "--act",
+        &p("a.act"),
+        "--act-output",
+        &p("rm.act"),
+        "-o",
+        &p("rm.spr"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(read_spr("rm.spr").indexed.len(), 2);
+    let idx: Vec<i32> = read_act("rm.act").actions[0].frames[0]
+        .layers
+        .iter()
+        .map(|l| l.sprite_index)
+        .collect();
+    assert_eq!(idx, vec![0, -1, 1]);
+    assert_eq!(
+        rgrf(&[
+            "spr",
+            "remove",
+            &p("a.spr"),
+            "--frame",
+            "0",
+            "--act",
+            &p("a.act"),
+            "-o",
+            &p("x.spr")
+        ])
+        .status
+        .code(),
+        Some(2),
+        "--act needs --act-output (clap usage error)"
+    );
+
+    let mut pal2 = vec![0u8; PALETTE_LEN];
+    pal2[4..8].copy_from_slice(&[9, 9, 9, 0]);
+    std::fs::write(p("x.pal"), &pal2).unwrap();
+    let o = rgrf(&[
+        "spr",
+        "set-palette",
+        &p("a.spr"),
+        "--pal",
+        &p("x.pal"),
+        "-o",
+        &p("pal.spr"),
+    ]);
+    assert!(o.status.success());
+    assert_eq!(read_spr("pal.spr").palette.unwrap()[4], 9);
+    std::fs::write(p("bad.pal"), b"short").unwrap();
+    assert_eq!(
+        rgrf(&[
+            "spr",
+            "set-palette",
+            &p("a.spr"),
+            "--pal",
+            &p("bad.pal"),
+            "-o",
+            &p("p2.spr")
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+
+    let o = rgrf(&[
+        "act",
+        "translate",
+        &p("a.act"),
+        "--dx",
+        "-3",
+        "--dy",
+        "5",
+        "-o",
+        &p("t.act"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let l = &read_act("t.act").actions[0].frames[0].layers[0];
+    assert_eq!((l.offset_x, l.offset_y), (-3.0, 5.0));
+    assert!(
+        rgrf(&[
+            "act",
+            "interval",
+            &p("a.act"),
+            "--action",
+            "1",
+            "--value",
+            "9",
+            "-o",
+            &p("i.act")
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(read_act("i.act").actions[1].interval, 9.0);
+    assert!(
+        rgrf(&[
+            "act",
+            "copy-action",
+            &p("a.act"),
+            "--from",
+            "0",
+            "--to",
+            "2",
+            "-o",
+            &p("c.act")
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(read_act("c.act").actions.len(), 3);
+    assert!(
+        rgrf(&[
+            "act",
+            "remove-action",
+            &p("a.act"),
+            "--action",
+            "0",
+            "-o",
+            &p("d.act")
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(read_act("d.act").actions.len(), 1);
+    assert_eq!(
+        rgrf(&[
+            "act",
+            "remove-action",
+            &p("a.act"),
+            "--action",
+            "7",
+            "-o",
+            &p("e.act")
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

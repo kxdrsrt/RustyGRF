@@ -45,3 +45,9 @@ Abgeleitet aus GRF Editor (Tokeiburu, mit Erlaubnis, siehe [05-licensing.md](05-
 - **Noch nicht:** Anker-Bindung an eine andere ACT (Kopfbedeckung am Körper), Überlagerung mehrerer ACT/SPR, GIF-Export, Vergleich pixelgenau mit ACT Editor (nur in der Windows-VM; ob der Ursprung auf einer Pixelgrenze oder -mitte liegt, ist dort zu prüfen).
 
 **CLI:** `rgrf act info|render`, siehe [04-cli-and-mcp.md](04-cli-and-mcp.md).
+
+## Bearbeiten (M7b) – Bibliothek `edit.rs`, CLI `spr replace|add|remove|set-palette`, `act translate|interval|copy-action|remove-action`
+- Bild ersetzen/anhängen, Palette tauschen, Bild entfernen **mit Nachführen der ACT** (Layer auf das entfernte Bild werden leer, spätere Indizes rücken nach, Layer der anderen Bildart bleiben), Versatz verschieben (Layer und Anker), Intervall setzen, Aktion kopieren/entfernen.
+- PNG nach Palette: `quantize` nimmt je Pixel die nächste Farbe (RGB-Abstand) der Einträge 1 bis 255, Alpha unter 128 wird Index 0. Das ist eine einfache Abbildung ohne Dithering.
+- Getestet: Einheitentests, ein CLI-Test, der alle Befehle durchspielt und die Ergebnisse zurücklesen lässt, und eine Sichtprüfung am Poporing (fremde Haar-Palette: die Augen wechseln von Rot zu Schwarz).
+- **Nicht geprüft:** ob der Client oder GRF Editor die geänderten Dateien wie erwartet lädt (nur eigene Rückleseprüfung), und ob Schreiben in andere Versionen als die der Quelldatei sinnvoll ist (wir schreiben immer in der Version der Quelle).

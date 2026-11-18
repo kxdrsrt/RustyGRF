@@ -23,6 +23,15 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 | `rgrf spr build <ordner> -o <spr>` | **M7a:** SPR aus den PNGs eines Ordners (nach Namen sortiert); `--version 2.1` (Standard), `2.0`, `1.1`, `1.0`; alle indizierten PNGs müssen dieselbe Palette haben |
 | `rgrf act info <act>` oder `<grf> <pfad>` | **umgesetzt (M7b):** Version, Aktionen, Frames, Layer, Sounds, Intervalle; `--json` |
 | `rgrf act render <act>` oder `<grf> <pfad>` `[--spr datei] [--action N] [--frame M] -o <ziel>` | **M7b:** Frames als PNG. Mit `--frame` ist `-o` eine Datei, sonst ein Ordner mit allen Frames der Aktion auf gemeinsamer Leinwand (`000.png`, ...); das SPR ist die Datei gleichen Namens (im GRF: gleicher Pfad mit `.spr`); überschreibt nie ohne `--overwrite` |
+| `rgrf spr replace <spr> --frame N --png <datei> -o <spr>` | **M7b:** ein Bild ersetzen (`--kind indexed\|rgba`). Ein PNG mit anderer Palette oder in True-Color braucht `--nearest` (nächste Farbe der Sprite-Palette, Alpha unter 128 = transparent) |
+| `rgrf spr add <spr> --png <datei> -o <spr>` | **M7b:** Bild anhängen, gibt den neuen Index aus |
+| `rgrf spr remove <spr> --frame N [--act <act> --act-output <act>] -o <spr>` | **M7b:** Bild entfernen; mit `--act` werden die Layer nachgeführt (Layer mit dem Bild werden leer, spätere Indizes rücken nach) |
+| `rgrf spr set-palette <spr> --pal <pal> -o <spr>` | **M7b:** Palette tauschen (Bilder behalten ihre Indizes) |
+| `rgrf act translate <act> --dx X --dy Y [--action N] -o <act>` | **M7b:** alle Layer und Anker verschieben |
+| `rgrf act interval <act> --action N --value V -o <act>` | **M7b:** Frame-Zeit (Einheit 25 ms) |
+| `rgrf act copy-action <act> --from N --to M -o <act>` / `remove-action --action N` | **M7b:** Aktion kopieren/entfernen |
+
+Die Bearbeiten-Befehle lesen eine lose Datei (oder `<grf> <pfad>`) und schreiben **immer eine neue Datei**; sie ändern nie die Eingabe und überschreiben nichts ohne `--overwrite`. Zurück ins GRF kommt das Ergebnis mit `rgrf build`, `merge` oder `patch`.
 | `rgrf build <ordner> -o <grf>` | **umgesetzt (M2):** GRF aus Ordner (Ordner = Archivwurzel, enthält z. B. `data/`); gleiche Optionen wie `repack` (`--method`, `--level`, `--format` Standard 0x200, `--align/--no-align`, `--dedupe` = gleicher Inhalt teilt einen Block, `--no-verify`, `--overwrite`, `--dry-run`); Dateinamen NFC, `.DS_Store`/`._*`/`Thumbs.db`/`desktop.ini`/Symlinks werden übersprungen und gemeldet; Fehler bei nicht darstellbaren Namen, Groß-/Kleinschreibungs-Kollisionen, Dateien ≥ 4 GiB, Ausgabe im Quellordner |
 | `rgrf repack <grf> -o <grf>` | **umgesetzt (M2):** neu komprimieren/umformatieren, Inhalt unverändert; `--method zlib\|zopfli\|lzma`, `--level`, `--format 0x200\|0x300`, `--align/--no-align`, `--dedupe none\|source\|content`, `--recompress-all`, `--no-verify`, `--overwrite`, `--dry-run` |
 | `rgrf diff <a> <b> [--all]` | **umgesetzt (M3):** Pfade nur in A / nur in B / mit anderem Inhalt (SHA-256 des dekodierten Inhalts, Pfadvergleich wie der Client: Groß-/Kleinschreibung und `/`=`\` egal); Exit 0 identisch, 2 Unterschiede |
