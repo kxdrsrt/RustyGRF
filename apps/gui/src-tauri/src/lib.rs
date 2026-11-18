@@ -397,7 +397,12 @@ fn startup_path(state: State<'_, AppState>) -> Option<String> {
     {
         return Some(p);
     }
-    let mut args = std::env::args().skip(1);
+    archive_in_args(std::env::args().skip(1))
+}
+
+/// The first argument that is an existing file (`--select` takes the next argument as its value).
+fn archive_in_args(args: impl IntoIterator<Item = String>) -> Option<String> {
+    let mut args = args.into_iter();
     while let Some(a) = args.next() {
         if a == "--select" {
             args.next();
@@ -423,6 +428,16 @@ fn startup_select() -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // must come first: a second start hands its arguments to the running app and exits
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if let Some(path) = archive_in_args(args.into_iter().skip(1)) {
+                let _ = app.emit("open-file", path);
+            }
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
@@ -473,4 +488,24 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::archive_in_args;
+
+    #[test]
+    fn finds_the_archive_argument() {
+        let file = std::env::temp_dir().join(format!("rgrf-arg-{}.grf", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let f = file.display().to_string();
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(archive_in_args(args(&[&f])), Some(f.clone()));
+        assert_eq!(archive_in_args(args(&["--verbose", &f])), Some(f.clone()));
+        // the value of --select is a search text, never the file
+        assert_eq!(archive_in_args(args(&["--select", &f])), None);
+        assert_eq!(archive_in_args(args(&["--select", "x", &f])), Some(f));
+        assert_eq!(archive_in_args(args(&["/no/such/file.grf"])), None);
+        let _ = std::fs::remove_file(file);
+    }
 }
