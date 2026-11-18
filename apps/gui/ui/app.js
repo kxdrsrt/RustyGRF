@@ -489,6 +489,10 @@ async function actEdit(edit) {
     setPending(await invoke("stage_act_edit", { index: E.row.index, action: E.action, frame: E.frame, edit }));
     if (edit.op === "copy_frame") E.frame += 1;
     if (edit.op === "remove_frame") E.frame = Math.max(0, E.frame - 1);
+    if (edit.op === "move_frame") E.frame = edit.to;
+    if (edit.op === "copy_action") Object.assign(E, { action: E.action + 1, frame: 0 });
+    if (edit.op === "remove_action") Object.assign(E, { action: Math.max(0, E.action - 1), frame: 0 });
+    if (edit.op === "move_action") E.action = edit.to;
   } catch (e) {
     await loadActFrame();
     $("act-body").prepend(el("p", { class: "error", text: errText(e) }));
@@ -497,6 +501,11 @@ async function actEdit(edit) {
   }
   E.busy = false;
   await loadActFrame();
+}
+
+async function removeAction(i) {
+  const go = await ask(`Remove action ${i}?`, el("p", { text: "Later actions move down by one. The client picks actions by number (direction, state), so other files that use them may change meaning." }), [{ label: "Remove", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (go) await actEdit({ op: "remove_action" });
 }
 
 const hex2 = (n) => n.toString(16).padStart(2, "0");
@@ -518,10 +527,17 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", text: "◀", disabled: v.frame === 0, onclick: () => { E.frame -= 1; loadActFrame(); } }),
     el("span", { text: `Frame ${v.frame + 1} / ${v.frames}` }),
     el("button", { type: "button", class: "small", text: "▶", disabled: v.frame >= v.frames - 1, onclick: () => { E.frame += 1; loadActFrame(); } }),
-    el("span", { class: "muted", text: `${v.interval_ms} ms per frame, ACT ${v.version}` }),
+    el("label", { class: "muted", text: "ms/frame " }, num(v.interval_ms, (n) => actEdit({ op: "set_interval", ms: n }), { narrow: true })),
+    el("span", { class: "muted", text: `ACT ${v.version}` }),
     el("button", { type: "button", class: "small", id: "act-undo", text: "Undo", onclick: () => doHistory(false) }),
     el("button", { type: "button", class: "small", id: "act-redo", text: "Redo", onclick: () => doHistory(true) }),
     el("button", { type: "button", class: "small", text: "Copy frame", title: "Insert a copy after this frame", onclick: () => actEdit({ op: "copy_frame" }) }),
+    el("button", { type: "button", class: "small", text: "Frame ←", title: "Move the frame one place earlier", disabled: v.frame === 0, onclick: () => actEdit({ op: "move_frame", to: v.frame - 1 }) }),
+    el("button", { type: "button", class: "small", text: "Frame →", title: "Move the frame one place later", disabled: v.frame >= v.frames - 1, onclick: () => actEdit({ op: "move_frame", to: v.frame + 1 }) }),
+    el("button", { type: "button", class: "small", text: "Copy action", title: "Insert a copy of this action after it", onclick: () => actEdit({ op: "copy_action" }) }),
+    el("button", { type: "button", class: "small", text: "Action ↑", title: "Move the action one place earlier", disabled: v.action === 0, onclick: () => actEdit({ op: "move_action", to: v.action - 1 }) }),
+    el("button", { type: "button", class: "small", text: "Action ↓", title: "Move the action one place later", disabled: v.action >= v.actions - 1, onclick: () => actEdit({ op: "move_action", to: v.action + 1 }) }),
+    el("button", { type: "button", class: "small", text: "Remove action", disabled: v.actions <= 1, onclick: () => removeAction(v.action) }),
     el("button", { type: "button", class: "small", text: "Remove frame", disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
   );
   const stage = el("div", { class: "stage checker" });

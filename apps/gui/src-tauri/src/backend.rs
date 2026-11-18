@@ -871,6 +871,11 @@ impl Session {
             }
             ActEdit::CopyFrame => "frame copied",
             ActEdit::RemoveFrame => "frame removed",
+            ActEdit::MoveFrame { .. } => "frame moved",
+            ActEdit::CopyAction => "action copied",
+            ActEdit::RemoveAction => "action removed",
+            ActEdit::MoveAction { .. } => "action moved",
+            ActEdit::SetInterval { .. } => "interval set",
         };
         let note = format!("action {action} frame {frame}: {kind}");
         if !what.contains(&note) {

@@ -94,6 +94,22 @@ pub enum ActEdit {
     /// Inserts a copy of the frame after it.
     CopyFrame,
     RemoveFrame,
+    /// Moves the frame to position `to` within its action.
+    MoveFrame {
+        to: usize,
+    },
+    /// Inserts a copy of the action after it.
+    CopyAction,
+    /// Removes the action; later actions move down by one (the client addresses actions by number).
+    RemoveAction,
+    /// Moves the action to position `to`.
+    MoveAction {
+        to: usize,
+    },
+    /// Time per frame in milliseconds (the file keeps multiples of 25 ms).
+    SetInterval {
+        ms: f32,
+    },
 }
 
 fn finite(v: f32, what: &str) -> Result<f32, String> {
@@ -106,6 +122,43 @@ fn finite(v: f32, what: &str) -> Result<f32, String> {
 
 pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result<Vec<u8>, String> {
     let mut act = Act::parse(data).map_err(|e| e.to_string())?;
+    let version = act.version;
+    let n_actions = act.actions.len();
+    match edit {
+        ActEdit::CopyAction => act
+            .copy_action(action, action + 1)
+            .map_err(|e| e.to_string())?,
+        ActEdit::RemoveAction => {
+            if n_actions <= 1 {
+                return Err("an animation keeps at least one action".into());
+            }
+            act.remove_action(action).map_err(|e| e.to_string())?;
+        }
+        ActEdit::MoveAction { to } => {
+            if action >= n_actions || *to >= n_actions {
+                return Err("no such action".into());
+            }
+            let a = act.actions.remove(action);
+            act.actions.insert(*to, a);
+        }
+        ActEdit::SetInterval { ms } => {
+            if !(ms.is_finite() && *ms >= 1.0 && *ms <= 60_000.0) {
+                return Err("the interval must be between 1 and 60000 ms".into());
+            }
+            act.set_interval(action, ms / 25.0)
+                .map_err(|e| e.to_string())?;
+        }
+        _ => return apply_in_action(act, action, frame, edit),
+    }
+    act.to_bytes(version).map_err(|e| e.to_string())
+}
+
+fn apply_in_action(
+    mut act: Act,
+    action: usize,
+    frame: usize,
+    edit: &ActEdit,
+) -> Result<Vec<u8>, String> {
     let version = act.version;
     let a = act
         .actions
@@ -120,6 +173,13 @@ pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result
                 .ok_or_else(|| format!("no frame {frame}"))?
                 .clone();
             a.frames.insert(frame + 1, f);
+        }
+        ActEdit::MoveFrame { to } => {
+            if frame >= n_frames || *to >= n_frames {
+                return Err("no such frame".into());
+            }
+            let f = a.frames.remove(frame);
+            a.frames.insert(*to, f);
         }
         ActEdit::RemoveFrame => {
             if n_frames <= 1 {
@@ -246,7 +306,7 @@ pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result
                     }
                     f.anchors.remove(*anchor);
                 }
-                ActEdit::CopyFrame | ActEdit::RemoveFrame => unreachable!(),
+                _ => unreachable!(),
             }
         }
     }
@@ -492,6 +552,106 @@ mod tests {
             assert!(apply(&act, 0, 0, &edit(bad.clone())).is_err(), "{bad}");
         }
         assert!(apply(&act, 3, 0, &edit(serde_json::json!({"op": "add_layer"}))).is_err());
+    }
+
+    #[test]
+    fn edits_actions_intervals_and_frame_order() {
+        let (act, _) = sample();
+        let two = apply(&act, 0, 0, &edit(serde_json::json!({"op": "copy_action"}))).unwrap();
+        assert_eq!(parsed(&two).actions.len(), 2);
+        // the copy gets its own interval; the original keeps 100 ms
+        let t = apply(
+            &two,
+            1,
+            0,
+            &edit(serde_json::json!({"op": "set_interval", "ms": 200})),
+        )
+        .unwrap();
+        let acts = parsed(&t).actions;
+        assert_eq!((acts[0].interval, acts[1].interval), (4.0, 8.0));
+        let moved = apply(
+            &t,
+            1,
+            0,
+            &edit(serde_json::json!({"op": "move_action", "to": 0})),
+        )
+        .unwrap();
+        let acts = parsed(&moved).actions;
+        assert_eq!((acts[0].interval, acts[1].interval), (8.0, 4.0));
+        let one = apply(
+            &moved,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "remove_action"})),
+        )
+        .unwrap();
+        assert_eq!(parsed(&one).actions.len(), 1);
+        assert!(
+            apply(
+                &one,
+                0,
+                0,
+                &edit(serde_json::json!({"op": "remove_action"}))
+            )
+            .is_err()
+        );
+        assert!(
+            apply(
+                &one,
+                0,
+                0,
+                &edit(serde_json::json!({"op": "set_interval", "ms": 0}))
+            )
+            .is_err()
+        );
+        assert!(
+            apply(
+                &one,
+                0,
+                0,
+                &edit(serde_json::json!({"op": "move_action", "to": 4}))
+            )
+            .is_err()
+        );
+        assert!(apply(&one, 5, 0, &edit(serde_json::json!({"op": "copy_action"}))).is_err());
+
+        // frames: mark the first with an offset, copy it, move the copy to the front
+        let f = apply(
+            &act,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "set_layer", "layer": 0, "offset_x": 5})),
+        )
+        .unwrap();
+        let f = apply(&f, 0, 0, &edit(serde_json::json!({"op": "copy_frame"}))).unwrap();
+        let f = apply(
+            &f,
+            0,
+            1,
+            &edit(serde_json::json!({"op": "set_layer", "layer": 0, "offset_x": 9})),
+        )
+        .unwrap();
+        let f = apply(
+            &f,
+            0,
+            1,
+            &edit(serde_json::json!({"op": "move_frame", "to": 0})),
+        )
+        .unwrap();
+        let frames = &parsed(&f).actions[0].frames;
+        assert_eq!(
+            (frames[0].layers[0].offset_x, frames[1].layers[0].offset_x),
+            (9.0, 5.0)
+        );
+        assert!(
+            apply(
+                &f,
+                0,
+                0,
+                &edit(serde_json::json!({"op": "move_frame", "to": 7}))
+            )
+            .is_err()
+        );
     }
 
     #[test]
