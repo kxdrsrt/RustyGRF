@@ -283,15 +283,27 @@ void main() {
   vec3 c = t.rgb * l * lm.a;
   outColor = vec4(c, 1.0);
 }`;
+  // Moving models: aNode picks a row of uMats (one matrix per sample of the loop, 4 texels each),
+  // aSpeed (per instance) runs the loop faster or slower; static models skip all of it.
   const MODEL_VS = `#version 300 es
-in vec3 aPos; in vec3 aNormal; in vec2 aUv;
+precision highp float; precision highp sampler2D;
+in vec3 aPos; in vec3 aNormal; in vec2 aUv; in float aNode; in float aSpeed;
 in vec4 aM0; in vec4 aM1; in vec4 aM2; in vec4 aM3;
-uniform mat4 uVp;
+uniform mat4 uVp; uniform bool uAnim; uniform sampler2D uMats;
+uniform float uDuration; uniform float uSamples; uniform float uTime;
 out vec3 vNormal; out vec2 vUv;
 void main() {
   mat4 m = mat4(aM0, aM1, aM2, aM3);
-  vNormal = mat3(m) * aNormal; vUv = aUv;
-  gl_Position = uVp * m * vec4(aPos, 1.0);
+  vec4 p = vec4(aPos, 1.0); vec3 n = aNormal;
+  if (uAnim) {
+    float at = mod(uTime * aSpeed, uDuration);
+    int s = min(int(at / uDuration * uSamples), int(uSamples) - 1);
+    int row = int(aNode + 0.5);
+    mat4 a = mat4(texelFetch(uMats, ivec2(s * 4, row), 0), texelFetch(uMats, ivec2(s * 4 + 1, row), 0), texelFetch(uMats, ivec2(s * 4 + 2, row), 0), texelFetch(uMats, ivec2(s * 4 + 3, row), 0));
+    p = a * p; n = mat3(a) * n;
+  }
+  vNormal = mat3(m) * n; vUv = aUv;
+  gl_Position = uVp * m * p;
 }`;
   const MODEL_FS = `#version 300 es
 precision mediump float;
@@ -450,14 +462,32 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     // models, drawn instanced
+    let animatedModels = 0;
     const perModel = sc.models.map(() => []);
-    sc.instances.forEach((inst) => perModel[inst.model].push(...inst.matrix));
+    const perSpeed = sc.models.map(() => []);
+    sc.instances.forEach((inst) => { perModel[inst.model].push(...inst.matrix); perSpeed[inst.model].push(inst.speed ?? 1); });
     const modelParts = [];
     sc.models.forEach((m, mi) => {
       if (!perModel[mi].length) return;
       const instBuf = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(perModel[mi]), gl.STATIC_DRAW);
+      let anim = null;
+      let speedBuf = null;
+      if (m.anim) {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, m.anim.samples * 4, m.anim.node_count, 0, gl.RGBA, gl.FLOAT, f32(m.anim.matrices));
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        anim = { tex, duration: m.anim.duration_ms, samples: m.anim.samples };
+        speedBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, speedBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(perSpeed[mi]), gl.STATIC_DRAW);
+        animatedModels++;
+      }
       for (const p of m.parts) {
         const vao = gl.createVertexArray();
         gl.bindVertexArray(vao);
@@ -470,6 +500,19 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
           gl.enableVertexAttribArray(l);
           gl.vertexAttribPointer(l, size, gl.FLOAT, false, 0, 0);
         });
+        if (anim) {
+          const nb = gl.createBuffer();
+          gl.bindBuffer(gl.ARRAY_BUFFER, nb);
+          gl.bufferData(gl.ARRAY_BUFFER, f32(p.nodes), gl.STATIC_DRAW);
+          const ln = gl.getAttribLocation(mp, "aNode");
+          gl.enableVertexAttribArray(ln);
+          gl.vertexAttribPointer(ln, 1, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, speedBuf);
+          const ls = gl.getAttribLocation(mp, "aSpeed");
+          gl.enableVertexAttribArray(ls);
+          gl.vertexAttribPointer(ls, 1, gl.FLOAT, false, 0, 0);
+          gl.vertexAttribDivisor(ls, 1);
+        }
         gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
         for (let k = 0; k < 4; k++) {
           const l = gl.getAttribLocation(mp, `aM${k}`);
@@ -477,7 +520,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
           gl.vertexAttribPointer(l, 4, gl.FLOAT, false, 64, k * 16);
           gl.vertexAttribDivisor(l, 1);
         }
-        modelParts.push({ vao, count: pos.length / 3, instances: perModel[mi].length / 16, tex: textures[p.texture] });
+        modelParts.push({ vao, count: pos.length / 3, instances: perModel[mi].length / 16, tex: textures[p.texture], anim });
       }
     });
 
@@ -509,12 +552,13 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     const waterFrame = () => (water && opts.animate && water.frames.length > 1 ? Math.floor((performance.now() - clock) / water.frameMs) % water.frames.length : 0);
     const clock = performance.now();
     let timer = null;
+    const moving = () => opts.animate && ((water && opts.water && water.frames.length > 1) || (opts.models && animatedModels > 0));
     function loop() {
       render();
-      timer = opts.animate && water && opts.water && water.frames.length > 1 ? requestAnimationFrame(loop) : null;
+      timer = moving() ? requestAnimationFrame(loop) : null;
     }
     function startLoop() {
-      if (timer === null && opts.animate && water && opts.water && water.frames.length > 1) timer = requestAnimationFrame(loop);
+      if (timer === null && moving()) timer = requestAnimationFrame(loop);
     }
     orbit(canvas, cam, home, size, draw);
 
@@ -543,8 +587,15 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
         gl.uniformMatrix4fv(u(mp, "uVp"), false, vp);
         gl.uniform3fv(u(mp, "uAmb"), amb); gl.uniform3fv(u(mp, "uDif"), dif); gl.uniform3fv(u(mp, "uDir"), dir);
         gl.uniform1i(u(mp, "uLit"), opts.lit ? 1 : 0); gl.uniform1i(u(mp, "uTex"), 0);
+        gl.uniform1i(u(mp, "uMats"), 2);
+        gl.uniform1f(u(mp, "uTime"), opts.animate ? performance.now() - clock : 0);
         for (const p of modelParts) {
           gl.bindVertexArray(p.vao);
+          gl.uniform1i(u(mp, "uAnim"), p.anim ? 1 : 0);
+          if (p.anim) {
+            gl.uniform1f(u(mp, "uDuration"), p.anim.duration); gl.uniform1f(u(mp, "uSamples"), p.anim.samples);
+            gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, p.anim.tex); gl.activeTexture(gl.TEXTURE0);
+          }
           gl.uniform1i(u(mp, "uHasTex"), p.tex ? 1 : 0);
           if (p.tex) gl.bindTexture(gl.TEXTURE_2D, p.tex);
           gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, p.instances);
@@ -572,6 +623,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
       set(name, value) { opts[name] = value; startLoop(); draw(); },
       /** Index of the water picture shown right now (for tests). */
       waterFrame,
+      animatedModels: () => animatedModels,
       destroy() { opts.animate = false; if (timer !== null) cancelAnimationFrame(timer); ro.disconnect(); gl.getExtension("WEBGL_lose_context")?.loseContext(); canvas.remove(); },
     };
   }

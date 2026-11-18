@@ -109,6 +109,50 @@ fn previews_of_real_files() {
         other => panic!("{other:?}"),
     }
 
+    // a map with moving models: node matrices over the loop and a node number per vertex
+    let i = find(&mut s, r"data\mjolnir_12.rsw");
+    match s.preview(i, None).unwrap() {
+        Preview::Scene {
+            models, instances, ..
+        } => {
+            let floats = |b: &str| -> Vec<f32> {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(b).unwrap();
+                let (words, _) = bytes.as_chunks::<4>();
+                words.iter().map(|c| f32::from_le_bytes(*c)).collect()
+            };
+            let moving: Vec<usize> = (0..models.len())
+                .filter(|&m| models[m].anim.is_some())
+                .collect();
+            assert!(!moving.is_empty(), "mjolnir_12 has moving models");
+            for &m in &moving {
+                let a = models[m].anim.as_ref().unwrap();
+                let mats = floats(&a.matrices);
+                assert_eq!(mats.len(), a.node_count * a.samples * 16);
+                assert!(mats.iter().all(|v| v.is_finite()));
+                for p in &models[m].parts {
+                    let nodes = floats(p.nodes.as_ref().unwrap());
+                    assert_eq!(nodes.len() * 3, floats(&p.positions).len());
+                    assert!(
+                        nodes
+                            .iter()
+                            .all(|&n| n >= 0.0 && (n as usize) < a.node_count)
+                    );
+                }
+            }
+            let moving_instances = instances
+                .iter()
+                .filter(|i| moving.contains(&i.model) && i.speed > 0.0)
+                .count();
+            eprintln!(
+                "mjolnir_12: {} moving models, {moving_instances} moving instances",
+                moving.len()
+            );
+            assert!(moving_instances > 100);
+        }
+        other => panic!("{other:?}"),
+    }
+
     let i = find(&mut s, r"data\model\ad\ad01.rsm");
     match s.preview(i, None).unwrap() {
         Preview::Model {

@@ -43,10 +43,97 @@ const MAX_EFFECT_FRAMES: usize = 120;
 const EFFECT_SCALE: f32 = 0.5;
 
 /// Textures of a scene, each loaded once.
+/// Number of moments sampled from an animation loop (about 30 per second, 360 at most).
+fn sample_count(duration_ms: f32) -> usize {
+    if duration_ms > 0.0 {
+        ((duration_ms / 33.0).ceil() as usize).clamp(2, 360)
+    } else {
+        1
+    }
+}
+
 #[derive(Default)]
 struct TexturePool {
     out: Vec<TextureOut>,
     by_key: HashMap<Vec<u8>, usize>,
+}
+
+/// A moving model of a map: the triangles of all nodes in node space, merged by texture with a node
+/// number per vertex, and the node matrices over the loop (already turned like the static models:
+/// y up, standing on 0, then y negated for the map's instance matrices).
+fn animated_def(
+    s: &Session,
+    model: &rsm_model::Model,
+    duration: f32,
+    pool: &mut TexturePool,
+    keys: &HashMap<Vec<u8>, usize>,
+    f32s: &dyn Fn(&[f32]) -> String,
+) -> ModelDefOut {
+    struct Merged {
+        texture: usize,
+        positions: Vec<f32>,
+        normals: Vec<f32>,
+        uvs: Vec<f32>,
+        nodes: Vec<f32>,
+    }
+    let mut merged: Vec<Merged> = Vec::new();
+    for ni in 0..model.nodes.len() {
+        for p in rsm_model::node_parts(model, ni) {
+            let texture = pool.get(s, keys, b"data\\texture\\", &p.texture);
+            let at = merged
+                .iter()
+                .position(|m| m.texture == texture)
+                .unwrap_or_else(|| {
+                    merged.push(Merged {
+                        texture,
+                        positions: Vec::new(),
+                        normals: Vec::new(),
+                        uvs: Vec::new(),
+                        nodes: Vec::new(),
+                    });
+                    merged.len() - 1
+                });
+            let m = &mut merged[at];
+            m.nodes
+                .extend(std::iter::repeat_n(ni as f32, p.positions.len() / 3));
+            m.positions.extend(p.positions);
+            m.normals.extend(p.normals);
+            m.uvs.extend(p.uvs);
+        }
+    }
+    let samples = sample_count(duration);
+    let view = rsm_model::view_matrix(model);
+    let flip_y = [
+        1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let to_map = rsm_model::multiply(&flip_y, &view);
+    let mut matrices: Vec<f32> = Vec::with_capacity(model.nodes.len() * samples * 16);
+    let worlds: Vec<Vec<[f32; 16]>> = (0..samples)
+        .map(|k| rsm_model::node_matrices_at(model, duration * k as f32 / samples as f32))
+        .collect();
+    for ni in 0..model.nodes.len() {
+        for w in &worlds {
+            matrices.extend(rsm_model::multiply(&to_map, &w[ni]));
+        }
+    }
+    ModelDefOut {
+        parts: merged
+            .iter()
+            .map(|m| ModelPartOut {
+                texture: m.texture,
+                positions: f32s(&m.positions),
+                normals: f32s(&m.normals),
+                uvs: f32s(&m.uvs),
+                nodes: Some(f32s(&m.nodes)),
+            })
+            .collect(),
+        anim: Some(ModelAnimOut {
+            duration_ms: duration,
+            samples,
+            node_count: model.nodes.len(),
+            matrices: f32s(&matrices),
+        }),
+    }
 }
 
 impl TexturePool {
@@ -198,9 +285,21 @@ pub struct ModelNodeOut {
     pub matrices: String,
 }
 
+/// How a model of the map moves: the matrices of every node at `samples` moments of its loop.
+#[derive(Serialize, Debug)]
+pub struct ModelAnimOut {
+    pub duration_ms: f32,
+    pub samples: usize,
+    pub node_count: usize,
+    /// For each node and sample a column-major 4 x 4 (`f32`, base64): node-major, then sample.
+    pub matrices: String,
+}
+
 #[derive(Serialize, Debug)]
 pub struct ModelDefOut {
     pub parts: Vec<ModelPartOut>,
+    /// Set for models that move: the parts are then in node space with a node number per vertex.
+    pub anim: Option<ModelAnimOut>,
 }
 
 #[derive(Serialize, Debug)]
@@ -208,6 +307,8 @@ pub struct InstanceOut {
     pub model: usize,
     /// Column-major 4 x 4, already turned to the viewer's axes (y up, z towards the south).
     pub matrix: Vec<f32>,
+    /// How fast the model's animation runs (0 = it stands still).
+    pub speed: f32,
 }
 
 #[derive(Serialize, Debug)]
@@ -235,6 +336,9 @@ pub struct ModelPartOut {
     pub positions: String,
     pub normals: String,
     pub uvs: String,
+    /// The node of every vertex (`f32`, base64), only for parts of moving models in a map.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1549,10 +1653,15 @@ impl Session {
                         missing.push(self.shown_bytes(&name));
                         return None;
                     };
-                    let posed = rsm_model::static_pose(&model);
                     let f32s = |v: &[f32]| {
                         b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
                     };
+                    let duration = rsm_model::duration_ms(&model);
+                    if duration > 0.0 {
+                        models.push(animated_def(self, &model, duration, &mut pool, keys, &f32s));
+                        return Some(models.len() - 1);
+                    }
+                    let posed = rsm_model::static_pose(&model);
                     // the model's space has y down with the model standing on y = 0
                     let flip_y = |v: &[f32]| -> Vec<f32> {
                         v.as_chunks::<3>()
@@ -1569,9 +1678,10 @@ impl Session {
                             positions: f32s(&flip_y(&p.positions)),
                             normals: f32s(&flip_y(&p.normals)),
                             uvs: f32s(&p.uvs),
+                            nodes: None,
                         })
                         .collect();
-                    models.push(ModelDefOut { parts });
+                    models.push(ModelDefOut { parts, anim: None });
                     Some(models.len() - 1)
                 });
                 let Some(model) = def else { continue };
@@ -1589,6 +1699,12 @@ impl Session {
                 instances.push(InstanceOut {
                     model,
                     matrix: rsm_model::multiply(&flip, &place).to_vec(),
+                    // assumption: type 0 stands still, other types run at `animation_speed`
+                    speed: if mo.animation_type == 0 {
+                        0.0
+                    } else {
+                        mo.animation_speed
+                    },
                 });
             }
             info.push(format!(
@@ -1640,11 +1756,7 @@ impl Session {
         let f32s = |v: &[f32]| b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
         let mut pool = TexturePool::default();
         let duration = rsm_model::duration_ms(&model);
-        let samples = if duration > 0.0 {
-            ((duration / 33.0).ceil() as usize).clamp(2, 360)
-        } else {
-            1
-        };
+        let samples = sample_count(duration);
         let view = rsm_model::view_matrix(&model);
         let mut nodes = Vec::new();
         for ni in 0..model.nodes.len() {
@@ -1655,6 +1767,7 @@ impl Session {
                     positions: f32s(&p.positions),
                     normals: f32s(&p.normals),
                     uvs: f32s(&p.uvs),
+                    nodes: None,
                 })
                 .collect();
             let mut matrices: Vec<f32> = Vec::with_capacity(samples * 16);
