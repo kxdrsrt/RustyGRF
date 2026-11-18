@@ -1,6 +1,7 @@
 // Stand-in for the Tauri backend so the page can be tried in a normal browser (layout, keyboard,
 // scrolling). It is only active when `window.__TAURI__` is missing, so the app never uses it.
 if (!window.__TAURI__) {
+  const listeners = {};
   const exts = ["spr", "act", "bmp", "txt", "gat", "rsw", "rsm", "wav", "lub", "pal", "tga"];
   const all = [];
   for (let i = 0; i < 24000; i++) {
@@ -74,13 +75,22 @@ if (!window.__TAURI__) {
             return preview(a.index, a.action);
           case "extract":
             return { files: a.indices.length || filtered.length, damaged: 0, dest: a.dest };
+          case "build_archive": {
+            for (const done of [10, 55, 100]) {
+              await new Promise((r) => setTimeout(r, 400));
+              listeners["job-progress"]?.({ payload: { done, total: 100 } });
+            }
+            return { files: 100, blocks: 98, shared: 2, unpacked_bytes: 52428800, file_bytes: 18874368, verified: true, skipped: [] };
+          }
+          case "cancel_job":
+            return null;
           case "verify":
             return { entries: all.length, errors: 0, warnings: 1, infos: 2, issues: ["data\\wav\\worm_tail_damage.wav: stream ends early (1403 of 1410 bytes)"], decoded: a.decode };
         }
         throw new Error(`mock: unknown command ${cmd}`);
       },
     },
-    dialog: { open: async (o) => (o?.directory ? "/tmp/extract-here" : "/mock/test.grf") },
-    event: { listen: () => {} },
+    dialog: { open: async (o) => (o?.directory ? "/tmp/extract-here" : "/mock/test.grf"), save: async (o) => `/tmp/${o?.defaultPath || "out.grf"}` },
+    event: { listen: (name, fn) => void (listeners[name] = fn) },
   };
 }

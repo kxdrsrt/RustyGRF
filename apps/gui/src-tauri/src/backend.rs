@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+use rgrf_core::build::{BuildOptions, build};
+use rgrf_core::encode::Method;
 use rgrf_core::extract::{ExtractOptions, OnCollision, extract};
 use rgrf_core::progress::Control;
 use rgrf_core::verify::{Severity, VerifyOptions, verify};
+use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
 use rgrf_formats::act::Act;
 use rgrf_formats::gat::{self, Gat};
@@ -18,7 +21,7 @@ use rgrf_formats::render::{bounds_of, render_frame};
 use rgrf_formats::rsm::Rsm;
 use rgrf_formats::rsw::{self, Rsw};
 use rgrf_formats::spr::{RgbaImage, Spr};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Largest entry the preview reads (bigger ones show only their details).
 const MAX_PREVIEW_BYTES: u32 = 48 * 1024 * 1024;
@@ -124,6 +127,62 @@ pub struct ExtractSummary {
     pub files: usize,
     pub damaged: usize,
     pub dest: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct BuildRequest {
+    pub src: PathBuf,
+    pub dst: PathBuf,
+    /// `zlib` (default, every client), `zopfli` or `lzma` (needs a client with LZMA support).
+    pub method: String,
+    /// `0x200` (every client) or `0x300`.
+    pub format: String,
+    pub dedupe: bool,
+    pub overwrite: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct BuildSummary {
+    pub files: usize,
+    pub blocks: usize,
+    pub shared: usize,
+    pub unpacked_bytes: u64,
+    pub file_bytes: u64,
+    pub verified: bool,
+    pub skipped: Vec<String>,
+}
+
+/// Packs a folder into a GRF and verifies the result against the files on disk.
+pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, String> {
+    let method = match req.method.as_str() {
+        "zlib" => Method::DEFAULT,
+        "zopfli" => Method::Zopfli { iterations: 10 },
+        "lzma" => Method::Lzma { preset: 9 },
+        other => return Err(format!("unknown method '{other}'")),
+    };
+    let format = Format::parse(&req.format)
+        .ok_or_else(|| format!("unknown format '{}' (0x200 or 0x300)", req.format))?;
+    let opts = BuildOptions {
+        method,
+        format,
+        dedupe: req.dedupe,
+        overwrite: req.overwrite,
+        ..BuildOptions::default()
+    };
+    let rep = build(&req.src, &req.dst, &opts, ctl).map_err(|e| e.to_string())?;
+    Ok(BuildSummary {
+        files: rep.files,
+        blocks: rep.blocks,
+        shared: rep.shared_files,
+        unpacked_bytes: rep.unpacked_bytes,
+        file_bytes: rep.output_file_len,
+        verified: rep.verified,
+        skipped: rep
+            .skipped
+            .iter()
+            .map(|s| format!("{}: {}", s.path.display(), s.reason))
+            .collect(),
+    })
 }
 
 #[derive(Serialize, Debug)]
@@ -884,6 +943,53 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn builds_a_folder_and_can_be_cancelled() {
+        use rgrf_core::progress::CancelToken;
+        let dir = tmp("build");
+        let src = dir.join("src/data/texture");
+        fs::create_dir_all(&src).unwrap();
+        for i in 0..20 {
+            fs::write(
+                src.join(format!("f{i}.txt")),
+                format!("file {i}").repeat(50),
+            )
+            .unwrap();
+        }
+        let req = |dst: &str, method: &str| BuildRequest {
+            src: dir.join("src"),
+            dst: dir.join(dst),
+            method: method.into(),
+            format: "0x200".into(),
+            dedupe: false,
+            overwrite: false,
+        };
+        let none = Control {
+            cancel: None,
+            progress: None,
+        };
+        let rep = build_archive(&req("a.grf", "zlib"), &none).unwrap();
+        assert_eq!((rep.files, rep.verified), (20, true));
+        assert_eq!(
+            Session::open(&dir.join("a.grf")).unwrap().info().entries,
+            20
+        );
+        // an existing archive is not overwritten
+        assert!(build_archive(&req("a.grf", "zlib"), &none).is_err());
+        assert!(build_archive(&req("b.grf", "bogus"), &none).is_err());
+
+        let token = CancelToken::new();
+        token.cancel();
+        let ctl = Control {
+            cancel: Some(&token),
+            progress: None,
+        };
+        let err = build_archive(&req("c.grf", "zlib"), &ctl).unwrap_err();
+        assert!(err.to_lowercase().contains("cancel"), "{err}");
+        assert!(!dir.join("c.grf").exists());
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -328,6 +328,74 @@ async function doExtract() {
   }
 }
 
+async function doBuild() {
+  const src = await T.dialog.open({ directory: true, multiple: false, title: "Folder to pack (the folder that contains data\\ …)" });
+  if (!src) return;
+  const method = el("select", {}, el("option", { value: "zlib", text: "zlib (every client)", selected: true }), el("option", { value: "zopfli", text: "zopfli (smaller, slow, zlib-compatible)" }), el("option", { value: "lzma", text: "LZMA (only clients with LZMA support)" }));
+  const format = el("select", {}, el("option", { value: "0x200", text: "0x200 (every client)", selected: true }), el("option", { value: "0x300", text: "0x300 (64-bit offsets, for archives over 4 GB)" }));
+  const dedupe = el("input", { type: "checkbox" });
+  const body = [
+    el("p", { text: `Pack ${src}` }),
+    el("div", { class: "form" }, el("label", { text: "Compression " }, method), el("label", { text: "Format " }, format), el("label", {}, dedupe, " Share identical files")),
+    el("p", { class: "muted", text: "The finished archive is verified against the files on disk." }),
+  ];
+  const go = await ask("Build archive", body, [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const base = src.split(/[\\/]/).filter(Boolean).pop() || "data";
+  const dst = await T.dialog.save({ title: "Save archive as", defaultPath: `${base}.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  if (!dst) return;
+  const job = showJob("Building archive");
+  setStatus(`Building ${dst} …`);
+  try {
+    const r = await invoke("build_archive", { req: { src, dst, method: method.value, format: format.value, dedupe: dedupe.checked, overwrite: true } });
+    job.close();
+    setStatus(`Built ${dst}: ${fmtNum(r.files)} files`);
+    const body = [el("p", { text: `${fmtNum(r.files)} files in ${fmtNum(r.blocks)} blocks (${fmtBytes(r.unpacked_bytes)} → ${fmtBytes(r.file_bytes)}), ${r.verified ? "verified" : "not verified"}.` })];
+    if (r.shared) body.push(el("p", { class: "muted", text: `${fmtNum(r.shared)} identical files share a block.` }));
+    if (r.skipped.length) body.push(el("p", { text: `${r.skipped.length} item(s) skipped:` }), el("pre", { text: r.skipped.join("\n") }));
+    const open = await ask("Archive built", body, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    if (open) await openPath(dst);
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? "Build cancelled" : "Build failed");
+    await note(cancelled ? "Build cancelled" : "Could not build", cancelled ? "Nothing was written." : errText(e), !cancelled);
+  }
+}
+
+/** A progress dialog for a long job; the page feeds it with `job-progress` events. */
+function showJob(title) {
+  const bar = el("progress", { max: 100, value: 0 });
+  const label = el("p", { class: "muted", text: "Starting …" });
+  const cancel = el("button", {
+    type: "button",
+    text: "Cancel",
+    onclick: () => {
+      cancel.disabled = true;
+      label.textContent = "Cancelling …";
+      invoke("cancel_job").catch(() => {});
+    },
+  });
+  const dlg = $("dlg");
+  $("dlg-title").textContent = title;
+  $("dlg-body").replaceChildren(bar, label);
+  $("dlg-actions").replaceChildren(cancel);
+  const keep = (e) => e.preventDefault();
+  dlg.addEventListener("cancel", keep);
+  S.onJob = (p) => {
+    bar.value = p.total ? (p.done * 100) / p.total : 0;
+    label.textContent = `${fmtNum(p.done)} of ${fmtNum(p.total)}`;
+  };
+  dlg.showModal();
+  return {
+    close() {
+      S.onJob = null;
+      dlg.removeEventListener("cancel", keep);
+      dlg.close();
+    },
+  };
+}
+
 async function doVerify() {
   if (!S.info) return;
   const mode = await ask("Verify", el("p", { text: "A quick check reads only the file table. A full check also decodes every entry; that reads the whole archive." }), [
@@ -355,6 +423,7 @@ async function doVerify() {
 let searchTimer = 0;
 $("btn-open").addEventListener("click", chooseArchive);
 $("btn-open-2").addEventListener("click", chooseArchive);
+$("btn-build").addEventListener("click", doBuild);
 $("btn-extract").addEventListener("click", doExtract);
 $("btn-verify").addEventListener("click", doVerify);
 $("search").addEventListener("input", (e) => {
@@ -401,6 +470,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 if (T.event?.listen) {
+  T.event.listen("job-progress", (e) => S.onJob?.(e.payload));
   T.event.listen("tauri://drag-drop", (e) => {
     const p = e.payload?.paths?.[0];
     if (p) openPath(p);

@@ -8,6 +8,7 @@ Desktop-Oberfläche auf dem Rust-Kern (`rgrf-core`, `rgrf-formats`). Eigenes Car
 - `ui/`: reines HTML/CSS/JS (kein Build-Werkzeug). Die Liste ist virtualisiert (nur sichtbare Zeilen, Seiten vom Backend), Dark/Light per `prefers-color-scheme`. `ui/mock.js` ersetzt das Backend nur im normalen Browser, in der App ist es inaktiv.
 - Namensanzeige: Standard **Koreanisch** (CP949, z. B. `유저인터페이스`), umschaltbar auf Latin-1 (so zeigt es GRF Editor) oder UTF-8. Gilt auch für die Suche; Extrahieren schreibt immer Latin-1-Namen (rundlauffähig mit `rgrf build`).
 - Startpfad: `rustygrf-gui <datei.grf>` öffnet das Archiv direkt (Grundlage für „Öffnen mit“).
+- **Build…** packt einen Ordner zu einer GRF (zlib/0x200 als Standard, Zopfli und LZMA nur ausdrücklich gewählt), mit Fortschrittsbalken, Abbrechen und anschließender Prüfung gegen die Dateien auf der Platte. Abbruch hinterlässt keine Datei. Ein Auftrag zur Zeit.
 - Einziges npm-Paket: `@tauri-apps/cli` (Entwicklungsabhängigkeit).
 
 ## Starten und Bauen

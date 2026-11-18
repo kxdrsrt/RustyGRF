@@ -5,11 +5,22 @@ pub mod backend;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use backend::{ArchiveInfo, Details, ExtractSummary, Preview, Row, Session, VerifySummary};
-use tauri::State;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use backend::{
+    ArchiveInfo, BuildRequest, BuildSummary, Details, ExtractSummary, Preview, Row, Session,
+    VerifySummary,
+};
+use rgrf_core::progress::{CancelToken, Control, Progress};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
 
 #[derive(Default)]
-struct AppState(Arc<Mutex<Option<Session>>>);
+struct AppState {
+    session: Arc<Mutex<Option<Session>>>,
+    /// Token of the running long job (build), if any.
+    job: Mutex<Option<CancelToken>>,
+}
 
 type Res<T> = Result<T, String>;
 
@@ -19,7 +30,7 @@ where
     T: Send + 'static,
     F: FnOnce(&mut Session) -> Res<T> + Send + 'static,
 {
-    let shared = Arc::clone(&state.0);
+    let shared = Arc::clone(&state.session);
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = shared
             .lock()
@@ -33,7 +44,7 @@ where
 
 #[tauri::command]
 async fn open_archive(state: State<'_, AppState>, path: String) -> Res<ArchiveInfo> {
-    let shared = Arc::clone(&state.0);
+    let shared = Arc::clone(&state.session);
     tauri::async_runtime::spawn_blocking(move || {
         let s = Session::open(&PathBuf::from(path))?;
         let info = s.info();
@@ -101,6 +112,65 @@ async fn verify(state: State<'_, AppState>, decode: bool) -> Res<VerifySummary> 
     with_session(&state, move |s| s.verify(decode)).await
 }
 
+#[derive(Serialize, Clone)]
+struct JobProgress {
+    done: u64,
+    total: u64,
+}
+
+/// Packs a folder into a GRF. Progress goes to the page as `job-progress` events.
+#[tauri::command]
+async fn build_archive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: BuildRequest,
+) -> Res<BuildSummary> {
+    let token = CancelToken::new();
+    {
+        let mut job = state.job.lock().map_err(|_| "internal error")?;
+        if job.is_some() {
+            return Err("another job is already running".into());
+        }
+        *job = Some(token.clone());
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // report about every percent only, so the page is not flooded with events
+        let last = AtomicU64::new(u64::MAX);
+        let report = |p: Progress| {
+            let step = (p.done * 100).checked_div(p.total).unwrap_or(0);
+            if last.swap(step, Ordering::Relaxed) != step {
+                let _ = app.emit(
+                    "job-progress",
+                    JobProgress {
+                        done: p.done,
+                        total: p.total,
+                    },
+                );
+            }
+        };
+        let ctl = Control {
+            cancel: Some(&token),
+            progress: Some(&report),
+        };
+        backend::build_archive(&req, &ctl)
+    })
+    .await
+    .map_err(|e| e.to_string());
+    if let Ok(mut job) = state.job.lock() {
+        *job = None;
+    }
+    result?
+}
+
+#[tauri::command]
+fn cancel_job(state: State<'_, AppState>) {
+    if let Ok(job) = state.job.lock()
+        && let Some(t) = job.as_ref()
+    {
+        t.cancel();
+    }
+}
+
 /// A GRF path given on the command line (`rustygrf-gui file.grf`), opened by the page at start.
 #[tauri::command]
 fn startup_path() -> Option<String> {
@@ -123,6 +193,8 @@ pub fn run() {
             preview,
             extract,
             verify,
+            build_archive,
+            cancel_job,
             startup_path
         ])
         .run(tauri::generate_context!())
