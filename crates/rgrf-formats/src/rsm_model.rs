@@ -558,7 +558,9 @@ mod tests {
     }
 
     /// Version 1.4 model: `nodes` are (name, parent, pos, vertices); one triangle per node.
-    fn model(nodes: &[(&str, &str, [f32; 3], [[f32; 3]; 3])]) -> Vec<u8> {
+    type TestNode<'a> = (&'a str, &'a str, [f32; 3], [[f32; 3]; 3]);
+
+    fn model(nodes: &[TestNode]) -> Vec<u8> {
         let mut b = b"GRSM\x01\x04".to_vec();
         b.extend(0i32.to_le_bytes());
         b.extend(2i32.to_le_bytes()); // smooth shading
