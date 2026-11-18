@@ -1,8 +1,10 @@
 //! RGZ patches (`.rgz`): a gzip stream that holds a plain list of records, `f` (file: name
-//! length, name with NUL, data length, data), `d` (folder) and `e` (end). The layout follows GRF
-//! Editor's `Rgz`/`RgzEntry` (Tokeiburu, used with permission, see docs/05-licensing.md); **no real
-//! `.rgz` file was available when this was written**, the reader is tested on files made by the
-//! writer here (see docs/02-format-notes.md).
+//! length, name with NUL, data length, data), `d` (folder: length, name with NUL) and the end
+//! mark `end\0` (read as an `e` record, then two stray bytes). The layout follows GRF
+//! Editor's `Rgz`/`RgzEntry` (Tokeiburu, used with permission, see docs/05-licensing.md). Checked
+//! against a file written by GRF Editor's `GrfCL` (opens here with the exact content of the source
+//! folder) and `GrfCL -rgzAnalysis` reads the files written here, see docs/02-format-notes.md; an RGZ
+//! from a real patch server was not available.
 //!
 //! An opened RGZ is an ordinary [`crate::Archive`] over the decompressed bytes in memory; its
 //! entries are stored uncompressed (flags 0).
@@ -80,7 +82,8 @@ pub fn read_container(gz: impl Read) -> Result<(Container, Vec<u8>)> {
                     return Err(corrupt("folder name outside the data"));
                 }
             }
-            b'e' => {}
+            // the end mark `end\0`
+            b'e' => break,
             // a few stray bytes at the very end are tolerated, anything else is damage
             _ if data.len() - p < 8 => break,
             c => return Err(corrupt(&format!("unknown record type 0x{c:02x}"))),
@@ -115,15 +118,16 @@ pub fn read_container(gz: impl Read) -> Result<(Container, Vec<u8>)> {
     ))
 }
 
-/// Writes an RGZ: the folders first (in order of first use), then the files. Never over an
-/// existing file unless `overwrite`; the file appears only when complete.
+/// Writes an RGZ the way GRF Editor does (checked against a file `GrfCL` wrote): before every file
+/// a folder record with the folder of that file, then the file record; the stream ends with
+/// `end` and a NUL. Never over an existing file unless `overwrite`; the file appears only when
+/// complete.
 pub fn write(dst: &Path, files: &[(GrfPath, Vec<u8>)], level: u32, overwrite: bool) -> Result<()> {
     if dst.exists() && !overwrite {
         return Err(Error::TargetExists(dst.display().to_string()));
     }
     let mut raw = Vec::new();
-    let mut folders: Vec<Vec<u8>> = Vec::new();
-    for (name, _) in files {
+    for (name, data) in files {
         let b = name.as_bytes();
         if b.is_empty() || b.len() > 254 {
             return Err(Error::InvalidInput(format!(
@@ -131,30 +135,22 @@ pub fn write(dst: &Path, files: &[(GrfPath, Vec<u8>)], level: u32, overwrite: bo
                 b.len()
             )));
         }
-        let mut upto = 0;
-        while let Some(i) = b[upto..].iter().position(|&c| c == b'\\' || c == b'/') {
-            let folder = b[..upto + i].to_vec();
-            if !folder.is_empty() && !folders.contains(&folder) {
-                raw.push(b'd');
-                raw.push(folder.len() as u8 + 1);
-                raw.extend(&folder);
-                raw.push(0);
-                folders.push(folder);
-            }
-            upto += i + 1;
+        if let Some(i) = b.iter().rposition(|&c| c == b'\\' || c == b'/') {
+            raw.push(b'd');
+            raw.push(i as u8 + 1);
+            raw.extend(&b[..i]);
+            raw.push(0);
         }
-    }
-    for (name, data) in files {
         let size = i32::try_from(data.len())
             .map_err(|_| Error::TooLarge("a file in an RGZ is limited to 2 GiB".into()))?;
         raw.push(b'f');
-        raw.push(name.as_bytes().len() as u8 + 1);
-        raw.extend(name.as_bytes());
+        raw.push(b.len() as u8 + 1);
+        raw.extend(b);
         raw.push(0);
         raw.extend(size.to_le_bytes());
         raw.extend(data);
     }
-    raw.push(b'e');
+    raw.extend(b"end\0");
     let tmp = crate::pipeline::temp_path(dst);
     let result = (|| -> Result<()> {
         let f = std::fs::OpenOptions::new()

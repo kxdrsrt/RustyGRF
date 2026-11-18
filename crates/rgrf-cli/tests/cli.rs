@@ -1758,3 +1758,69 @@ fn lua_compile_makes_client_ready_bytecode_and_round_trips_korean_text() {
     assert!(!dir.join("bad.lub").exists());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn files_below(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            v.extend(files_below(&p));
+        } else {
+            v.push(p);
+        }
+    }
+    v.sort();
+    v
+}
+
+/// Files that GRF Editor's own `GrfCL` wrote (Thor, RGZ, GPF, GRF from the same folder, made in the
+/// Windows VM by tools/golden/run-patch-in-vm.sh) open here and hold exactly the folder's files.
+#[test]
+fn patch_files_written_by_grf_editor_are_read_correctly() {
+    let Some(src) = testdata("0 GRFs/reference/patchformats/src") else {
+        return;
+    };
+    let out = testdata("0 GRFs/reference/patchformats/out").unwrap();
+    let src = std::path::Path::new(&src).join("data");
+    let want: Vec<_> = files_below(&src);
+    assert!(want.len() >= 5);
+    for name in ["ref.thor", "ref.rgz", "ref.gpf", "ref.grf"] {
+        let file = format!("{out}/{name}");
+        assert!(std::path::Path::new(&file).exists(), "missing {file}");
+        let v = json(&rgrf(&["info", &file, "--json"]));
+        assert_eq!(v["entries"].as_u64(), Some(want.len() as u64), "{name}");
+        assert_eq!(
+            v["kind"],
+            match name {
+                "ref.thor" => "thor",
+                "ref.rgz" => "rgz",
+                _ => "grf",
+            }
+        );
+        let o = rgrf(&["verify", &file, "--json"]);
+        let r = json(&o);
+        assert_eq!(
+            (r["errors"].as_u64(), r["warnings"].as_u64()),
+            (Some(0), Some(0)),
+            "{name}"
+        );
+        let dest = tmpdir(&format!("gc-{name}"));
+        assert!(
+            rgrf(&["extract", &file, &dest.to_string_lossy(), "-q"])
+                .status
+                .success()
+        );
+        // GrfCL added the folder `data` below the GRF path `data`: data\data\...
+        let got = files_below(&dest.join("data/data"));
+        assert_eq!(got.len(), want.len(), "{name}");
+        for (g, w) in got.iter().zip(&want) {
+            assert_eq!(
+                std::fs::read(g).unwrap(),
+                std::fs::read(w).unwrap(),
+                "{name}: {}",
+                g.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(dest);
+    }
+}

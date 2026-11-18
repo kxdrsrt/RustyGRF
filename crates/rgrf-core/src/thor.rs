@@ -3,9 +3,10 @@
 //! directives) and `0x21` (one client executable followed by the marker `SEALED!`).
 //!
 //! The layout follows GRF Editor's `Thor`/`ThorHeader`/`ThorEntry` (Tokeiburu, used with
-//! permission, see docs/05-licensing.md). Reading is checked on synthetic patches built by the
-//! writer here; **no real `.thor` file was available when this was written**, see
-//! docs/02-format-notes.md.
+//! permission, see docs/05-licensing.md). Checked against files written by GRF Editor's own `GrfCL`
+//! (mode 0x30 and 0x21, tools/golden/run-patch-in-vm.sh): they open here with the exact content of
+//! the source folder, and `GrfCL` opens the files written here. A Thor from a real patcher
+//! (Thor Patcher, game updates) was not available, see docs/02-format-notes.md.
 //!
 //! An opened Thor is an ordinary [`crate::Archive`]: its offsets are absolute in the file, so the
 //! archive reads the file through a 46-byte shift ([`crate::io::Source::Shifted`]).

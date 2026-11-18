@@ -121,7 +121,7 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 - **Nicht getestet:** Linux x64 und macOS x64 (nur ARM64), natives Bauen unter Windows (nur Kreuz-Bau), Windows-Dateisystem-Grenzen wie lange Pfade über 260 Zeichen, Extrahieren auf ein NTFS-Laufwerk in großem Umfang (nur `cdata` getestet), Signierung/Notarisierung der Binärdateien, Release-Veröffentlichung.
 
 ## M6 – Verschlüsselung, 0x300, Thor
-- **Teilweise umgesetzt (2026-11-19):** GRF 0x102/0x103 und das alte DES (Flags 3/5) werden gelesen (`event.grf`, `rdata.grf`: CRC32 wie GRF Editor); Thor (0x30/0x21), RGZ und GPF werden gelesen und mit `thor create`/`rgz create` erzeugt (nur an selbst erzeugten Dateien getestet, keine echte Datei vorhanden); Löschanweisungen von Patches wirken in `merge`. Details und Grenzen: [02-format-notes.md](02-format-notes.md).
+- **Teilweise umgesetzt (2026-11-19):** GRF 0x102/0x103 und das alte DES (Flags 3/5) werden gelesen (`event.grf`, `rdata.grf`: CRC32 wie GRF Editor); Thor (0x30/0x21), RGZ und GPF werden gelesen und mit `thor create`/`rgz create` erzeugt (gegen Dateien von GRF Editors `GrfCL` geprüft, nicht gegen Dateien echter Patcher); Löschanweisungen von Patches wirken in `merge`. Details und Grenzen: [02-format-notes.md](02-format-notes.md).
 - **Offen:** 0x102/0x103 schreiben; GRF Editors Verschlüsselung (Flag 0x20) und Gravitys Schutz (Flag 0x80, Schlüsselblock von 0x300) – nur auf Wunsch, mit Tests an echten Archiven und unter Beachtung der einen `cps.dll` im Client.
 
 ## M7 – Formate und All-in-one (Entscheidung D16, 2026-11-18)
