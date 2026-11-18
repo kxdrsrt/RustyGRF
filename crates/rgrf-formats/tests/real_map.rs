@@ -174,3 +174,79 @@ fn every_rsw_and_gnd_parses_and_references_exist() {
         &s.failures[..s.failures.len().min(5)]
     );
 }
+
+#[test]
+fn every_rsm_is_read_to_its_last_byte_and_its_textures_exist() {
+    use rgrf_formats::rsm::Rsm;
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let keymap = arc.index_by_key();
+    let mut idx = arc.select(Some("*.rsm"), NameMode::Cp1252);
+    idx.extend(arc.select(Some("*.rsm2"), NameMode::Cp1252));
+    assert!(idx.len() > 5000, "only {} models", idx.len());
+    #[derive(Default)]
+    struct S {
+        versions: BTreeMap<String, usize>,
+        failures: Vec<String>,
+        meshes: usize,
+        refs: usize,
+        missing: Vec<String>,
+    }
+    let s = Mutex::new(S::default());
+    idx.par_iter().for_each(|&i| {
+        let name = arc.entries()[i].name.display(NameMode::Cp1252);
+        let data = arc.read(i).unwrap().data;
+        let mut l = S::default();
+        match Rsm::parse(&data) {
+            Err(e) => l.failures.push(format!("{name}: {e}")),
+            Ok(m) => {
+                *l.versions.entry(m.version.to_string()).or_default() += 1;
+                l.meshes += m.meshes.len();
+                if m.trailing != 0 {
+                    l.failures
+                        .push(format!("{name}: {} bytes left over", m.trailing));
+                }
+                for t in m.all_textures() {
+                    l.refs += 1;
+                    let mut k = b"data\\texture\\".to_vec();
+                    k.extend(&t);
+                    if !keymap.contains_key(&GrfPath::new(k).key()) {
+                        l.missing.push(format!(
+                            "{name}: {}",
+                            t.iter().map(|&b| char::from(b)).collect::<String>()
+                        ));
+                    }
+                }
+            }
+        }
+        let mut g = s.lock().unwrap();
+        for (k, v) in l.versions {
+            *g.versions.entry(k).or_default() += v;
+        }
+        g.failures.extend(l.failures);
+        g.meshes += l.meshes;
+        g.refs += l.refs;
+        g.missing.extend(l.missing);
+    });
+    let mut s = s.into_inner().unwrap();
+    s.failures.sort();
+    s.missing.sort();
+    eprintln!(
+        "models: {}, versions {:?}, meshes {}, failures {}",
+        idx.len(),
+        s.versions,
+        s.meshes,
+        s.failures.len()
+    );
+    eprintln!(
+        "texture names looked up: {}, not in the archive: {}, e.g. {:?}",
+        s.refs,
+        s.missing.len(),
+        &s.missing[..s.missing.len().min(5)]
+    );
+    assert!(
+        s.failures.is_empty(),
+        "{:?}",
+        &s.failures[..s.failures.len().min(8)]
+    );
+}

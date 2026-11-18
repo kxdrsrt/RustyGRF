@@ -1426,7 +1426,21 @@ fn map_info_png_and_check() {
     w("data/town.rsw", &rsw.to_bytes());
     w("data/town.gnd", &gnd);
     w("data/texture/town/grass.bmp", b"x"); // town\lost.bmp is missing
-    w("data/model/house.rsm", b"x"); // tree.rsm is missing
+    // house.rsm is a valid (empty) 1.4 model using the texture town\roof.bmp, which does not exist
+    let mut house = b"GRSM\x01\x04".to_vec();
+    house.extend(0i32.to_le_bytes()); // animation length
+    house.extend(0i32.to_le_bytes()); // shade type
+    house.push(255); // alpha
+    house.extend([0u8; 16]);
+    house.extend(1i32.to_le_bytes()); // one texture
+    let mut tex = vec![0u8; 40];
+    tex[..14].copy_from_slice(b"town\\roof.bmp\0");
+    house.extend(tex);
+    house.extend([0u8; 40]); // main mesh name
+    house.extend(0i32.to_le_bytes()); // no meshes
+    house.extend(0i32.to_le_bytes()); // scale key frames
+    house.extend(0i32.to_le_bytes()); // volume boxes
+    w("data/model/house.rsm", &house); // tree.rsm is missing
     // wind.wav is missing too
     let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
     let grf = p("m.grf");
@@ -1483,16 +1497,17 @@ fn map_info_png_and_check() {
     assert_eq!(o.status.code(), Some(3));
     let v = json(&o);
     assert_eq!(v["maps_checked"], 1);
-    assert_eq!(v["problems"], 3);
+    assert_eq!(v["problems"], 4);
     let text = v["maps_with_problems"].to_string();
     for needle in [
         "texture data\\\\texture\\\\town\\\\lost.bmp",
         "model data\\\\model\\\\tree.rsm",
         "sound data\\\\wav\\\\wind.wav",
+        "model data\\\\model\\\\house.rsm uses the texture data\\\\texture\\\\town\\\\roof.bmp",
     ] {
         assert!(text.contains(needle), "{needle} in {text}");
     }
-    assert!(!text.contains("house.rsm") && !text.contains("grass.bmp"));
+    assert!(!text.contains("grass.bmp"));
     // a named map that does not exist
     assert_eq!(
         rgrf(&["map", "check", &grf, "nowhere"]).status.code(),

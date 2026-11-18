@@ -11,6 +11,7 @@ use rgrf_formats::gat::{self, Gat};
 use rgrf_formats::gif_io::upscale;
 use rgrf_formats::gnd::GndSummary;
 use rgrf_formats::png_io::rgba_to_png;
+use rgrf_formats::rsm::Rsm;
 use rgrf_formats::rsw::{self, Object, Rsw};
 use rgrf_formats::spr::RgbaImage;
 use serde_json::json;
@@ -116,7 +117,49 @@ pub fn info(input: &Path, entry: Option<&str>, names: NameMode, json: bool) -> R
                 }
             }
         }
-        other => bail!("'{other}' is not a map file (.gat, .gnd or .rsw)"),
+        "rsm" | "rsm2" => {
+            let m = Rsm::parse(&data).with_context(|| format!("{what} is not a readable RSM"))?;
+            let tex: Vec<String> = m.all_textures().iter().map(|t| latin1(t)).collect();
+            let faces: usize = m.meshes.iter().map(|x| x.faces).sum();
+            let verts: usize = m.meshes.iter().map(|x| x.vertices).sum();
+            if json {
+                println!(
+                    "{}",
+                    json!({
+                        "schema_version": crate::SCHEMA_VERSION,
+                        "source": what, "kind": "rsm", "version": m.version.to_string(),
+                        "meshes": m.meshes.iter().map(|x| json!({"name": latin1(&x.name), "parent": latin1(&x.parent), "vertices": x.vertices, "faces": x.faces})).collect::<Vec<_>>(),
+                        "textures": tex, "volume_boxes": m.volume_boxes,
+                        "unread_bytes": m.trailing,
+                    })
+                );
+            } else {
+                println!("{what}");
+                println!(
+                    "  RSM version {}, {} meshes, {verts} vertices, {faces} faces, {} volume boxes",
+                    m.version,
+                    m.meshes.len(),
+                    m.volume_boxes
+                );
+                for x in &m.meshes {
+                    println!(
+                        "    mesh {} (parent '{}'): {} vertices, {} faces",
+                        latin1(&x.name),
+                        latin1(&x.parent),
+                        x.vertices,
+                        x.faces
+                    );
+                }
+                println!("  textures:");
+                for t in tex {
+                    println!("    {t}");
+                }
+                if m.trailing != 0 {
+                    println!("  warning: {} bytes after the last known part", m.trailing);
+                }
+            }
+        }
+        other => bail!("'{other}' is not a map file (.gat, .gnd, .rsw, .rsm or .rsm2)"),
     }
     Ok(0)
 }
@@ -283,6 +326,9 @@ pub fn check(input: &Path, maps: &[String], names: NameMode, json: bool) -> Resu
     }
     let (mut looked, mut problems_total) = (0usize, 0usize);
     let mut report: Vec<(String, Vec<String>)> = Vec::new();
+    // Models are read once; a missing texture is reported once, under the first map that uses it.
+    let mut model_textures: HashMap<Vec<u8>, Result<Vec<Vec<u8>>, String>> = HashMap::new();
+    let mut reported: BTreeSet<(Vec<u8>, Vec<u8>)> = BTreeSet::new();
     for (name, at) in &rsws {
         let mut problems = Vec::new();
         let data = vfs.read(*at)?;
@@ -336,6 +382,48 @@ pub fn check(input: &Path, maps: &[String], names: NameMode, json: bool) -> Resu
                 }
             }
         }
+        // Textures inside the models (the model files that exist; missing ones are reported above).
+        for o in &r.objects {
+            let Object::Model(m) = o else { continue };
+            let model = cstr(&m.model_name);
+            let mkey = key_of("data\\model\\", &model);
+            if !model_textures.contains_key(&mkey) {
+                let parsed = match vfs.find(&mkey) {
+                    None => Ok(Vec::new()),
+                    Some(at) => match Rsm::parse(&vfs.read(at)?) {
+                        Ok(rsm) => Ok(rsm.all_textures()),
+                        Err(e) => Err(e.to_string()),
+                    },
+                };
+                if let Ok(t) = &parsed {
+                    looked += t.len();
+                }
+                model_textures.insert(mkey.clone(), parsed);
+            }
+            match &model_textures[&mkey] {
+                Err(e) => {
+                    if reported.insert((model.clone(), Vec::new())) {
+                        problems.push(format!(
+                            "model data\\model\\{} cannot be read: {e}",
+                            latin1(&model)
+                        ));
+                    }
+                }
+                Ok(textures) => {
+                    for t in textures {
+                        if !vfs.exists(&key_of("data\\texture\\", t))
+                            && reported.insert((model.clone(), t.clone()))
+                        {
+                            problems.push(format!(
+                                "model data\\model\\{} uses the texture data\\texture\\{} which is missing",
+                                latin1(&model),
+                                latin1(t)
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         if !problems.is_empty() {
             problems_total += problems.len();
             report.push((name.clone(), problems));
@@ -363,7 +451,7 @@ pub fn check(input: &Path, maps: &[String], names: NameMode, json: bool) -> Resu
             rsws.len()
         );
         println!(
-            "Not checked: textures used inside the models (.rsm), effects, and whether the files themselves are valid beyond GAT/GND headers."
+            "Not checked: effects, textures of the effects (.str), and whether the files are valid beyond what is read (GAT, GND header, RSM structure)."
         );
     }
     Ok(if problems_total == 0 { 0 } else { 3 })
