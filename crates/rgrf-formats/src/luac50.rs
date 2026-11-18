@@ -1,6 +1,6 @@
 //! Lua 5.0 bytecode (62 `.lub` of the kRO `data.grf` are in this older format): reading the chunk,
-//! checking its structure and a `luac -l` style listing. There is no decompiler for it (the opcodes
-//! and the jump shapes differ from 5.1); the listing is what the tools show.
+//! checking its structure, a `luac -l` style listing and the translation to the 5.1 form that the
+//! decompiler works on (`to_lua51`).
 //!
 //! Layout (checked against all 62 real files, each read to its last byte): header `ESC Lua`, `0x50`,
 //! endianness, sizes of int / size_t / instruction, bit widths of OP / A / B / C (6 / 8 / 9 / 9),
@@ -242,6 +242,72 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
         )));
     }
     Ok(Chunk { main })
+}
+
+/// Writes a 5.0 chunk in the layout of a 64-bit Lua 5.0 (int 4, size_t 8, instruction 8), so that
+/// such a Lua can load the client's 32-bit files (used by the verification tool `tools/lua-verify`).
+pub fn dump(chunk: &Chunk) -> Vec<u8> {
+    fn int(out: &mut Vec<u8>, v: usize) {
+        out.extend((v as u32).to_le_bytes());
+    }
+    // Size 0 would load as a NULL string; only the source may be NULL (it then takes the parent's).
+    fn string(out: &mut Vec<u8>, s: &[u8]) {
+        out.extend(((s.len() + 1) as u64).to_le_bytes());
+        out.extend(s);
+        out.push(0);
+    }
+    fn function(out: &mut Vec<u8>, f: &Function) {
+        if f.source.is_empty() {
+            out.extend(0u64.to_le_bytes());
+        } else {
+            string(out, &f.source);
+        }
+        int(out, f.line_defined as usize);
+        out.extend([f.upvalue_count, f.params, f.is_vararg, f.max_stack]);
+        int(out, f.lines.len());
+        for l in &f.lines {
+            int(out, *l as usize);
+        }
+        int(out, f.locals.len());
+        for l in &f.locals {
+            string(out, &l.name);
+            int(out, l.start as usize);
+            int(out, l.end as usize);
+        }
+        int(out, f.upvalue_names.len());
+        for n in &f.upvalue_names {
+            string(out, n);
+        }
+        int(out, f.constants.len());
+        for k in &f.constants {
+            match k {
+                Constant::Nil => out.push(0),
+                // 5.0 has no boolean constants; the reader never produces one
+                Constant::Bool(_) => out.push(0),
+                Constant::Number(v) => {
+                    out.push(3);
+                    out.extend(v.to_le_bytes());
+                }
+                Constant::Str(s) => {
+                    out.push(4);
+                    string(out, s);
+                }
+            }
+        }
+        int(out, f.protos.len());
+        for p in &f.protos {
+            function(out, p);
+        }
+        int(out, f.code.len());
+        for c in &f.code {
+            out.extend(u64::from(*c).to_le_bytes());
+        }
+    }
+    // ESC Lua, 5.0, little-endian, int 4, size_t 8, instruction 8, OP/A/B/C 6/8/9/9, number 8
+    let mut out = b"\x1bLua\x50\x01\x04\x08\x08\x06\x08\x09\x09\x08".to_vec();
+    out.extend(TEST_NUMBER_BITS.to_le_bytes());
+    function(&mut out, &chunk.main);
+    out
 }
 
 /// Structural check of every function: known opcodes, constant and function indices in range,
@@ -502,6 +568,18 @@ mod tests {
             b.extend(raw.to_le_bytes());
         }
         b
+    }
+
+    #[test]
+    fn dump_widens_sizes_and_instructions_for_64_bit_lua() {
+        let d = dump(&parse(&sample()).unwrap());
+        assert_eq!(&d[..14], b"\x1bLua\x50\x01\x04\x08\x08\x06\x08\x09\x09\x08");
+        // source as size_t 8 with terminator, and the three instructions as 8-byte words at the end
+        assert_eq!(&d[22..33], &[3, 0, 0, 0, 0, 0, 0, 0, b'@', b't', 0]);
+        let code = &d[d.len() - 28..];
+        assert_eq!(&code[..4], &le(3));
+        let return_op = u64::from(op(27, 0, 0, 1)).to_le_bytes();
+        assert_eq!(&code[20..], &return_op);
     }
 
     #[test]

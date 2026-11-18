@@ -4,7 +4,12 @@
 //! 2. running the original 5.1 bytecode and the decompiled source in a sandbox must give the same
 //!    outcome (what the script defined, and what its functions return for a few argument sets).
 //!
-//! usage: rgrf-lua-verify <data.grf> [--parse-only]   (exit code 1 when something differs)
+//! Lua 5.0 files are checked the same way with a real Lua 5.0 (`fetch-lua50.sh` builds it into
+//! ~/build/lua50; `$LUA50` points elsewhere); without it they only get the 5.1 parser check.
+//!
+//! usage: rgrf-lua-verify <data.grf> [--parse-only | --dump-only]   (exit code 1 when something differs)
+//! env: LV_ONLY=<name part>, LV_TRACE, LV_SHOW (print outcomes), LV_MUTATE (self-test),
+//!      LV_NOHOOK, LV_STEP=load|main
 //!
 //! The sandbox gives every undefined global a "proxy" value that can be indexed, called and used in
 //! arithmetic (so scripts that expect other scripts' tables run on), neutralises io/os/package,
@@ -16,12 +21,16 @@ use mlua::Lua;
 use mlua::chunk::ChunkMode;
 use rayon::prelude::*;
 use rgrf_core::{Archive, NameMode};
-use rgrf_formats::{luac, luadec};
+use rgrf_formats::{luac, luac50, luadec};
 
+/// The sandbox, valid Lua 5.0 and 5.1 (no `#`, no string methods, no `...` in expressions:
+/// `PACK` is filled in per version).
 const DRIVER: &str = r##"
+local pack = PACK
+local find = string.find
 local type, pairs, tostring, pcall, setmetatable, getmetatable, rawget, sort, concat, fmt =
   type, pairs, tostring, pcall, setmetatable, getmetatable, rawget, table.sort, table.concat, string.format
-local sethook, error, remove, ipairs = debug.sethook, error, table.remove, ipairs
+local sethook, error, ipairs = debug.sethook, error, ipairs
 local P = {}
 local function proxy() return P end
 setmetatable(P, {
@@ -39,12 +48,12 @@ local function ser(v, seen, depth)
   if t ~= "table" then return tostring(v) end
   if seen[v] or depth > 12 then return "<cycle>" end
   seen[v] = true
-  local keys = {}
-  for k in pairs(v) do keys[#keys + 1] = k end
+  local keys, n = {}, 0
+  for k in pairs(v) do n = n + 1; keys[n] = k end
   local function kstr(k) return k == P and "<P>" or (type(k) == "table" or type(k) == "function") and "<" .. type(k) .. ">" or type(k) .. ":" .. tostring(k) end
   sort(keys, function(a, b) return kstr(a) < kstr(b) end)
   local parts = {}
-  for i = 1, #keys do parts[i] = kstr(keys[i]) .. "=" .. ser(v[keys[i]], seen, depth + 1) end
+  for i = 1, n do parts[i] = kstr(keys[i]) .. "=" .. ser(v[keys[i]], seen, depth + 1) end
   seen[v] = nil
   return "{" .. concat(parts, ",") .. "}"
 end
@@ -59,37 +68,38 @@ function __rgrf_run(chunk)
   env.load, env.loadstring, env.print = P, P, function() end
   setmetatable(env, { __index = proxy })
   if not nohook then sethook(function() error("timeout", 0) end, "", 2000000) end
-  local out = {}
+  local out, n = {}, 1
   local ok, err = pcall(chunk)
   sethook()
-  out[#out + 1] = ok and "ran" or (tostring(err):find("timeout", 1, true) and "timeout" or "error")
-  local names = {}
+  out[1] = ok and "ran" or (find(tostring(err), "timeout", 1, true) and "timeout" or "error")
+  local names, m = {}, 0
   for k, v in pairs(env) do
-    if not std[k] then names[#names + 1] = k end
+    if not std[k] then m = m + 1; names[m] = k end
   end
   sort(names, function(a, b) return tostring(a) < tostring(b) end)
   for _, k in ipairs(names) do
-    out[#out + 1] = tostring(k) .. " = " .. ser(rawget(env, k), {}, 0)
+    n = n + 1
+    out[n] = tostring(k) .. " = " .. ser(rawget(env, k), {}, 0)
   end
-  if noprobe then sethook(); return concat(out, "\n") end
+  if noprobe then return concat(out, "\n") end
   local patterns = { {}, { P, P, P, P }, { 1, 2, 3, 4 }, { "a", "b", "c", "d" }, { false, false, false, false } }
   for _, k in ipairs(names) do
     local f = rawget(env, k)
     if type(f) == "function" then
-      for n, args in ipairs(patterns) do
+      for i, args in ipairs(patterns) do
         if not nohook then sethook(function() error("timeout", 0) end, "", 2000000) end
-        local r = { pcall(f, args[1], args[2], args[3], args[4]) }
+        local count, r = pack(pcall(f, args[1], args[2], args[3], args[4]))
         sethook()
-        local ok2 = remove(r, 1)
         local text
-        if ok2 then
+        if r[1] then
           local parts = {}
-          for i = 1, #r do parts[i] = ser(r[i], {}, 0) end
+          for i = 2, count do parts[i - 1] = ser(r[i], {}, 0) end
           text = "ok " .. concat(parts, ";")
         else
-          text = tostring(r[1]):find("timeout", 1, true) and "timeout" or "error"
+          text = find(tostring(r[2]), "timeout", 1, true) and "timeout" or "error"
         end
-        out[#out + 1] = tostring(k) .. "#" .. n .. " -> " .. text
+        n = n + 1
+        out[n] = tostring(k) .. "#" .. i .. " -> " .. text
       end
     end
   end
@@ -97,17 +107,33 @@ function __rgrf_run(chunk)
 end
 "##;
 
+const PACK51: &str = r##"function(...) return select("#", ...), { ... } end"##;
+const PACK50: &str = "function(...) return arg.n, arg end";
+
+/// Lua 5.0 runs as a separate program (a 64-bit `lua` built from lua.org's 5.0.3 sources, see
+/// `fetch-lua50.sh`); its C symbols would clash with the 5.1 that mlua links in.
+const DRIVER50_MAIN: &str = r#"
+local write, stderr, exit, mode, path = io.write, io.stderr, os.exit, arg[1], arg[2]
+local chunk, err = loadfile(path)
+if not chunk then stderr:write(tostring(err)); exit(3) end
+if mode == "parse" then exit(0) end
+if mode == "dump" then write(string.dump(chunk)); exit(0) end
+write(__rgrf_run(chunk))
+"#;
+
 enum Code<'a> {
     Binary(&'a [u8]),
     Text(&'a str),
 }
 
-/// Runs `code` in a fresh sandboxed Lua and returns the serialised outcome.
-fn run(code: &Code) -> Result<String, String> {
+/// Runs `code` in a fresh sandboxed Lua 5.1 and returns the serialised outcome.
+fn run51(code: &Code) -> Result<String, String> {
     // SAFETY: a test-only Lua with the debug library (for the instruction-count hook) and binary
     // chunk loading; the sandbox neutralises everything that could touch the machine.
     let lua = unsafe { Lua::unsafe_new() };
-    lua.load(DRIVER).exec().map_err(|e| e.to_string())?;
+    lua.load(DRIVER.replace("PACK", PACK51))
+        .exec()
+        .map_err(|e| e.to_string())?;
     let function = match code {
         Code::Binary(b) => lua.load(*b).set_mode(ChunkMode::Binary).into_function(),
         Code::Text(t) => lua
@@ -132,15 +158,97 @@ fn run(code: &Code) -> Result<String, String> {
     let driver: mlua::Function = lua.globals().get("__rgrf_run").map_err(|e| e.to_string())?;
     driver
         .call::<mlua::LuaString>(function)
-        .map(|s| {
-            let bytes = s.as_bytes();
-            match code {
-                // the client's scripts hold CP949 bytes; the decompiled text holds the same characters as UTF-8
-                Code::Binary(_) => decode_segments(&bytes),
-                Code::Text(_) => String::from_utf8_lossy(&bytes).into_owned(),
-            }
-        })
+        .map(|s| outcome_text(code, &s.as_bytes()))
         .map_err(|e| e.to_string())
+}
+
+fn outcome_text(code: &Code, bytes: &[u8]) -> String {
+    match code {
+        // the client's scripts hold CP949 bytes; the decompiled text holds the same characters as UTF-8
+        Code::Binary(_) => decode_segments(bytes),
+        Code::Text(_) => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// The Lua 5.0 program: `$LUA50`, else the build of `fetch-lua50.sh`.
+fn lua50() -> Option<std::path::PathBuf> {
+    let p = std::env::var_os("LUA50")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| std::path::Path::new(&h).join("build/lua50/lua-5.0.3/bin/lua"))
+        })?;
+    p.is_file().then_some(p)
+}
+
+/// Runs the 5.0 program on `code` (`mode`: "run", "parse" or "dump") and returns its output.
+fn run50(lua: &std::path::Path, mode: &str, code: &Code) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!("rgrf-lua-verify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let (driver, chunk) = (dir.join(format!("d{n}.lua")), dir.join(format!("c{n}")));
+    let mut prelude = DRIVER.replace("PACK", PACK50);
+    if std::env::var_os("LV_NOHOOK").is_some() {
+        prelude.insert_str(0, "__rgrf_nohook = true\n");
+    }
+    std::fs::write(&driver, prelude + DRIVER50_MAIN).map_err(|e| e.to_string())?;
+    let bytes = match code {
+        Code::Binary(b) => b.to_vec(),
+        Code::Text(t) => t.as_bytes().to_vec(),
+    };
+    std::fs::write(&chunk, bytes).map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new(lua)
+        .arg(&driver)
+        .arg(mode)
+        .arg(&chunk)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdout = child.stdout.take().ok_or("no stdout")?;
+    let reader = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        stdout.read_to_end(&mut v).map(|_| v)
+    });
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+            break s;
+        }
+        if start.elapsed() > std::time::Duration::from_secs(120) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Lua 5.0 did not finish within 120 s".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let out = reader
+        .join()
+        .map_err(|_| "reader thread failed")?
+        .map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&driver);
+    let _ = std::fs::remove_file(&chunk);
+    if status.success() {
+        return Ok(out);
+    }
+    let mut err = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut err);
+    }
+    Err(format!("Lua 5.0 {status}: {}", err.trim()))
+}
+
+/// Runs `code` in the sandbox of the given version.
+fn run(version: u8, code: &Code) -> Result<String, String> {
+    if version == 0x50 {
+        let lua = lua50().ok_or("no Lua 5.0 (see fetch-lua50.sh)")?;
+        run50(&lua, "run", code).map(|b| outcome_text(code, &b))
+    } else {
+        run51(code)
+    }
 }
 
 /// Decodes the output of the original bytecode the way the decompiler shows strings: text between
@@ -189,11 +297,27 @@ fn decompile(data: &[u8]) -> Option<String> {
     Some(luadec::decompile(&chunk, &names))
 }
 
-/// The decompiled source of every compiled file (5.0 and 5.1) is accepted by the real Lua parser.
+/// The decompiled source of every compiled file is accepted by the real parser of its version
+/// (5.0 files by Lua 5.0 when it is there, else by 5.1).
 fn parse_check(files: &[Entry]) -> usize {
     let lua = unsafe { Lua::unsafe_new() };
-    let mut bad = 0;
-    for f in files {
+    let l50 = lua50();
+    let rejected: Vec<String> = files
+        .par_iter()
+        .filter_map(|f| {
+            let text = decompile(&f.data).unwrap_or_default();
+            let result = match (&l50, f.data[4]) {
+                (Some(l), 0x50) => run50(l, "parse", &Code::Text(&text)).map(drop),
+                _ => Ok(()),
+            };
+            result.err().map(|e| format!("REJECTED {}: {e}", f.name))
+        })
+        .collect();
+    let mut bad = rejected.len();
+    for r in &rejected {
+        println!("{r}");
+    }
+    for f in files.iter().filter(|f| f.data[4] != 0x50 || l50.is_none()) {
         let text = decompile(&f.data).unwrap_or_default();
         if let Err(e) = lua
             .load(text.as_bytes())
@@ -204,19 +328,26 @@ fn parse_check(files: &[Entry]) -> usize {
             println!("REJECTED {}: {e}", f.name);
         }
     }
+    let n50 = files.iter().filter(|f| f.data[4] == 0x50).count();
     println!(
-        "parse check: {} of {} decompiled files accepted by real Lua",
+        "parse check: {} of {} decompiled files accepted by real Lua ({} 5.1 files by Lua 5.1, {n50} 5.0 files by Lua {})",
         files.len() - bad,
-        files.len()
+        files.len(),
+        files.len() - n50,
+        if l50.is_some() {
+            "5.0"
+        } else {
+            "5.1 (no Lua 5.0 found)"
+        }
     );
     bad
 }
 
 /// Running the original 5.1 bytecode and the decompiled source gives the same outcome.
 fn behaviour_check(files: &[Entry]) -> usize {
-    let results: Vec<(String, Result<(), String>)> = files
+    let results: Vec<(String, u8, Result<(), String>)> = files
         .par_iter()
-        .filter(|f| f.data.get(4) == Some(&0x51))
+        .filter(|f| f.data[4] == 0x51 || lua50().is_some())
         .filter(|f| {
             std::env::var("LV_ONLY").is_ok_and(|o| f.name.contains(&o))
                 || std::env::var_os("LV_ONLY").is_none()
@@ -226,8 +357,12 @@ fn behaviour_check(files: &[Entry]) -> usize {
                 eprintln!("running {}", f.name);
             }
             let verdict = (|| {
-                let chunk = luac::parse(&f.data).map_err(|e| e.to_string())?;
-                let original = luac::dump(&chunk);
+                let version = f.data[4];
+                let original = if version == 0x50 {
+                    luac50::dump(&luac50::parse(&f.data).map_err(|e| e.to_string())?)
+                } else {
+                    luac::dump(&luac::parse(&f.data).map_err(|e| e.to_string())?)
+                };
                 let text = decompile(&f.data).ok_or("cannot decompile")?;
                 // self-test: a deliberately wrong decompilation must be noticed
                 let text = if std::env::var_os("LV_MUTATE").is_some() {
@@ -241,11 +376,14 @@ fn behaviour_check(files: &[Entry]) -> usize {
                 if trace {
                     eprintln!("  original {}", f.name);
                 }
-                let a = run(&Code::Binary(&original))?;
+                let a = run(version, &Code::Binary(&original))?;
                 if trace {
                     eprintln!("  decompiled {}", f.name);
                 }
-                let b = run(&Code::Text(&text))?;
+                let b = run(version, &Code::Text(&text))?;
+                if std::env::var_os("LV_SHOW").is_some() {
+                    eprintln!("{}:\n{}", f.name, a.chars().take(1500).collect::<String>());
+                }
                 if a == b {
                     return Ok(());
                 }
@@ -276,16 +414,20 @@ fn behaviour_check(files: &[Entry]) -> usize {
             if std::env::var_os("LV_TRACE").is_some() {
                 eprintln!("done {}", f.name);
             }
-            (f.name.clone(), verdict)
+            (f.name.clone(), f.data[4], verdict)
         })
         .collect();
-    let bad = results.iter().filter(|(_, r)| r.is_err()).count();
-    println!(
-        "behaviour check: {} 5.1 files, {} behave the same, {bad} differ",
-        results.len(),
-        results.len() - bad
-    );
-    for (n, r) in results.iter().filter(|(_, r)| r.is_err()) {
+    let bad = results.iter().filter(|(_, _, r)| r.is_err()).count();
+    for (label, v) in [("5.1", 0x51), ("5.0", 0x50)] {
+        let of: Vec<_> = results.iter().filter(|(_, ver, _)| *ver == v).collect();
+        let differ = of.iter().filter(|(_, _, r)| r.is_err()).count();
+        println!(
+            "behaviour check: {} {label} files, {} behave the same, {differ} differ",
+            of.len(),
+            of.len() - differ
+        );
+    }
+    for (n, _, r) in results.iter().filter(|(_, _, r)| r.is_err()) {
         println!("DIFF {n}: {}", r.as_ref().unwrap_err());
     }
     bad
@@ -336,13 +478,42 @@ fn dump_roundtrip(files: &[Entry]) -> usize {
         "dump round trip: {} of {total} 5.1 files identical after Lua loads and writes them",
         total - bad
     );
+    if let Some(l) = lua50() {
+        let of: Vec<&Entry> = files.iter().filter(|f| f.data[4] == 0x50).collect();
+        let differ: Vec<String> = of
+            .par_iter()
+            .filter_map(|f| {
+                let ours = luac50::dump(&luac50::parse(&f.data).ok()?);
+                match run50(&l, "dump", &Code::Binary(&ours)) {
+                    Ok(b) if b == ours => None,
+                    Ok(b) => Some(format!(
+                        "DUMP DIFFERS {} (first difference at {:?}, {} / {} bytes)",
+                        f.name,
+                        b.iter().zip(&ours).position(|(x, y)| x != y),
+                        b.len(),
+                        ours.len()
+                    )),
+                    Err(e) => Some(format!("DUMP REJECTED {}: {e}", f.name)),
+                }
+            })
+            .collect();
+        for d in &differ {
+            println!("{d}");
+        }
+        println!(
+            "dump round trip: {} of {} 5.0 files identical after Lua 5.0 loads and writes them",
+            of.len() - differ.len(),
+            of.len()
+        );
+        bad += differ.len();
+    }
     bad
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(grf) = args.iter().find(|a| !a.starts_with("--")) else {
-        eprintln!("usage: rgrf-lua-verify <data.grf> [--parse-only]");
+        eprintln!("usage: rgrf-lua-verify <data.grf> [--parse-only | --dump-only]");
         std::process::exit(2);
     };
     let files = compiled_files(grf);
