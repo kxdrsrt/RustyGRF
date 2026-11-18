@@ -130,3 +130,46 @@ fn previews_of_real_files() {
         Preview::Text { .. } | Preview::Message { .. }
     ));
 }
+
+/// Editing a real 80 MB archive: one file replaced, one added, one removed; the rest is copied.
+#[test]
+fn edits_a_real_archive() {
+    let Some(base) = std::env::var_os("RGRF_TESTDATA") else {
+        eprintln!("SKIPPED: RGRF_TESTDATA is not set");
+        return;
+    };
+    let src = PathBuf::from(base).join("0 GRFs/reference/core-before-translation-2026-11-17.grf");
+    assert!(src.exists(), "missing test archive {}", src.display());
+    let dir = std::env::temp_dir().join(format!("rgrf-gui-edit-real-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("new.txt");
+    std::fs::write(&file, "edited by RustyGRF").unwrap();
+
+    let mut s = Session::open(&src).unwrap();
+    let total = s.info().entries;
+    let first = s.page(0, 2);
+    s.stage_replace(first[0].index, &file).unwrap();
+    s.stage_remove(&[first[1].index]).unwrap();
+    s.stage_add("data\\rustygrf_test\\new.txt", &file).unwrap();
+    let t = Instant::now();
+    let out = dir.join("edited.grf");
+    let r = rustygrf_gui_lib::backend::save_edited(
+        &s.edit_plan().unwrap(),
+        &out,
+        false,
+        &rgrf_core::progress::Control::default(),
+    )
+    .unwrap();
+    eprintln!("edit of {total} entries took {:?}: {r:?}", t.elapsed());
+    assert_eq!((r.added, r.replaced, r.removed), (1, 1, 1));
+    assert_eq!(r.files, total, "one added, one removed");
+    assert!(r.verified);
+    let before = std::fs::metadata(&src).unwrap().len();
+    assert!(
+        r.file_bytes < before + 100_000,
+        "unchanged entries keep their streams: {before} -> {}",
+        r.file_bytes
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

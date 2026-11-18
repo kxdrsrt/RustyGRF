@@ -26,6 +26,15 @@
     <button id="btn-verify" disabled>Verify</button>
   </header>
 
+  <div class="toolbar editbar" aria-label="Edit">
+    <span class="muted">Edit</span>
+    <button id="btn-replace" disabled title="Replace the selected entry with a file from disk">Replace…</button>
+    <button id="btn-add" disabled title="Add a file from disk under a path in the archive">Add file…</button>
+    <button id="btn-remove" disabled title="Leave the selected entry out of the saved archive">Remove</button>
+    <span class="spacer"></span>
+    <button id="btn-changes" disabled title="Review and save the pending changes as a new archive">Changes (0)…</button>
+  </div>
+
   <main>
     <section id="list-pane" aria-label="Entries">
       <div id="empty" class="empty">

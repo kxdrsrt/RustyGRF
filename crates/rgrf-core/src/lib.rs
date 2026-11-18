@@ -4,6 +4,7 @@ pub mod archive;
 pub mod build;
 pub mod codec;
 pub mod container;
+pub mod edit;
 pub mod encode;
 pub mod error;
 pub mod extract;

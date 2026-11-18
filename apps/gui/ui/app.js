@@ -18,6 +18,7 @@ const S = {
   loading: false,
   pending: false,
   previewToken: 0,
+  pending: [], // changes waiting to be saved
 };
 
 function el(tag, attrs = {}, ...children) {
@@ -96,7 +97,9 @@ async function openPath(path) {
   document.title = `${S.info.file_name} - RustyGRF`;
   $("empty").hidden = true;
   $("viewport").hidden = false;
-  for (const id of ["search", "btn-extract", "btn-verify", "names"]) $(id).disabled = false;
+  for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes"]) $(id).disabled = false;
+  S.pending = [];
+  updateEditBar();
   $("search").value = "";
   $("names").value = "cp949";
   S.query = "";
@@ -111,6 +114,7 @@ async function runSearch(q) {
   S.query = q;
   S.total = await invoke("search", { query: q });
   S.selected = null;
+  updateEditBar();
   S.rows = [];
   S.offset = 0;
   $("spacer").style.height = `${S.total * ROW_H}px`;
@@ -194,6 +198,7 @@ function select(pos, scrollIntoView = true) {
   if (S.total === 0) return;
   pos = Math.max(0, Math.min(S.total - 1, pos));
   S.selected = pos;
+  updateEditBar();
   const vp = $("viewport");
   if (scrollIntoView) {
     const top = pos * ROW_H;
@@ -325,6 +330,102 @@ async function doExtract() {
       if (!again) return;
       rename = true;
     }
+  }
+}
+
+// ---------- editing (changes are collected and saved as a new archive) ----------
+
+function updateEditBar() {
+  $("btn-replace").disabled = S.selected == null;
+  $("btn-remove").disabled = !S.info;
+  $("btn-changes").textContent = `Changes (${S.pending.length})…`;
+}
+
+function setPending(rows) {
+  S.pending = rows;
+  updateEditBar();
+}
+
+async function doReplace() {
+  const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  if (!sel) return;
+  const file = await T.dialog.open({ multiple: false, directory: false, title: `File that replaces ${sel.name}` });
+  if (!file) return;
+  try {
+    setPending(await invoke("stage_replace", { index: sel.index, file }));
+    setStatus(`Replacement staged for ${sel.name}; save it with Changes…`);
+  } catch (e) {
+    await note("Could not stage the replacement", errText(e), true);
+  }
+}
+
+async function doAdd() {
+  const file = await T.dialog.open({ multiple: false, directory: false, title: "File to add" });
+  if (!file) return;
+  const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  const folder = sel ? sel.name.slice(0, sel.name.lastIndexOf("\\") + 1) : "data\\";
+  const input = el("input", { type: "text", class: "field", value: folder + file.split(/[\\/]/).pop(), spellcheck: "false" });
+  const go = await ask("Add file", [el("p", { text: "Path inside the archive (an existing path is replaced):" }), input], [{ label: "Add", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  try {
+    setPending(await invoke("stage_add", { path: input.value, file }));
+    setStatus(`Staged ${input.value}; save it with Changes…`);
+  } catch (e) {
+    await note("Could not stage the file", errText(e), true);
+  }
+}
+
+async function doRemove() {
+  const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  const buttons = [];
+  if (sel) buttons.push({ label: "Selected entry", value: "one", primary: true });
+  buttons.push({ label: `All ${fmtNum(S.total)} in the list`, value: "all", primary: !sel });
+  buttons.push({ label: "Cancel", value: null });
+  const what = await ask("Remove from the saved archive", el("p", { text: "Nothing is deleted now: the entries are left out when you save the changes as a new archive." }), buttons);
+  if (!what) return;
+  try {
+    setPending(await invoke("stage_remove", { indices: what === "one" ? [sel.index] : [] }));
+    setStatus(`${what === "one" ? "1 entry" : `${fmtNum(S.total)} entries`} marked for removal`);
+  } catch (e) {
+    await note("Could not stage the removal", errText(e), true);
+  }
+}
+
+async function doChanges() {
+  if (!S.pending.length) {
+    await note("Changes", "No pending changes. Use Replace…, Add file… or Remove; the open archive is never modified, the result is saved as a new archive.");
+    return;
+  }
+  const list = el("ul", { class: "pending" }, ...S.pending.slice(0, 500).map((p) => el("li", {}, el("span", { class: "kind", text: p.kind }), el("span", { text: p.name }), p.file ? el("span", { class: "file", text: p.file }) : null)));
+  const more = S.pending.length > 500 ? el("p", { class: "muted", text: `… and ${fmtNum(S.pending.length - 500)} more` }) : null;
+  const act = await ask(`${fmtNum(S.pending.length)} pending change(s)`, [list, more], [{ label: "Save as new archive…", value: "save", primary: true }, { label: "Discard all", value: "discard" }, { label: "Close", value: null }]);
+  if (act === "discard") {
+    await invoke("discard_pending");
+    setPending([]);
+    setStatus("Changes discarded");
+  } else if (act === "save") {
+    await saveEdited();
+  }
+}
+
+async function saveEdited() {
+  const base = S.info.file_name.replace(/\.[^.]+$/, "");
+  const dst = await T.dialog.save({ title: "Save changed archive as", defaultPath: `${base}-edited.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  if (!dst) return;
+  const job = showJob("Saving archive");
+  setStatus(`Saving ${dst} …`);
+  try {
+    const r = await invoke("save_edited", { dst });
+    job.close();
+    setStatus(`Saved ${dst}`);
+    const body = [el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}: ${fmtNum(r.added)} added, ${fmtNum(r.replaced)} replaced, ${fmtNum(r.removed)} removed.` }), el("p", { class: "muted", text: "The original archive was not changed. The pending changes are kept until you discard them." })];
+    const open = await ask("Archive saved", body, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    if (open) await openPath(dst);
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? "Save cancelled" : "Save failed");
+    await note(cancelled ? "Save cancelled" : "Could not save", cancelled ? "Nothing was written." : errText(e), !cancelled);
   }
 }
 
@@ -473,6 +574,10 @@ let searchTimer = 0;
 $("btn-open").addEventListener("click", chooseArchive);
 $("btn-open-2").addEventListener("click", chooseArchive);
 $("btn-merge").addEventListener("click", doMerge);
+$("btn-replace").addEventListener("click", doReplace);
+$("btn-add").addEventListener("click", doAdd);
+$("btn-remove").addEventListener("click", doRemove);
+$("btn-changes").addEventListener("click", doChanges);
 $("btn-build").addEventListener("click", doBuild);
 $("btn-extract").addEventListener("click", doExtract);
 $("btn-verify").addEventListener("click", doVerify);

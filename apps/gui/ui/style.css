@@ -43,11 +43,17 @@ html, body {
   overflow: hidden;
 }
 
-body { display: grid; grid-template-rows: auto 1fr auto; }
+body { display: grid; grid-template-rows: auto auto 1fr auto; }
 
 .muted { color: var(--muted); }
 .spacer { flex: 1; }
 
+.editbar { padding-top: 4px; padding-bottom: 4px; }
+.pending { margin: 10px 0; padding: 0; list-style: none; max-height: 40vh; overflow: auto; font-size: 13px; }
+.pending li { padding: 3px 0; display: grid; grid-template-columns: 70px 1fr; gap: 8px; }
+.pending .kind { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+.pending .file { grid-column: 2; color: var(--muted); font-size: 12px; }
+.field { width: 100%; box-sizing: border-box; }
 .toolbar {
   display: flex;
   align-items: center;

@@ -10,6 +10,7 @@ Desktop-Oberfläche auf dem Rust-Kern (`rgrf-core`, `rgrf-formats`). Eigenes Car
 - Startpfad: `rustygrf-gui <datei.grf>` öffnet das Archiv direkt (Grundlage für „Öffnen mit“).
 - **Build…** packt einen Ordner zu einer GRF (zlib/0x200 als Standard, Zopfli und LZMA nur ausdrücklich gewählt), mit Fortschrittsbalken, Abbrechen und anschließender Prüfung gegen die Dateien auf der Platte. Abbruch hinterlässt keine Datei. Ein Auftrag zur Zeit.
 - **Merge…** führt mehrere GRFs zu einer neuen zusammen (Reihenfolge = Priorität, per ↑/↓ änderbar; „Replace only“: letzte GRF ist die Basis, die anderen fügen keine neuen Pfade hinzu), mit Fortschritt, Abbruch, Prüfung und Statistik je Eingabe. Die Eingaben bleiben unverändert, die Ausgabe darf keine der Eingaben sein.
+- **Edit-Leiste** (Replace…, Add file…, Remove, Changes (n)…): Änderungen werden gesammelt und mit „Save as new archive…“ in eine **neue** GRF geschrieben, die geöffnete bleibt unberührt. Unveränderte Einträge behalten ihre Streams (kein Neukomprimieren, die GRF wächst nicht). **Gemessen** an einer echten 88-MB-GRF (4.661 Einträge, je 1 ersetzt/hinzugefügt/entfernt): 60 ms, Ergebnis 86,7 MB, geprüft. Gleicher Pfad mehrfach → die letzte Änderung zählt. Kern: `rgrf_core::edit::apply`.
 - Einziges npm-Paket: `@tauri-apps/cli` (Entwicklungsabhängigkeit).
 
 ## Starten und Bauen

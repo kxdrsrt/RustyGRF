@@ -149,6 +149,8 @@ pub struct SourceStats {
     pub markers_skipped: usize,
     /// Files not taken because `replace_only` is set and the base archive does not have the path.
     pub ignored_new: usize,
+    /// Files left out because their path is in the exclude set of [`merge_excluding`].
+    pub excluded: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +189,19 @@ pub fn merge_with<R: ReadAt>(
     replace_only: bool,
     ctl: &Control,
 ) -> Result<MergeReport> {
+    merge_excluding(sources, dst, opts, replace_only, &HashSet::new(), ctl)
+}
+
+/// Like [`merge_with`], and paths whose [`GrfPath::key`] is in `exclude` are left out of every
+/// source (how `edit` removes files).
+pub fn merge_excluding<R: ReadAt>(
+    sources: &[&Archive<R>],
+    dst: &Path,
+    opts: &RepackOptions,
+    replace_only: bool,
+    exclude: &HashSet<Vec<u8>>,
+    ctl: &Control,
+) -> Result<MergeReport> {
     if sources.is_empty() {
         return Err(Error::InvalidInput(
             "merge needs at least one archive".into(),
@@ -206,6 +221,10 @@ pub fn merge_with<R: ReadAt>(
                 continue;
             }
             stats[src].files += 1;
+            if exclude.contains(&e.name.key()) {
+                stats[src].excluded += 1;
+                continue;
+            }
             if replace_only && src + 1 != sources.len() && !at.contains_key(&e.name.key()) {
                 stats[src].ignored_new += 1;
                 continue;

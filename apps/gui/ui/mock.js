@@ -2,6 +2,7 @@
 // scrolling). It is only active when `window.__TAURI__` is missing, so the app never uses it.
 if (!window.__TAURI__) {
   const listeners = {};
+  let pendingRows = [];
   const exts = ["spr", "act", "bmp", "txt", "gat", "rsw", "rsm", "wav", "lub", "pal", "tga"];
   const all = [];
   for (let i = 0; i < 24000; i++) {
@@ -88,6 +89,30 @@ if (!window.__TAURI__) {
               listeners["job-progress"]?.({ payload: { done, total: 100 } });
             }
             return { files: 3, file_bytes: 2048, verified: true, damaged: 0, sources: a.req.sources.map((path, i) => ({ path, files: 2, used: i ? 1 : 2, overridden: i ? 1 : 0, ignored_new: 0 })) };
+          }
+          case "stage_replace":
+            pendingRows = pendingRows.filter((p) => p.name !== all[a.index].name);
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: a.file });
+            return pendingRows;
+          case "stage_add":
+            pendingRows.push({ kind: "add", name: a.path.replace(/\//g, "\\"), file: a.file });
+            return pendingRows;
+          case "stage_remove":
+            for (const i of a.indices) pendingRows.push({ kind: "remove", name: all[i].name, file: null });
+            return pendingRows;
+          case "pending":
+            return pendingRows;
+          case "discard_pending":
+            pendingRows = [];
+            return null;
+          case "save_edited": {
+            for (const done of [30, 100]) {
+              await new Promise((r) => setTimeout(r, 300));
+              listeners["job-progress"]?.({ payload: { done, total: 100 } });
+            }
+            const n = pendingRows.length;
+            pendingRows = [];
+            return { added: n, replaced: 0, removed: 0, files: all.length, file_bytes: 4096, verified: true };
           }
           case "cancel_job":
             return null;

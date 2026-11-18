@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use backend::{
-    ArchiveInfo, BuildRequest, BuildSummary, Details, ExtractSummary, MergeRequest, MergeSummary,
-    Preview, Row, Session, VerifySummary,
+    ArchiveInfo, BuildRequest, BuildSummary, Details, EditSummary, ExtractSummary, MergeRequest,
+    MergeSummary, PendingRow, Preview, Row, Session, VerifySummary,
 };
 use rgrf_core::progress::{CancelToken, Control, Progress};
 use serde::Serialize;
@@ -182,6 +182,67 @@ async fn merge_archives(
 }
 
 #[tauri::command]
+async fn stage_replace(
+    state: State<'_, AppState>,
+    index: usize,
+    file: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_replace(index, &PathBuf::from(file))?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn stage_add(state: State<'_, AppState>, path: String, file: String) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_add(&path, &PathBuf::from(file))?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Removes the given entries, or everything in the current search when `indices` is empty.
+#[tauri::command]
+async fn stage_remove(state: State<'_, AppState>, indices: Vec<usize>) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        let list = if indices.is_empty() {
+            s.filtered().to_vec()
+        } else {
+            indices
+        };
+        s.stage_remove(&list)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn pending(state: State<'_, AppState>) -> Res<Vec<PendingRow>> {
+    with_session(&state, |s| Ok(s.pending())).await
+}
+
+#[tauri::command]
+async fn discard_pending(state: State<'_, AppState>) -> Res<()> {
+    with_session(&state, |s| {
+        s.discard_pending();
+        Ok(())
+    })
+    .await
+}
+
+/// Writes the pending changes as a new archive; the open archive is not touched.
+#[tauri::command]
+async fn save_edited(app: AppHandle, state: State<'_, AppState>, dst: String) -> Res<EditSummary> {
+    let plan = with_session(&state, |s| s.edit_plan()).await?;
+    run_job(app, &state, move |ctl| {
+        backend::save_edited(&plan, &PathBuf::from(dst), true, ctl)
+    })
+    .await
+}
+
+#[tauri::command]
 fn cancel_job(state: State<'_, AppState>) {
     if let Ok(job) = state.job.lock()
         && let Some(t) = job.as_ref()
@@ -214,6 +275,12 @@ pub fn run() {
             verify,
             build_archive,
             merge_archives,
+            stage_replace,
+            stage_add,
+            stage_remove,
+            pending,
+            discard_pending,
+            save_edited,
             cancel_job,
             startup_path
         ])

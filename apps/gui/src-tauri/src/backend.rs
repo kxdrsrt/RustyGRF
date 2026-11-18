@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_core::build::{BuildOptions, build};
+use rgrf_core::edit::{self, Edit};
 use rgrf_core::encode::Method;
 use rgrf_core::extract::{ExtractOptions, OnCollision, extract};
 use rgrf_core::merge::merge_with;
@@ -36,6 +37,52 @@ pub struct Session {
     mode: NameMode,
     names: Vec<String>,
     filtered: Vec<usize>,
+    pending: Vec<Change>,
+}
+
+/// A change waiting to be saved into a new archive (the open archive is never modified).
+#[derive(Debug, Clone)]
+enum Change {
+    /// The file's content becomes the content of `name` (a replacement or a new path).
+    Put {
+        name: GrfPath,
+        file: PathBuf,
+    },
+    Remove {
+        name: GrfPath,
+    },
+}
+
+impl Change {
+    fn name(&self) -> &GrfPath {
+        match self {
+            Self::Put { name, .. } | Self::Remove { name } => name,
+        }
+    }
+}
+
+#[derive(Serialize, Debug)]
+pub struct PendingRow {
+    /// `replace`, `add` or `remove`
+    pub kind: &'static str,
+    pub name: String,
+    pub file: Option<String>,
+}
+
+/// What a save needs, without holding the open session.
+pub struct EditPlan {
+    src: PathBuf,
+    changes: Vec<Change>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EditSummary {
+    pub added: usize,
+    pub replaced: usize,
+    pub removed: usize,
+    pub files: usize,
+    pub file_bytes: u64,
+    pub verified: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -184,6 +231,52 @@ pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, 
             .iter()
             .map(|s| format!("{}: {}", s.path.display(), s.reason))
             .collect(),
+    })
+}
+
+fn check_file(file: &Path) -> Result<(), String> {
+    let meta = std::fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} is not a file", file.display()));
+    }
+    if meta.len() > u64::from(u32::MAX) {
+        return Err(format!("{} is larger than 4 GiB", file.display()));
+    }
+    Ok(())
+}
+
+/// Writes the pending changes as a new archive and verifies it; the source stays as it is.
+pub fn save_edited(
+    plan: &EditPlan,
+    dst: &Path,
+    overwrite: bool,
+    ctl: &Control,
+) -> Result<EditSummary, String> {
+    let src = Archive::open(&plan.src).map_err(|e| format!("{}: {e}", plan.src.display()))?;
+    let mut edits = Vec::with_capacity(plan.changes.len());
+    for c in &plan.changes {
+        edits.push(match c {
+            Change::Put { name, file } => Edit::Put {
+                name: name.clone(),
+                data: std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
+            },
+            Change::Remove { name } => Edit::Remove { name: name.clone() },
+        });
+    }
+    // unchanged entries keep their streams, so the archive does not grow or lose its compression
+    let opts = RepackOptions {
+        overwrite,
+        copy_streams: true,
+        ..RepackOptions::default()
+    };
+    let r = edit::apply(&src, &plan.src, dst, &edits, &opts, ctl).map_err(|e| e.to_string())?;
+    Ok(EditSummary {
+        added: r.added,
+        replaced: r.replaced,
+        removed: r.removed,
+        files: r.merge.repack.files,
+        file_bytes: r.merge.repack.output_file_len,
+        verified: r.merge.repack.verified,
     })
 }
 
@@ -361,6 +454,99 @@ impl Session {
             mode,
             names,
             filtered,
+            pending: Vec::new(),
+        })
+    }
+
+    fn stage(&mut self, change: Change) {
+        let key = change.name().key();
+        self.pending.retain(|c| c.name().key() != key);
+        self.pending.push(change);
+    }
+
+    fn entry_name(&self, index: usize) -> Result<GrfPath, String> {
+        let e = self
+            .arc
+            .entries()
+            .get(index)
+            .ok_or_else(|| format!("no entry {index}"))?;
+        if e.is_marker() {
+            return Err("this entry is an empty marker".into());
+        }
+        Ok(e.name.clone())
+    }
+
+    /// The content of entry `index` will be the content of `file`.
+    pub fn stage_replace(&mut self, index: usize, file: &Path) -> Result<(), String> {
+        let name = self.entry_name(index)?;
+        check_file(file)?;
+        self.stage(Change::Put {
+            name,
+            file: file.to_path_buf(),
+        });
+        Ok(())
+    }
+
+    /// Adds `file` under the archive path `path` (or replaces the entry that has it).
+    pub fn stage_add(&mut self, path: &str, file: &Path) -> Result<(), String> {
+        let text = path.trim().replace('/', "\\");
+        if text.is_empty() || text.ends_with('\\') {
+            return Err("enter the path inside the archive, e.g. data\\texture\\a.bmp".into());
+        }
+        let name = GrfPath::from_display(&text, self.mode)
+            .ok_or("the path has characters that this name mode cannot write")?;
+        check_file(file)?;
+        self.stage(Change::Put {
+            name,
+            file: file.to_path_buf(),
+        });
+        Ok(())
+    }
+
+    pub fn stage_remove(&mut self, indices: &[usize]) -> Result<usize, String> {
+        let names = indices
+            .iter()
+            .map(|&i| self.entry_name(i))
+            .collect::<Result<Vec<_>, _>>()?;
+        for name in &names {
+            self.stage(Change::Remove { name: name.clone() });
+        }
+        Ok(names.len())
+    }
+
+    pub fn discard_pending(&mut self) {
+        self.pending.clear();
+    }
+
+    pub fn pending(&self) -> Vec<PendingRow> {
+        self.pending
+            .iter()
+            .map(|c| match c {
+                Change::Put { name, file } => PendingRow {
+                    kind: if self.arc.find(name).is_some() {
+                        "replace"
+                    } else {
+                        "add"
+                    },
+                    name: name.display(self.mode),
+                    file: Some(file.display().to_string()),
+                },
+                Change::Remove { name } => PendingRow {
+                    kind: "remove",
+                    name: name.display(self.mode),
+                    file: None,
+                },
+            })
+            .collect()
+    }
+
+    pub fn edit_plan(&self) -> Result<EditPlan, String> {
+        if self.pending.is_empty() {
+            return Err("there are no changes to save".into());
+        }
+        Ok(EditPlan {
+            src: self.path.clone(),
+            changes: self.pending.clone(),
         })
     }
 
@@ -1020,6 +1206,69 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stages_edits_and_saves_a_new_archive() {
+        let dir = tmp("edit");
+        let src = dir.join("src/data");
+        fs::create_dir_all(&src).unwrap();
+        for (n, c) in [("a.txt", "old a"), ("b.txt", "b"), ("c.txt", "c")] {
+            fs::write(src.join(n), c).unwrap();
+        }
+        let grf = dir.join("in.grf");
+        let build_req = BuildRequest {
+            src: dir.join("src"),
+            dst: grf.clone(),
+            method: "zlib".into(),
+            format: "0x200".into(),
+            dedupe: false,
+            overwrite: false,
+        };
+        build_archive(&build_req, &Control::default()).unwrap();
+        let before = fs::read(&grf).unwrap();
+        let new_a = dir.join("new_a.txt");
+        fs::write(&new_a, "new a").unwrap();
+
+        let mut s = Session::open(&grf).unwrap();
+        assert!(s.edit_plan().is_err());
+        let idx = |s: &Session, name: &str| {
+            (0..s.info().entries)
+                .find(|&i| s.page(i, 1)[0].name == name)
+                .unwrap()
+        };
+        s.stage_replace(idx(&s, "data\\a.txt"), &new_a).unwrap();
+        s.stage_add("data/sub/d.txt", &new_a).unwrap();
+        s.stage_remove(&[idx(&s, "data\\b.txt")]).unwrap();
+        // staging the same path again replaces the earlier change
+        s.stage_add("DATA\\sub\\d.txt", &new_a).unwrap();
+        assert!(s.stage_add("data\\", &new_a).is_err());
+        assert!(s.stage_add("data\\x.txt", &dir.join("missing")).is_err());
+        let kinds: Vec<_> = s.pending().iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, ["replace", "remove", "add"]);
+
+        let out = dir.join("out.grf");
+        let r = save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        assert_eq!(
+            (r.added, r.replaced, r.removed, r.files, r.verified),
+            (1, 1, 1, 3, true)
+        );
+        let res = Session::open(&out).unwrap();
+        let names: Vec<_> = res
+            .page(0, 10)
+            .into_iter()
+            .map(|r| r.name.to_lowercase())
+            .collect();
+        assert!(names.contains(&"data\\sub\\d.txt".to_string()), "{names:?}");
+        assert!(!names.contains(&"data\\b.txt".to_string()));
+        assert_eq!(
+            fs::read(&grf).unwrap(),
+            before,
+            "the open archive is unchanged"
+        );
+        s.discard_pending();
+        assert!(s.pending().is_empty());
         let _ = fs::remove_dir_all(dir);
     }
 
