@@ -1090,3 +1090,232 @@ fn act_gif_scale_and_with_parts() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn lua_check_on_files_folders_and_grfs() {
+    let dir = tmpdir("lua");
+    let data = dir.join("src/data/luafiles514");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("good.lub"), "t = { a = 1, b = { 2, 3 } }\n").unwrap();
+    std::fs::write(data.join("bad.lub"), "t = {\n  a = 1,\n  b = { 2, 3 }\n").unwrap();
+    std::fs::write(data.join("compiled.lub"), b"\x1bLuaQ\x00\x01").unwrap();
+    std::fs::write(data.join("readme.txt"), "not lua {{{").unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+
+    // a single file: 0 for a good one, 3 for a bad one
+    assert_eq!(
+        rgrf(&["lua", "check", data.join("good.lub").to_str().unwrap()])
+            .status
+            .code(),
+        Some(0)
+    );
+    let o = rgrf(&["lua", "check", data.join("bad.lub").to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("line 4"),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+
+    // a folder: the .txt is ignored, compiled files are counted but not failed
+    let o = rgrf(&["--json", "lua", "check", &p("src")]);
+    assert_eq!(o.status.code(), Some(3));
+    let v = json(&o);
+    assert_eq!(
+        (
+            v["checked"].as_u64(),
+            v["valid"].as_u64(),
+            v["bytecode"].as_u64()
+        ),
+        (Some(3), Some(1), Some(1))
+    );
+    assert_eq!(v["failed"].as_array().unwrap().len(), 1);
+    assert_eq!(v["failed"][0]["line"], 4);
+
+    // inside a GRF, with and without a pattern
+    let grf = p("t.grf");
+    assert!(
+        rgrf(&["build", &p("src"), "-o", &grf, "-q"])
+            .status
+            .success()
+    );
+    let o = rgrf(&["--json", "lua", "check", &grf]);
+    assert_eq!(o.status.code(), Some(3));
+    assert_eq!(json(&o)["checked"], 3);
+    let o = rgrf(&["--json", "lua", "check", &grf, "good"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(json(&o)["checked"], 1);
+    assert_eq!(
+        rgrf(&["lua", "check", &p("missing.lub")]).status.code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn lua_check_on_the_real_core_grf() {
+    let Some(core) = testdata("client-dev/full/core.grf") else {
+        return;
+    };
+    let o = rgrf(&["--json", "lua", "check", &core]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let v = json(&o);
+    assert_eq!(v["valid"], 427);
+    assert_eq!(v["bytecode"], 0);
+}
+
+#[test]
+fn client_check_finds_the_usual_traps() {
+    let dir = tmpdir("client");
+    let w = |rel: &str, text: &str| {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    let conn = |name: &str, addr: &str| {
+        format!(
+            "<clientinfo><connection><balloon>{name}</balloon><address>{addr}</address><port>6900</port></connection></clientinfo>"
+        )
+    };
+    // a.grf (index 1) and b.grf (index 2) overlap in data\x.txt, and disagree about the server
+    w("src-a/data/x.txt", "short");
+    w("src-a/data/sclientinfo.xml", &conn("Live", "10.0.0.1"));
+    w("src-b/data/x.txt", "a longer text than in a");
+    w("src-b/data/sclientinfo.xml", &conn("Live", "10.0.0.2"));
+    w("src-b/data/luafiles514/bad.lub", "t = {\n a = 1\n");
+    w("src-b/data/luafiles514/good.lub", "t = { a = 1 }\n");
+    w("data/x.txt", "loose copy that the archive hides");
+    w("data/only.txt", "loose and used");
+    w(
+        "DATA.INI",
+        "[Data]\r\n1=a.grf\r\n2=b.grf\r\n3=missing.grf\r\n",
+    );
+    std::fs::write(
+        dir.join("exe-with-systemen.exe"),
+        b"MZ.. SystemEN\\Navi_Data.lub ..",
+    )
+    .unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    for n in ["a", "b"] {
+        assert!(
+            rgrf(&[
+                "build",
+                &p(&format!("src-{n}")),
+                "-o",
+                &p(&format!("{n}.grf")),
+                "-q"
+            ])
+            .status
+            .success()
+        );
+    }
+    std::fs::write(dir.join("spare.grf"), std::fs::read(p("a.grf")).unwrap()).unwrap();
+
+    let o = rgrf(&["--json", "client", "check", dir.to_str().unwrap()]);
+    assert_eq!(
+        o.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let v = json(&o);
+    assert_eq!(
+        v["archives"].as_array().unwrap().len(),
+        2,
+        "the missing archive is not listed"
+    );
+    let all: Vec<String> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            format!(
+                "{}: {}",
+                f["level"].as_str().unwrap(),
+                f["message"].as_str().unwrap()
+            )
+        })
+        .collect();
+    let has = |needle: &str| all.iter().any(|m| m.contains(needle));
+    assert!(
+        has("error: DATA.INI 3=missing.grf but the file does not exist"),
+        "{all:?}"
+    );
+    assert!(
+        has(
+            "b.grf: 2 of 4 files are hidden by archives with a lower index (1 of them with a different size)"
+        ),
+        "{all:?}"
+    );
+    assert!(
+        has("warning: 1 loose files are ignored") && has("data\\x.txt (hidden by a.grf)"),
+        "{all:?}"
+    );
+    assert!(
+        has("1 loose files, 1 used") || has("2 loose files, 1 used"),
+        "{all:?}"
+    );
+    assert!(
+        has("sclientinfo.xml (used: a.grf): Live 10.0.0.1:6900"),
+        "{all:?}"
+    );
+    assert!(
+        has("other copies list other servers (b.grf: Live 10.0.0.2:6900)"),
+        "{all:?}"
+    );
+    assert!(
+        has("error: Lua syntax: ") && has("bad.lub") && has("line 3"),
+        "{all:?}"
+    );
+    assert!(
+        has("spare.grf is in the folder but not in DATA.INI"),
+        "{all:?}"
+    );
+    assert!(has("mentions SystemEN"), "{all:?}");
+
+    // --no-lua skips the syntax check; fixing everything gives exit code 0 or 2 (warnings only)
+    let o = rgrf(&[
+        "--json",
+        "client",
+        "check",
+        dir.to_str().unwrap(),
+        "--no-lua",
+    ]);
+    assert!(!String::from_utf8_lossy(&o.stdout).contains("Lua syntax"));
+    // not a client folder
+    assert_eq!(
+        rgrf(&["client", "check", &p("src-a")]).status.code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn client_check_on_the_real_full_client() {
+    let Some(full) = testdata("client-dev/full") else {
+        return;
+    };
+    let o = rgrf(&["--json", "client", "check", &full]);
+    let v = json(&o);
+    assert_ne!(
+        o.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let names: Vec<&str> = v["archives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["cdata.grf", "core.grf", "cpal.grf", "data.grf"]);
+    let text = v["findings"].to_string();
+    assert!(text.contains("Live Server 185.163.118.80:6900"), "{text}");
+    assert!(text.contains("0 with syntax errors"), "{text}");
+}

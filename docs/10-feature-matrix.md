@@ -9,7 +9,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Funktion (laut Quelltext) | RustyGRF | Stand |
 |---|---|---|
 | Archive öffnen, Einträge listen, suchen, extrahieren | `info`, `ls`, `find`, `cat`, `extract` | ✅ M1 |
-| Prüfen/Validieren (`GrfValidation`) | `verify` (Tabelle, Überlappung, Dekodieren) | ✅ M1; inhaltliche Prüfung (Lua, fehlende Dateien) 🔨 M7c/M7f |
+| Prüfen/Validieren (`GrfValidation`) | `verify` (Tabelle, Überlappung, Dekodieren), `lua check`, `client check` | ✅ M1, M7c; fehlende Ressourcen allgemein ❓ (nicht zuverlässig möglich) |
 | Bauen, neu komprimieren, `Compact`/`GrfShrinker` | `build`, `repack` | ✅ M2 |
 | Zusammenführen (`MergeDialog`), Subtrahieren (`SubtractDialog`), Patch | `merge`, `diff`, `patch` | ✅ M3 (Subtrahieren: `diff` + Auswahl, nicht eigener Befehl) |
 | Hash (`HashDialog`) | `hash` | ✅ |
@@ -20,7 +20,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Vorschau und Bearbeiten **SPR** (`PreviewSpr`, `SpriteEditor`, `SpriteConverter`) | `spr info|export|build|replace|add|remove|set-palette` | ✅ Lesen/Schreiben/PNG (M7a), Bearbeiten (M7b); Oberfläche 🔨 M8 |
 | Vorschau **ACT** (`PreviewAct`) | `act info`, `act render` (PNG) | ✅ Lesen/Schreiben/Rendern, Anker-Bindung, GIF (M7b) |
 | Palette (`PreviewPalette`, `PaletteOperations`) | PAL lesen/schreiben, Palette tauschen (`spr set-palette`) | ✅; weitere Operationen 🔨 |
-| Lua/Lub dekompilieren, Text (`PreviewText`, `DecompilerSettings`) | – | 🔨 M7c |
+| Lua/Lub anzeigen, dekompilieren (`PreviewText`, `DecompilerSettings`) | `lua check` (Syntax), `cat` für Text | ✅ Syntaxprüfung (M7c); Dekompilieren von Bytecode 🔨 |
 | Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | – | 🔨 M7e |
 | 3D: RSM, STR (`OpenGLViewport`) | – | 🔨 M7e |
 | Audio/Video (`PreviewWav`, `PreviewBink`) | – | ❓ |

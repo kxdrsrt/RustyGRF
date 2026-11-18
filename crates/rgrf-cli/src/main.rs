@@ -25,7 +25,9 @@ use rgrf_core::{Archive, DecodeStatus, Entry, GrfPath, NameMode};
 use serde_json::{Value, json};
 
 mod act_cmd;
+mod client_cmd;
 mod edit_cmd;
+mod lua_cmd;
 mod spr_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -220,6 +222,39 @@ enum Cmd {
     Act {
         #[command(subcommand)]
         action: ActCmd,
+    },
+    /// Lua files (.lub/.lua of the client)
+    Lua {
+        #[command(subcommand)]
+        action: LuaCmd,
+    },
+    /// A client folder: DATA.INI, archives, hidden files, server address, Lua
+    Client {
+        #[command(subcommand)]
+        action: ClientCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClientCmd {
+    /// Report what could go wrong before the client is started (exit 0 ok, 2 warnings, 3 errors)
+    Check {
+        /// The client folder (with DATA.INI)
+        folder: PathBuf,
+        /// Skip the Lua syntax check
+        #[arg(long)]
+        no_lua: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LuaCmd {
+    /// Lua 5.1 syntax check of a file, a folder (recursive) or the Lua files of a GRF
+    Check {
+        /// A .lub/.lua file, a folder, or a .grf archive
+        input: PathBuf,
+        /// For a GRF: only entries matching this pattern (glob or substring)
+        pattern: Option<String>,
     },
 }
 
@@ -670,6 +705,16 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Client { action } => match action {
+            ClientCmd::Check { folder, no_lua } => {
+                client_cmd::check(folder, cli.names, cli.json, !*no_lua)
+            }
+        },
+        Cmd::Lua { action } => match action {
+            LuaCmd::Check { input, pattern } => {
+                lua_cmd::check(input, pattern.as_deref(), cli.names, cli.json)
+            }
+        },
         Cmd::Act { action } => match action {
             ActCmd::Info { input, entry } => {
                 act_cmd::info(input, entry.as_deref(), cli.names, cli.json)

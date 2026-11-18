@@ -3,6 +3,7 @@
 pub mod act;
 pub mod edit;
 pub mod gif_io;
+pub mod lua;
 pub mod pal;
 pub mod png_io;
 pub mod render;

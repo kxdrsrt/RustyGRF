@@ -422,6 +422,7 @@ dependencies = [
  "rgrf-core",
  "rgrf-formats",
  "serde_json",
+ "unicode-normalization",
 ]
 
 [[package]]
