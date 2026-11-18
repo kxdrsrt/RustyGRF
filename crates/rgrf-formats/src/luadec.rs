@@ -1,8 +1,11 @@
-//! A decompiler for Lua 5.1 bytecode of the client's `.lub` files (straight-line code: data tables,
-//! assignments, calls, function definitions). A function with jumps or loops is not decompiled;
-//! its bytecode listing is written as a comment instead, so nothing is lost and nothing is invented.
+//! A decompiler for Lua 5.1 bytecode of the client's `.lub` files: data tables, assignments, calls,
+//! function definitions, local variables (names from the debug information), `if`/`else` with `and`
+//! / `or`, `while`, numeric and generic `for`, and `break`. A function whose code has a shape this
+//! does not understand is not guessed; its bytecode listing is written as a comment instead, so
+//! nothing is lost and nothing is invented. The output is checked for valid syntax and for keeping
+//! every string constant, not for the same meaning (no Lua interpreter is available to run both).
 
-use crate::luac::{Chunk, Constant, Function, Instr};
+use crate::luac::{Chunk, Constant, Function, Instr, Local};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Expr {
@@ -217,12 +220,197 @@ impl Ctx<'_> {
             *r = Some(Expr::Param(param_name(f, i as u8)));
         }
         let mut st = State { reg, top: 0 };
-        self.block(f, &mut st, 0, f.code.len(), indent)
+        self.block(f, &mut st, 0, f.code.len(), indent, Exits::default())
     }
 
-    /// The instructions `start..end` as statements. A comparison followed by a jump becomes an
-    /// `if` (with `else` when the body ends in a jump over more code); anything that does not fit
-    /// that shape makes the whole function fall back to the listing.
+    /// Declares the locals that become visible at `pc` with the value their register holds.
+    fn declare_locals(
+        &self,
+        f: &Function,
+        reg: &mut [Option<Expr>],
+        pc: usize,
+        indent: usize,
+        out: &mut String,
+    ) -> Result<(), Unsupported> {
+        let starting: Vec<usize> = f
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.start as usize == pc && !hidden(l))
+            .map(|(i, _)| i)
+            .collect();
+        if starting.is_empty() {
+            return Ok(());
+        }
+        let active = active_at(f, pc);
+        let (mut names, mut vals, mut regs) = (Vec::new(), Vec::new(), Vec::new());
+        for li in starting {
+            let Some(r) = active.iter().position(|&x| x == li) else {
+                continue;
+            };
+            if r < usize::from(f.params) || r >= reg.len() {
+                continue;
+            }
+            let name = (self.names)(&f.locals[li].name);
+            // locals that exist from the first instruction on (the implicit `arg` table of a
+            // vararg function) are not declared in the source
+            if pc == 0 {
+                reg[r] = Some(Expr::Param(name));
+                continue;
+            }
+            // a loop variable is already set by the loop
+            if matches!(&reg[r], Some(Expr::Param(n)) if *n == name) {
+                continue;
+            }
+            names.push(name);
+            vals.push(reg[r].clone());
+            regs.push(r);
+        }
+        if names.is_empty() {
+            return Ok(());
+        }
+        let pad = "\t".repeat(indent);
+        let shown = |e: &Option<Expr>| e.as_ref().map(|e| self.expr(f, e, indent));
+        let line = if let [Some(Expr::Func(_))] = vals.as_slice() {
+            let text = shown(&vals[0]).unwrap_or_default();
+            match text.strip_prefix("function(") {
+                Some(rest) => format!("local function {}({rest}", names[0]),
+                None => format!("local {} = {text}", names[0]),
+            }
+        } else if vals.iter().all(Option::is_some) {
+            let v: Vec<String> = vals.iter().filter_map(shown).collect();
+            format!("local {} = {}", names.join(", "), v.join(", "))
+        } else if matches!(vals[0], Some(Expr::Call(..))) && vals[1..].iter().all(Option::is_none) {
+            format!(
+                "local {} = {}",
+                names.join(", "),
+                shown(&vals[0]).unwrap_or_default()
+            )
+        } else {
+            return Err(Unsupported(format!(
+                "a local without a known value: {} at {pc}",
+                names.join(", ")
+            )));
+        };
+        out.push_str(&format!("{pad}{line}\n"));
+        for (r, n) in regs.into_iter().zip(names) {
+            reg[r] = Some(Expr::Param(n));
+        }
+        Ok(())
+    }
+
+    /// The name of the declared local that instruction `i` at `at` writes, when it writes one.
+    fn assigned_local(
+        &self,
+        f: &Function,
+        reg: &[Option<Expr>],
+        at: usize,
+        i: &Instr,
+    ) -> Result<Option<String>, Unsupported> {
+        let a = i.a as usize;
+        if i.name() == "LOADNIL" {
+            let active = active_at(f, at);
+            if (a..=i.b as usize).any(|r| active.get(r).is_some_and(|&li| !hidden(&f.locals[li]))) {
+                return Err(Unsupported("several locals set at once".into()));
+            }
+            return Ok(None);
+        }
+        if !writes_value(i) {
+            return Ok(None);
+        }
+        let active = active_at(f, at);
+        let Some(&li) = active.get(a) else {
+            return Ok(None);
+        };
+        if hidden(&f.locals[li]) {
+            return Ok(None);
+        }
+        let name = (self.names)(&f.locals[li].name);
+        if reg.get(a) != Some(&Some(Expr::Param(name.clone()))) {
+            return Err(Unsupported("a local that was not declared".into()));
+        }
+        Ok(Some(name))
+    }
+
+    /// `name = value` for a declared local that was just written (its register holds the value).
+    fn assign_local(
+        &self,
+        f: &Function,
+        reg: &mut [Option<Expr>],
+        a: usize,
+        name: String,
+        indent: usize,
+        out: &mut String,
+    ) -> Result<(), Unsupported> {
+        let Some(v) = reg[a].clone() else {
+            return Err(Unsupported("a local assigned an unknown value".into()));
+        };
+        if v == Expr::Param(name.clone()) {
+            return Ok(());
+        }
+        // a pending value that still names the variable would read the new value (the register the
+        // value was moved from holds the same expression and is used up)
+        if reg
+            .iter()
+            .enumerate()
+            .any(|(r, e)| r != a && e.as_ref().is_some_and(|e| *e != v && mentions(e, &name)))
+        {
+            return Err(Unsupported("a variable used while it is reassigned".into()));
+        }
+        let pad = "\t".repeat(indent);
+        out.push_str(&format!("{pad}{name} = {}\n", self.expr(f, &v, indent)));
+        reg[a] = Some(Expr::Param(name));
+        Ok(())
+    }
+
+    /// A comparison (or test) at `q` followed by its jump: the text of the condition that enters the
+    /// body, the text of the condition under which the jump is taken, and the jump's target.
+    fn cond_pair(
+        &self,
+        f: &Function,
+        reg: &[Option<Expr>],
+        q: usize,
+        indent: usize,
+    ) -> Result<Option<Pair>, Unsupported> {
+        let (Some(&raw), Some(&jraw)) = (f.code.get(q), f.code.get(q + 1)) else {
+            return Ok(None);
+        };
+        let i = Instr::decode(raw);
+        let j = Instr::decode(jraw);
+        if !matches!(i.name(), "EQ" | "LT" | "LE" | "TEST") || j.name() != "JMP" {
+            return Ok(None);
+        }
+        let target = usize::try_from(q as i64 + 2 + j.sbx())
+            .map_err(|_| Unsupported("a backward or far jump".into()))?;
+        let (enter, taken) = if i.name() == "TEST" {
+            let v = get(reg, i.a as usize)?;
+            let text = self.operand(f, &v, indent);
+            let (yes, no) = (text.clone(), format!("not {text}"));
+            if i.c == 0 { (yes, no) } else { (no, yes) }
+        } else {
+            let (l, r) = (rk_of(f, reg, i.b)?, rk_of(f, reg, i.c)?);
+            let (enter, taken) = match (i.name(), i.a) {
+                ("EQ", 0) => ("==", "~="),
+                ("EQ", _) => ("~=", "=="),
+                ("LT", 0) => ("<", ">="),
+                ("LT", _) => (">=", "<"),
+                ("LE", 0) => ("<=", ">"),
+                _ => (">", "<="),
+            };
+            let (l, r) = (self.operand(f, &l, indent), self.operand(f, &r, indent));
+            (format!("{l} {enter} {r}"), format!("{l} {taken} {r}"))
+        };
+        Ok(Some(Pair {
+            enter,
+            taken,
+            target,
+            jmp: q + 1,
+        }))
+    }
+
+    /// The instructions `start..end` as statements. Comparisons become `if` (with `else`, `and`,
+    /// `or`) or `while`; loops become `for`; locals come from the debug information. A shape that
+    /// is not understood makes the whole function fall back to the listing.
     fn block(
         &self,
         f: &Function,
@@ -230,25 +418,24 @@ impl Ctx<'_> {
         start: usize,
         end: usize,
         indent: usize,
+        exits: Exits,
     ) -> Result<String, Unsupported> {
+        let Exits { brk, tail } = exits;
         let pad = "\t".repeat(indent);
         let State { reg, top } = st;
         let mut out = String::new();
-        let rk = |reg: &[Option<Expr>], v: u32| -> Result<Expr, Unsupported> {
-            if v >= 256 {
-                konst(f, (v - 256) as usize)
-            } else {
-                get(reg, v as usize)
-            }
-        };
         let mut pc = start;
         while pc < end {
+            self.declare_locals(f, reg, pc, indent, &mut out)?;
+            let at = pc;
             let i = Instr::decode(f.code[pc]);
             pc += 1;
             let (a, b, c) = (i.a as usize, i.b as usize, i.c as usize);
             if a >= reg.len() && !matches!(i.name(), "JMP") {
                 return Err(Unsupported("register out of range".into()));
             }
+            let assigned = self.assigned_local(f, reg, at, &i)?;
+            let rk = |reg: &[Option<Expr>], v: u32| rk_of(f, reg, v);
             match i.name() {
                 "MOVE" => reg[a] = Some(get(reg, b)?),
                 "LOADK" => reg[a] = Some(konst(f, i.bx() as usize)?),
@@ -287,6 +474,9 @@ impl Ctx<'_> {
                         (self.names)(&name),
                         self.expr(f, &v, indent)
                     ));
+                    if a >= active_at(f, at).len() {
+                        reg[a] = None;
+                    }
                 }
                 "SETUPVAL" => {
                     let n = f
@@ -295,6 +485,9 @@ impl Ctx<'_> {
                         .map_or_else(|| format!("upvalue{b}"), |s| (self.names)(s));
                     let v = get(reg, a)?;
                     out.push_str(&format!("{pad}{n} = {}\n", self.expr(f, &v, indent)));
+                    if a >= active_at(f, at).len() {
+                        reg[a] = None;
+                    }
                 }
                 "SETTABLE" => {
                     let key = rk(reg, i.b)?;
@@ -306,6 +499,13 @@ impl Ctx<'_> {
                             let lhs =
                                 self.expr(f, &Expr::Index(Box::new(target), Box::new(key)), indent);
                             out.push_str(&format!("{pad}{lhs} = {}\n", self.expr(f, &val, indent)));
+                            // the operands were used up
+                            let live = active_at(f, at).len();
+                            for r in [b, c] {
+                                if r < 256 && r >= live {
+                                    reg[r] = None;
+                                }
+                            }
                         }
                         None => return Err(Unsupported("assignment to an unknown value".into())),
                     }
@@ -364,8 +564,46 @@ impl Ctx<'_> {
                         pc += 1;
                     } else if c == 1 {
                         out.push_str(&format!("{pad}{}\n", self.expr(f, &call, indent)));
+                        // the call's registers are free again
+                        for r in reg.iter_mut().skip(a) {
+                            *r = None;
+                        }
+                    } else if c > 2
+                        && (0..c - 1).all(|k| {
+                            f.code
+                                .get(pc + k)
+                                .map(|r| Instr::decode(*r))
+                                .is_some_and(|n| {
+                                    n.name() == "SETGLOBAL" && n.a as usize == a + (c - 2 - k)
+                                })
+                        })
+                        && pc + c - 1 <= end
+                    {
+                        // `x, y = f()`: the results are stored last to first
+                        let mut targets = Vec::new();
+                        for k in 0..c - 1 {
+                            let n = Instr::decode(f.code[pc + k]);
+                            let Expr::Str(name) = konst(f, n.bx() as usize)? else {
+                                return Err(Unsupported("global name".into()));
+                            };
+                            targets.push((self.names)(&name));
+                        }
+                        targets.reverse();
+                        out.push_str(&format!(
+                            "{pad}{} = {}\n",
+                            targets.join(", "),
+                            self.expr(f, &call, indent)
+                        ));
+                        for r in reg.iter_mut().skip(a) {
+                            *r = None;
+                        }
+                        pc += c - 1;
                     } else {
                         reg[a] = Some(call);
+                        // the arguments are used up and further results are not known as expressions
+                        for r in reg.iter_mut().skip(a + 1) {
+                            *r = None;
+                        }
                         if c == 0 {
                             *top = a + 1;
                         }
@@ -419,55 +657,238 @@ impl Ctx<'_> {
                         out.push_str(&format!("{pad}return {}\n", vals.join(", ")));
                     }
                 }
-                "EQ" | "LT" | "LE" | "TEST" => {
-                    let jmp_pc = pc;
-                    let j = f
-                        .code
-                        .get(jmp_pc)
-                        .map(|r| Instr::decode(*r))
-                        .filter(|j| j.name() == "JMP")
-                        .ok_or_else(|| Unsupported("a comparison without a jump".into()))?;
-                    let target = usize::try_from(jmp_pc as i64 + 1 + j.sbx())
-                        .ok()
-                        .filter(|&t| t > jmp_pc && t <= end)
-                        .ok_or_else(|| Unsupported("a backward or far jump".into()))?;
-                    let cond = if i.name() == "TEST" {
-                        let v = get(reg, a)?;
-                        let text = self.operand(f, &v, indent);
-                        if c == 0 { text } else { format!("not {text}") }
-                    } else {
-                        let (l, r) = (rk(reg, i.b)?, rk(reg, i.c)?);
-                        let op = match (i.name(), a) {
-                            ("EQ", 0) => "==",
-                            ("EQ", _) => "~=",
-                            ("LT", 0) => "<",
-                            ("LT", _) => ">=",
-                            ("LE", 0) => "<=",
-                            _ => ">",
+                "JMP" => {
+                    let target = usize::try_from(at as i64 + 1 + i.sbx()).ok();
+                    if target == Some(pc) {
+                        // a jump to the next instruction does nothing
+                    } else if target == Some(end)
+                        && (pc..end).all(|q| Instr::decode(f.code[q]).name() == "JMP")
+                        && !jumped_into(f, pc, end)
+                    {
+                        // the jump to the block's end; only unreachable jumps (a threaded `else
+                        // break`) lie between
+                        pc = end;
+                    } else if target.is_some() && target == brk {
+                        out.push_str(&format!("{pad}break\n"));
+                    } else if let Some(t) = target.filter(|&t| t > at && t + 2 <= end) {
+                        // `for ... in ...`: a jump to the TFORLOOP, whose own jump comes back here
+                        let tf = Instr::decode(f.code[t]);
+                        let back = Instr::decode(f.code[t + 1]);
+                        if tf.name() != "TFORLOOP"
+                            || back.name() != "JMP"
+                            || t as i64 + 2 + back.sbx() != pc as i64
+                        {
+                            return Err(Unsupported("JMP (control flow)".into()));
+                        }
+                        let (ga, nv) = (tf.a as usize, tf.c as usize);
+                        if ga + 3 + nv > reg.len() {
+                            return Err(Unsupported("register out of range".into()));
+                        }
+                        let first = get(reg, ga)?;
+                        let mut list = vec![self.expr(f, &first, indent)];
+                        if reg[ga + 1].is_some() {
+                            let mut more = vec![get(reg, ga + 1)?];
+                            if let Some(e) = reg[ga + 2].clone() {
+                                more.push(e);
+                            }
+                            while more.last() == Some(&Expr::Nil) {
+                                more.pop();
+                            }
+                            list.extend(more.iter().map(|e| self.expr(f, e, indent)));
+                        }
+                        let mut inner = State {
+                            reg: reg.clone(),
+                            top: *top,
                         };
-                        format!(
-                            "{} {op} {}",
-                            self.operand(f, &l, indent),
-                            self.operand(f, &r, indent)
-                        )
+                        let mut vars = Vec::new();
+                        for k in 0..nv {
+                            let name = reg_name(self, f, pc, ga + 3 + k).unwrap_or_else(|| {
+                                ["k", "v"]
+                                    .get(k)
+                                    .map_or_else(|| format!("v{k}"), |s| (*s).into())
+                            });
+                            inner.reg[ga + 3 + k] = Some(Expr::Param(name.clone()));
+                            vars.push(name);
+                        }
+                        let body = self.block(
+                            f,
+                            &mut inner,
+                            pc,
+                            t,
+                            indent + 1,
+                            Exits {
+                                brk: Some(t + 2),
+                                tail: None,
+                            },
+                        )?;
+                        out.push_str(&format!(
+                            "{pad}for {} in {} do\n{body}{pad}end\n",
+                            vars.join(", "),
+                            list.join(", ")
+                        ));
+                        forget_changed(reg, &[&inner], ga..ga + 3 + nv);
+                        pc = t + 2;
+                    } else {
+                        return Err(Unsupported("JMP (control flow)".into()));
+                    }
+                }
+                "FORPREP" => {
+                    let fl = usize::try_from(at as i64 + 1 + i.sbx())
+                        .ok()
+                        .filter(|&t| t > at && t < end)
+                        .ok_or_else(|| Unsupported("a loop that leaves its block".into()))?;
+                    let tail = Instr::decode(f.code[fl]);
+                    if tail.name() != "FORLOOP" || tail.a != i.a || a + 3 >= reg.len() {
+                        return Err(Unsupported("a loop of an unknown shape".into()));
+                    }
+                    let (init, limit, step) = (get(reg, a)?, get(reg, a + 1)?, get(reg, a + 2)?);
+                    let var = reg_name(self, f, pc, a + 3).unwrap_or_else(|| "i".into());
+                    let mut head = format!(
+                        "for {var} = {}, {}",
+                        self.expr(f, &init, indent),
+                        self.expr(f, &limit, indent)
+                    );
+                    if step != Expr::Num(1.0) {
+                        head.push_str(&format!(", {}", self.expr(f, &step, indent)));
+                    }
+                    let mut inner = State {
+                        reg: reg.clone(),
+                        top: *top,
                     };
-                    // `if ... else ...`: the body ends in a jump over the else part
-                    let else_jump = (target - 1 > jmp_pc)
+                    inner.reg[a + 3] = Some(Expr::Param(var));
+                    let body = self.block(
+                        f,
+                        &mut inner,
+                        pc,
+                        fl,
+                        indent + 1,
+                        Exits {
+                            brk: Some(fl + 1),
+                            tail: None,
+                        },
+                    )?;
+                    out.push_str(&format!("{pad}{head} do\n{body}{pad}end\n"));
+                    forget_changed(reg, &[&inner], a..a + 4);
+                    pc = fl + 1;
+                }
+                "EQ" | "LT" | "LE" | "TEST" => 'cmp: {
+                    let first_cmp = at;
+                    // a jump to the end of the whole `if ... else` leaves this block like its end does
+                    let norm = |mut p: Pair| {
+                        if Some(p.target) == tail && p.target > end {
+                            p.target = end;
+                        }
+                        p
+                    };
+                    let first = norm(
+                        self.cond_pair(f, reg, first_cmp, indent)?
+                            .ok_or_else(|| Unsupported("a comparison without a jump".into()))?,
+                    );
+                    // consecutive comparisons may be one condition joined by `and` / `or`
+                    let mut pairs = vec![first];
+                    let mut cs = State {
+                        reg: reg.clone(),
+                        top: *top,
+                    };
+                    let mut q = pairs[0].jmp + 1;
+                    loop {
+                        let mut r = q;
+                        while r < end && temp_write(f, r) {
+                            r += 1;
+                        }
+                        if r + 1 >= end || has_local_start(f, q, r + 1) {
+                            break;
+                        }
+                        self.block(f, &mut cs, q, r, indent, Exits { brk, tail: None })?;
+                        let Some(p) = self.cond_pair(f, &cs.reg, r, indent)?.map(norm) else {
+                            break;
+                        };
+                        q = p.jmp + 1;
+                        pairs.push(p);
+                    }
+                    // `if cond then break end` is one conditional jump straight to the loop's exit
+                    if let Some(b) = brk.filter(|&b| pairs[0].target == b) {
+                        let k = pairs.iter().take_while(|p| p.target == b).count();
+                        let cond: Vec<&str> = pairs[..k].iter().map(|p| p.taken.as_str()).collect();
+                        out.push_str(&format!(
+                            "{pad}if {} then\n{pad}\tbreak\n{pad}end\n",
+                            cond.join(" or ")
+                        ));
+                        pc = pairs[k - 1].jmp + 1;
+                        break 'cmp;
+                    }
+                    let mut m = 1;
+                    for k in (1..=pairs.len()).rev() {
+                        let (end_k, body_k) = (pairs[k - 1].target, pairs[k - 1].jmp + 1);
+                        if end_k > pairs[k - 1].jmp
+                            && end_k <= end
+                            && pairs[..k - 1]
+                                .iter()
+                                .all(|p| p.target == end_k || p.target == body_k)
+                        {
+                            m = k;
+                            break;
+                        }
+                    }
+                    pairs.truncate(m);
+                    let last = &pairs[m - 1];
+                    let (jmp_pc, target) = (last.jmp, last.target);
+                    if target <= jmp_pc || target > end {
+                        return Err(Unsupported("a backward or far jump".into()));
+                    }
+                    let mut cond = last.enter.clone();
+                    let mut conj = false; // the text is a bare `or` chain
+                    for p in pairs[..m - 1].iter().rev() {
+                        if p.target == target {
+                            let rest = if conj { format!("({cond})") } else { cond };
+                            cond = format!("{} and {rest}", p.enter);
+                            conj = false;
+                        } else {
+                            cond = format!("{} or {cond}", p.taken);
+                            conj = true;
+                        }
+                    }
+                    // `while`: the body ends in a jump back to where the condition is computed
+                    let looped = (target - 1 > jmp_pc)
                         .then(|| Instr::decode(f.code[target - 1]))
                         .filter(|e| e.name() == "JMP")
                         .and_then(|e| usize::try_from(target as i64 + e.sbx()).ok())
-                        .filter(|&u| u > target && u <= end);
-                    let then_end = if else_jump.is_some() {
+                        .filter(|&tb| {
+                            tb >= start
+                                && tb <= first_cmp
+                                && (tb..first_cmp).all(|q| temp_write(f, q))
+                        })
+                        .is_some();
+                    // `if ... else ...`: the body ends in a jump over the else part
+                    let else_jump = (!looped && target - 1 > jmp_pc)
+                        .then(|| Instr::decode(f.code[target - 1]))
+                        .filter(|e| e.name() == "JMP")
+                        .and_then(|e| usize::try_from(target as i64 + e.sbx()).ok())
+                        .filter(|&u| u > target && (u <= end || Some(u) == tail) && Some(u) != brk);
+                    let then_end = if looped || else_jump.is_some() {
                         target - 1
                     } else {
                         target
                     };
-                    // every jump inside the body must stay inside it, or the shape is not a plain `if`
+                    let inner_brk = if looped { Some(target) } else { brk };
+                    // a jump to the end of the whole `if ... else` leaves the body like falling off it;
+                    // a body that ends where this block ends also leaves the way this block does
+                    let then_tail = if else_jump.is_some() {
+                        else_jump
+                    } else if target == end && !looped {
+                        tail
+                    } else {
+                        None
+                    };
+                    // every jump inside the body must stay inside it (or leave the loop), or the
+                    // shape is not a plain `if`
                     for (q, raw) in f.code.iter().enumerate().take(then_end).skip(jmp_pc + 1) {
                         let ins = Instr::decode(*raw);
                         if matches!(ins.name(), "JMP" | "FORLOOP" | "FORPREP") {
                             let t = q as i64 + 1 + ins.sbx();
-                            if t < jmp_pc as i64 + 1 || t > then_end as i64 {
+                            let leaves = ins.name() == "JMP"
+                                && (Some(t as usize) == inner_brk || Some(t as usize) == then_tail);
+                            if !leaves && (t < jmp_pc as i64 + 1 || t > then_end as i64) {
                                 return Err(Unsupported("a complex condition or loop".into()));
                             }
                         }
@@ -476,33 +897,167 @@ impl Ctx<'_> {
                         reg: reg.clone(),
                         top: *top,
                     };
-                    let then_text =
-                        self.block(f, &mut then_state, jmp_pc + 1, then_end, indent + 1)?;
+                    let then_text = self.block(
+                        f,
+                        &mut then_state,
+                        jmp_pc + 1,
+                        then_end,
+                        indent + 1,
+                        Exits {
+                            brk: inner_brk,
+                            tail: then_tail,
+                        },
+                    )?;
                     let mut states = vec![then_state];
-                    out.push_str(&format!("{pad}if {cond} then\n{then_text}"));
+                    let head = if looped {
+                        format!("while {cond} do")
+                    } else {
+                        format!("if {cond} then")
+                    };
+                    out.push_str(&format!("{pad}{head}\n{then_text}"));
                     if let Some(u) = else_jump {
                         let mut else_state = State {
                             reg: reg.clone(),
                             top: *top,
                         };
-                        let else_text = self.block(f, &mut else_state, target, u, indent + 1)?;
+                        // an else part that reaches the end of this block is left the same way
+                        let else_end = u.min(end);
+                        let else_tail = (else_end == end).then_some(tail).flatten();
+                        let else_text = self.block(
+                            f,
+                            &mut else_state,
+                            target,
+                            else_end,
+                            indent + 1,
+                            Exits {
+                                brk,
+                                tail: else_tail,
+                            },
+                        )?;
                         out.push_str(&format!("{pad}else\n{else_text}"));
                         states.push(else_state);
                     }
                     out.push_str(&format!("{pad}end\n"));
                     // what a branch assigned to a register is unknown after the join
-                    for r in 0..reg.len() {
-                        if states.iter().any(|s| s.reg[r] != reg[r]) {
-                            reg[r] = None;
-                        }
-                    }
-                    pc = else_jump.unwrap_or(target);
+                    let refs: Vec<&State> = states.iter().collect();
+                    forget_changed(reg, &refs, 0..0);
+                    pc = else_jump.map_or(target, |u| u.min(end));
                 }
                 "CLOSE" => {}
                 other => return Err(Unsupported(format!("{other} (control flow)"))),
             }
+            if let Some(name) = assigned {
+                self.assign_local(f, reg, a, name, indent, &mut out)?;
+            }
         }
         Ok(out)
+    }
+}
+
+/// Where a jump out of a block can land: `brk` is the exit of the innermost loop (a `break`), `tail`
+/// a place that is equivalent to falling off the end of the block (the compiler merges jump chains,
+/// so the exit of an inner `if` can point past the end of the outer `if ... else`).
+#[derive(Clone, Copy, Default)]
+struct Exits {
+    brk: Option<usize>,
+    tail: Option<usize>,
+}
+
+/// One comparison with its jump, see [`Ctx::cond_pair`].
+struct Pair {
+    enter: String,
+    taken: String,
+    target: usize,
+    jmp: usize,
+}
+
+fn hidden(l: &Local) -> bool {
+    l.name.first() == Some(&b'(')
+}
+
+/// The locals that are in scope at `pc`, in declaration order (the register of each is its position).
+fn active_at(f: &Function, pc: usize) -> Vec<usize> {
+    f.locals
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| (l.start as usize) <= pc && pc < l.end as usize)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The name of the (visible) local that lives in register `r` at `pc`.
+fn reg_name(ctx: &Ctx<'_>, f: &Function, pc: usize, r: usize) -> Option<String> {
+    let li = *active_at(f, pc).get(r)?;
+    (!hidden(&f.locals[li])).then(|| (ctx.names)(&f.locals[li].name))
+}
+
+fn has_local_start(f: &Function, from: usize, to: usize) -> bool {
+    f.locals
+        .iter()
+        .any(|l| !hidden(l) && (from..=to).contains(&(l.start as usize)))
+}
+
+/// Instructions that put a value in register A.
+fn writes_value(i: &Instr) -> bool {
+    match i.name() {
+        "MOVE" | "LOADK" | "LOADNIL" | "GETUPVAL" | "GETGLOBAL" | "GETTABLE" | "NEWTABLE"
+        | "ADD" | "SUB" | "MUL" | "DIV" | "MOD" | "POW" | "UNM" | "NOT" | "LEN" | "CONCAT"
+        | "CLOSURE" => true,
+        "LOADBOOL" => i.c == 0,
+        "CALL" => i.c == 2,
+        _ => false,
+    }
+}
+
+/// A value-producing instruction that writes a temporary register (not a local), so a run of them
+/// between two comparisons is the second comparison's operand code.
+fn temp_write(f: &Function, q: usize) -> bool {
+    let i = Instr::decode(f.code[q]);
+    let value = writes_value(&i) || (i.name() == "CALL" && i.c != 1);
+    value && (i.a as usize) >= active_at(f, q).len()
+}
+
+/// True when some jump lands on an instruction in `from..to`.
+fn jumped_into(f: &Function, from: usize, to: usize) -> bool {
+    f.code.iter().enumerate().any(|(q, raw)| {
+        let i = Instr::decode(*raw);
+        matches!(i.name(), "JMP" | "FORLOOP" | "FORPREP") && {
+            let t = q as i64 + 1 + i.sbx();
+            t >= from as i64 && t < to as i64
+        }
+    })
+}
+
+fn mentions(e: &Expr, name: &str) -> bool {
+    match e {
+        Expr::Param(n) => n == name,
+        Expr::Index(a, b) | Expr::Bin(_, a, b) => mentions(a, name) || mentions(b, name),
+        Expr::Method(o, _) => mentions(o, name),
+        Expr::Call(g, args) => mentions(g, name) || args.iter().any(|a| mentions(a, name)),
+        Expr::Table(entries) => entries.iter().any(|en| match en {
+            Entry::Item(v) => mentions(v, name),
+            Entry::Keyed(k, v) => mentions(k, name) || mentions(v, name),
+        }),
+        Expr::Un(_, x) => mentions(x, name),
+        Expr::Concat(parts) => parts.iter().any(|p| mentions(p, name)),
+        _ => false,
+    }
+}
+
+/// After a branch or loop: a register that any inner state changed (or one in `also`) is unknown.
+fn forget_changed(reg: &mut [Option<Expr>], inner: &[&State], also: std::ops::Range<usize>) {
+    for r in 0..reg.len() {
+        if also.contains(&r) || inner.iter().any(|s| s.reg[r] != reg[r]) {
+            reg[r] = None;
+        }
+    }
+}
+
+fn rk_of(f: &Function, reg: &[Option<Expr>], v: u32) -> Result<Expr, Unsupported> {
+    if v >= 256 {
+        konst(f, (v - 256) as usize)
+    } else {
+        get(reg, v as usize)
     }
 }
 
@@ -634,6 +1189,157 @@ mod tests {
         assert!(!is_complete(&out));
         assert!(out.contains("-- not decompiled"), "{out}");
         assert!(out.contains("JMP"), "{out}");
+    }
+
+    fn jmp(sbx: i64) -> u32 {
+        insx(22, 0, (sbx + 131_071) as u32)
+    }
+
+    fn sbx_op(op: u32, a: u32, sbx: i64) -> u32 {
+        insx(op, a, (sbx + 131_071) as u32)
+    }
+
+    fn decompiled(code: Vec<u32>, consts: Vec<Constant>, locals: Vec<(&str, u32, u32)>) -> String {
+        let mut f = func(code, consts, vec![]);
+        f.locals = locals
+            .into_iter()
+            .map(|(n, start, end)| Local {
+                name: n.as_bytes().to_vec(),
+                start,
+                end,
+            })
+            .collect();
+        decompile(&Chunk { main: f }, &text)
+    }
+
+    // opcodes: MOVE 0, ADD 12, JMP 22, EQ 23, TEST 26, FORLOOP 31, FORPREP 32, TFORLOOP 33
+    #[test]
+    fn a_numeric_for_loop_and_a_generic_for_loop() {
+        let consts = vec![Constant::Number(1.0), Constant::Number(3.0), s("print")];
+        let out = decompiled(
+            vec![
+                insx(1, 0, 0),
+                insx(1, 1, 1),
+                insx(1, 2, 0),
+                sbx_op(32, 0, 3), // FORPREP -> FORLOOP at 7
+                insx(5, 4, 2),
+                ins(0, 5, 3, 0),
+                ins(28, 4, 2, 1),
+                sbx_op(31, 0, -4),
+                ins(30, 0, 1, 0),
+            ],
+            consts,
+            vec![],
+        );
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("for i = 1, 3 do\n\tprint(i)\nend"), "{out}");
+
+        let consts = vec![s("pairs"), s("t"), s("print")];
+        let out = decompiled(
+            vec![
+                insx(5, 0, 0),
+                insx(5, 1, 1),
+                ins(28, 0, 2, 4), // R0, R1, R2 = pairs(t)
+                jmp(4),           // to the TFORLOOP at 8
+                insx(5, 5, 2),
+                ins(0, 6, 3, 0),
+                ins(0, 7, 4, 0),
+                ins(28, 5, 3, 1),
+                ins(33, 0, 0, 2), // TFORLOOP R0, two variables
+                jmp(-6),          // back to the body at 4
+                ins(30, 0, 1, 0),
+            ],
+            consts,
+            vec![],
+        );
+        assert!(is_complete(&out), "{out}");
+        assert!(
+            out.contains("for k, v in pairs(t) do\n\tprint(k, v)\nend"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn conditions_joined_by_or_and_and() {
+        let consts = vec![s("a"), s("b"), s("print"), Constant::Number(1.0)];
+        let body = |end: usize| {
+            let _ = end;
+            vec![
+                insx(5, 0, 2),
+                insx(1, 1, 3),
+                ins(28, 0, 2, 1),
+                ins(30, 0, 1, 0),
+            ]
+        };
+        // if a or b then print(1) end
+        let mut code = vec![
+            insx(5, 0, 0),
+            ins(26, 0, 0, 1), // TEST R0, taken when a is true
+            jmp(3),           // into the body
+            insx(5, 0, 1),
+            ins(26, 0, 0, 0), // TEST R0, taken when b is false
+            jmp(3),           // past the body
+        ];
+        code.extend(body(9));
+        let out = decompiled(code, consts.clone(), vec![]);
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("if a or b then\n\tprint(1)\nend"), "{out}");
+        // if a and b then print(1) end
+        let mut code = vec![
+            insx(5, 0, 0),
+            ins(26, 0, 0, 0),
+            jmp(6),
+            insx(5, 0, 1),
+            ins(26, 0, 0, 0),
+            jmp(3),
+        ];
+        code.extend(body(9));
+        let out = decompiled(code, consts, vec![]);
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("if a and b then\n\tprint(1)\nend"), "{out}");
+    }
+
+    #[test]
+    fn a_while_loop_with_break_and_named_locals() {
+        // local n = 0; while n < 10 do n = n + 1; if n == 5 then break end end
+        let consts = vec![
+            Constant::Number(0.0),
+            Constant::Number(10.0),
+            Constant::Number(1.0),
+            Constant::Number(5.0),
+        ];
+        let code = vec![
+            insx(1, 0, 0),      // 0 LOADK R0 0 (the local n starts at 1)
+            ins(24, 0, 0, 257), // 1 LT 0 R0 K1: the body runs while n < 10
+            jmp(5),             // 2 -> 8 (exit)
+            ins(12, 0, 0, 258), // 3 ADD R0 R0 K2
+            ins(23, 0, 0, 259), // 4 EQ 0 R0 K3: the body runs when n == 5
+            jmp(1),             // 5 -> 7 (skip the break)
+            jmp(1),             // 6 break -> 8
+            jmp(-7),            // 7 back to 1
+            ins(30, 0, 1, 0),   // 8
+        ];
+        let out = decompiled(code, consts, vec![("n", 1, 8)]);
+        assert!(is_complete(&out), "{out}");
+        let expected =
+            "local n = 0\nwhile n < 10 do\n\tn = n + 1\n\tif n == 5 then\n\t\tbreak\n\tend\nend\n";
+        assert!(out.ends_with(expected), "{out}");
+    }
+
+    #[test]
+    fn a_swap_of_locals_is_not_guessed() {
+        // local a, b = 1, 2; a, b = b, a  (the temporary holds `b` while `b` is overwritten)
+        let consts = vec![Constant::Number(1.0), Constant::Number(2.0)];
+        let code = vec![
+            insx(1, 0, 0),
+            insx(1, 1, 1),
+            ins(0, 2, 1, 0), // R2 = b
+            ins(0, 1, 0, 0), // b = a   <- would make R2 read the new b
+            ins(0, 0, 2, 0), // a = R2
+            ins(30, 0, 1, 0),
+        ];
+        let out = decompiled(code, consts, vec![("a", 2, 6), ("b", 2, 6)]);
+        assert!(!is_complete(&out), "{out}");
     }
 
     #[test]

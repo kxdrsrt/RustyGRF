@@ -290,8 +290,8 @@ enum LuaCmd {
         /// For a GRF: only entries matching this pattern (glob or substring)
         pattern: Option<String>,
     },
-    /// Decompile a compiled Lua 5.1 file (.lub) to source; loops and complex conditions stay as a
-    /// bytecode listing in comments, so the output may be partial (exit code 2 then)
+    /// Decompile a compiled Lua 5.1 file (.lub) to source; code of a shape that is not understood
+    /// stays as a bytecode listing in comments, so the output may be partial (exit code 2 then)
     Decompile {
         /// A .lub file, or a .grf archive together with --entry
         input: PathBuf,
