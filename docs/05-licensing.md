@@ -31,3 +31,5 @@ Die Tabelle ist freiwillig; der Inhaber hat die Freigabe als geklärt gemeldet.
 ## Offen
 - **Abhängigkeiten der GUI (`apps/gui`, Tauri 2):** der Baum enthält **MPL-2.0** (`cssparser`, `selectors`, `dtoa-short`, `option-ext`, über Tauri; Lizenz auf Dateiebene, die Crates werden unverändert eingebunden) und Zweitlizenzen (`0BSD`, `MIT-0`, `Unlicense`, `LGPL-2.1-or-later` nur als eine Option von Doppellizenzen, wir nutzen jeweils MIT/Apache). Die Bibliothek, CLI und der MCP-Server bleiben frei davon (eigener Workspace, eigene `apps/gui/deny.toml`). Wer die App weitergibt, muss den Quelltext dieser MPL-Dateien verfügbar halten (er liegt auf crates.io). Bestätigt am 2026-11-18: in Ordnung für dich (Empfehlung übernommen).
 - Namensprüfung "RustyGRF": laut Inhaber frei (nicht von mir geprüft).
+
+- **STR-Effekte (`str_effect.rs`):** Dateiaufbau und Animationsregeln wurden am Verhalten von roBrowsers `StrEffect`/`Str` (GPL-3.0) geprüft und danach selbst geschrieben; es wurde **kein Code übernommen**, die Datei nennt die Quelle des Wissens.

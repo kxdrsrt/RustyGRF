@@ -310,3 +310,111 @@ fn every_wav_is_playable() {
     assert_eq!(decoded, 6);
     assert!(bad.is_empty(), "{bad:?}");
 }
+
+/// Every BMP of the real archive decodes (RLE and other rarities would show up here).
+#[test]
+fn every_bmp_decodes() {
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let idx = arc.select(Some("*.bmp"), NameMode::Cp1252);
+    eprintln!("{} BMP files", idx.len());
+    let bad: Vec<String> = idx
+        .par_iter()
+        .filter_map(|&i| {
+            let name = arc.entries()[i].name.display(NameMode::Cp1252);
+            let data = arc.read(i).unwrap().data;
+            rgrf_formats::bmp::parse(&data)
+                .err()
+                .map(|e| format!("{name}: {e}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} failed, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(8)]
+    );
+}
+
+/// Every STR effect of the real archive parses; their textures are looked up in the archive and
+/// a sample of effects is rendered (time and the share of resolved textures are printed).
+#[test]
+fn every_str_parses_and_renders() {
+    use rgrf_formats::str_effect::{Textures, parse, render, texture_names};
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let idx = arc.select(Some("*.str"), NameMode::Cp1252);
+    eprintln!("{} STR files", idx.len());
+    assert!(idx.len() > 1000);
+    // `Archive::find` scans linearly, so look texture names up in a map made once
+    let by_key: std::collections::HashMap<Vec<u8>, usize> = arc
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.name.key(), i))
+        .collect();
+    let mut bad = Vec::new();
+    let (mut names, mut found) = (0usize, 0usize);
+    let mut rendered = 0usize;
+    let started = std::time::Instant::now();
+    for (n, &i) in idx.iter().enumerate() {
+        if n % 200 == 0 {
+            eprintln!("  {n} / {} after {:?}", idx.len(), started.elapsed());
+        }
+        let name = arc.entries()[i].name.display(NameMode::Cp1252);
+        let data = arc.read(i).unwrap().data;
+        let s = match parse(&data) {
+            Ok(s) => s,
+            Err(e) => {
+                bad.push(format!("{name}: {e}"));
+                continue;
+            }
+        };
+        let mut tex = Textures::new();
+        for t in texture_names(&s) {
+            names += 1;
+            // next to the STR file first (newer effects), else in data\texture\effect
+            let mut dir = arc.entries()[i].name.as_bytes().to_vec();
+            dir.truncate(dir.iter().rposition(|&b| b == b'\\').map_or(0, |p| p + 1));
+            let mut near = dir.clone();
+            near.extend(&t);
+            let mut shared = b"data\\texture\\effect\\".to_vec();
+            shared.extend(&t);
+            let Some(&ti) = [near, shared]
+                .iter()
+                .find_map(|p| by_key.get(&GrfPath::new(p.clone()).key()))
+            else {
+                if names % 4000 == 1 {
+                    eprintln!("  missing {:?} used by {name}", String::from_utf8_lossy(&t));
+                }
+                continue;
+            };
+            found += 1;
+            let d = arc.read(ti).unwrap().data;
+            let lower = String::from_utf8_lossy(&t).to_lowercase();
+            let img = if lower.ends_with(".tga") {
+                rgrf_formats::tga::parse(&d).ok()
+            } else {
+                rgrf_formats::bmp::parse(&d).ok()
+            };
+            if let Some(img) = img {
+                tex.insert(t, img);
+            }
+        }
+        if n % 20 == 0 && !tex.is_empty() {
+            let c = render(&s, (s.last_frame / 2) as f32, &tex, 0.5);
+            assert_eq!((c.width, c.height), (320, 240));
+            rendered += 1;
+        }
+    }
+    eprintln!(
+        "textures: {found} of {names} found; {rendered} sample effects rendered in {:?}",
+        started.elapsed()
+    );
+    assert!(
+        bad.is_empty(),
+        "{} failed, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
+    );
+}

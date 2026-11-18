@@ -1,6 +1,7 @@
 //! RustyGRF formats: files inside the GRF archives (milestone M7).
 
 pub mod act;
+pub mod bmp;
 pub mod edit;
 pub mod gat;
 pub mod gif_io;
@@ -13,6 +14,7 @@ pub mod rle;
 pub mod rsm;
 pub mod rsw;
 pub mod spr;
+pub mod str_effect;
 pub mod tga;
 pub mod version;
 pub mod wav;

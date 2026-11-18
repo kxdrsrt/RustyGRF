@@ -1,8 +1,9 @@
 //! Everything the app does with an archive, without any Tauri types, so it can be tested.
 //! `lib.rs` only wraps these functions as commands.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::act_editor::{self, ActEdit, ActFrameView};
 use base64::Engine;
@@ -28,6 +29,7 @@ use rgrf_formats::render::{bounds_of, render_frame};
 use rgrf_formats::rsm::Rsm;
 use rgrf_formats::rsw::{self, Rsw};
 use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr};
+use rgrf_formats::str_effect;
 use serde::{Deserialize, Serialize};
 
 /// Largest entry the preview reads (bigger ones show only their details).
@@ -36,6 +38,9 @@ const MAX_TEXT_CHARS: usize = 200_000;
 const MAX_SPR_FRAMES: usize = 96;
 /// Undo steps kept per open archive.
 const MAX_UNDO: usize = 200;
+/// An effect preview shows at most this many frames, at half the stage size.
+const MAX_EFFECT_FRAMES: usize = 120;
+const EFFECT_SCALE: f32 = 0.5;
 
 pub struct Session {
     pub path: PathBuf,
@@ -47,6 +52,7 @@ pub struct Session {
     /// Earlier states of `pending` (newest last) for undo, and states undone for redo.
     undo: Vec<Vec<Change>>,
     redo: Vec<Vec<Change>>,
+    keys: OnceLock<HashMap<Vec<u8>, usize>>,
 }
 
 /// A change waiting to be saved into a new archive (the open archive is never modified).
@@ -166,6 +172,14 @@ pub enum Preview {
         interval_ms: u32,
         info: Vec<String>,
         note: Option<String>,
+    },
+    Effect {
+        gif: String,
+        width: u32,
+        height: u32,
+        frames: usize,
+        fps: u32,
+        info: Vec<String>,
     },
     Map {
         png: String,
@@ -595,6 +609,7 @@ impl Session {
             pending: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            keys: OnceLock::new(),
         })
     }
 
@@ -1109,6 +1124,7 @@ impl Session {
                 mime: "audio/mpeg".into(),
                 data: b64(&data),
             },
+            "str" => self.preview_str(index, &data)?,
             "spr" => self.preview_spr(&data)?,
             "act" => self.preview_act(index, &data, action.unwrap_or(0))?,
             "pal" => {
@@ -1260,6 +1276,104 @@ impl Session {
                 size: data.len() as u32,
             },
         })
+    }
+
+    /// Entry index by path key, made once (looking up one name with `find` scans the whole archive).
+    fn key_index(&self) -> &HashMap<Vec<u8>, usize> {
+        self.keys.get_or_init(|| {
+            self.arc
+                .entries()
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.name.key(), i))
+                .collect()
+        })
+    }
+
+    /// An STR effect as an animated GIF; its textures come from the folder of the STR file, else
+    /// from `data\texture\effect`.
+    fn preview_str(&self, index: usize, data: &[u8]) -> Result<Preview, String> {
+        let s = str_effect::parse(data).map_err(|e| e.to_string())?;
+        let entry_name = self.arc.entries()[index].name.as_bytes().to_vec();
+        let dir_len = entry_name
+            .iter()
+            .rposition(|&b| b == b'\\')
+            .map_or(0, |p| p + 1);
+        let keys = self.key_index();
+        let mut textures = str_effect::Textures::new();
+        let mut missing: Vec<String> = Vec::new();
+        for name in str_effect::texture_names(&s) {
+            let mut near = entry_name[..dir_len].to_vec();
+            near.extend(&name);
+            let mut shared = b"data\\texture\\effect\\".to_vec();
+            shared.extend(&name);
+            let found = [near, shared]
+                .iter()
+                .find_map(|p| keys.get(&GrfPath::new(p.clone()).key()).copied());
+            let image = found.and_then(|ti| {
+                let e = self.arc.entry(ti).ok()?;
+                if e.size > MAX_PREVIEW_BYTES {
+                    return None;
+                }
+                let d = self.arc.read(ti).ok()?.data;
+                let lower = name.to_ascii_lowercase();
+                if lower.ends_with(b".tga") {
+                    rgrf_formats::tga::parse(&d).ok()
+                } else {
+                    let mut img = rgrf_formats::bmp::parse(&d).ok()?;
+                    // the client treats pure magenta as transparent in BMP textures
+                    for p in img.pixels.as_chunks_mut::<4>().0 {
+                        if p[..3] == [255, 0, 255] {
+                            p[3] = 0;
+                        }
+                    }
+                    Some(img)
+                }
+            });
+            match image {
+                Some(img) => {
+                    textures.insert(name, img);
+                }
+                None => missing.push(self.shown_bytes(&name)),
+            }
+        }
+        let total = s.last_frame as usize + 1;
+        let step = total.div_ceil(MAX_EFFECT_FRAMES).max(1);
+        let canvases: Vec<_> = (0..total)
+            .step_by(step)
+            .map(|f| str_effect::render(&s, f as f32, &textures, EFFECT_SCALE))
+            .collect();
+        let fps = s.fps.max(1);
+        let delay = ((100.0 * step as f32 / fps as f32).round().max(2.0)) as u16;
+        let gif =
+            encode_gif(&canvases, &vec![delay; canvases.len()], 1).map_err(|e| e.to_string())?;
+        let mut info = vec![format!(
+            "STR - {fps} fps, {total} frames{}, {} layers, {} textures",
+            if step > 1 {
+                format!(" (every {step}th shown)")
+            } else {
+                String::new()
+            },
+            s.layers.len(),
+            textures.len() + missing.len()
+        )];
+        if !missing.is_empty() {
+            info.push(format!("missing textures ({}):", missing.len()));
+            info.extend(missing.iter().take(12).map(|m| format!("  {m}")));
+        }
+        info.push("Simplified preview: blend modes and key animation as in the client, no lighting, shown on a dark background.".into());
+        Ok(Preview::Effect {
+            gif: b64(&gif),
+            width: canvases[0].width,
+            height: canvases[0].height,
+            frames: canvases.len(),
+            fps,
+            info,
+        })
+    }
+
+    fn shown_bytes(&self, bytes: &[u8]) -> String {
+        GrfPath::new(bytes.to_vec()).display(self.mode)
     }
 
     /// A name read as one char per byte, shown in the chosen name mode (Korean by default).
