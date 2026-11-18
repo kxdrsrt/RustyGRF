@@ -797,6 +797,17 @@ impl Session {
                     data: b64(&data),
                 }
             }
+            "tga" => {
+                let img = rgrf_formats::tga::parse(&data).map_err(|e| e.to_string())?;
+                Preview::Image {
+                    mime: "image/png".into(),
+                    data: b64(&rgba_to_png(&img).map_err(|e| e.to_string())?),
+                }
+            }
+            "ogg" => Preview::Audio {
+                mime: "audio/ogg".into(),
+                data: b64(&data),
+            },
             "wav" => Preview::Audio {
                 mime: "audio/wav".into(),
                 data: b64(&data),

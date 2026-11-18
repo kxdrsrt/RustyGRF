@@ -57,6 +57,7 @@ if (!window.__TAURI__) {
         await new Promise((r) => setTimeout(r, 15));
         switch (cmd) {
           case "startup_path":
+          case "startup_select":
             return null;
           case "set_names":
             filtered = all;

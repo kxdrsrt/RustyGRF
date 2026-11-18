@@ -18,7 +18,7 @@ const S = {
   loading: false,
   pending: false,
   previewToken: 0,
-  pending: [], // changes waiting to be saved
+  changes: [], // changes waiting to be saved
 };
 
 function el(tag, attrs = {}, ...children) {
@@ -98,7 +98,7 @@ async function openPath(path) {
   $("empty").hidden = true;
   $("viewport").hidden = false;
   for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes"]) $(id).disabled = false;
-  S.pending = [];
+  S.changes = [];
   updateEditBar();
   $("search").value = "";
   $("names").value = "cp949";
@@ -345,11 +345,11 @@ async function doExtract() {
 function updateEditBar() {
   $("btn-replace").disabled = S.selected == null;
   $("btn-remove").disabled = !S.info;
-  $("btn-changes").textContent = `Changes (${S.pending.length})…`;
+  $("btn-changes").textContent = `Changes (${S.changes.length})…`;
 }
 
 function setPending(rows) {
-  S.pending = rows;
+  S.changes = rows;
   updateEditBar();
 }
 
@@ -422,13 +422,13 @@ async function doRemove() {
 }
 
 async function doChanges() {
-  if (!S.pending.length) {
+  if (!S.changes.length) {
     await note("Changes", "No pending changes. Use Replace…, Add file… or Remove; the open archive is never modified, the result is saved as a new archive.");
     return;
   }
-  const list = el("ul", { class: "pending" }, ...S.pending.slice(0, 500).map((p) => el("li", {}, el("span", { class: "kind", text: p.kind }), el("span", { text: p.name }), p.file ? el("span", { class: "file", text: p.file }) : null)));
-  const more = S.pending.length > 500 ? el("p", { class: "muted", text: `… and ${fmtNum(S.pending.length - 500)} more` }) : null;
-  const act = await ask(`${fmtNum(S.pending.length)} pending change(s)`, [list, more], [{ label: "Save as new archive…", value: "save", primary: true }, { label: "Discard all", value: "discard" }, { label: "Close", value: null }]);
+  const list = el("ul", { class: "pending" }, ...S.changes.slice(0, 500).map((p) => el("li", {}, el("span", { class: "kind", text: p.kind }), el("span", { text: p.name }), p.file ? el("span", { class: "file", text: p.file }) : null)));
+  const more = S.changes.length > 500 ? el("p", { class: "muted", text: `… and ${fmtNum(S.changes.length - 500)} more` }) : null;
+  const act = await ask(`${fmtNum(S.changes.length)} pending change(s)`, [list, more], [{ label: "Save as new archive…", value: "save", primary: true }, { label: "Discard all", value: "discard" }, { label: "Close", value: null }]);
   if (act === "discard") {
     await invoke("discard_pending");
     setPending([]);
@@ -665,5 +665,14 @@ if (T.event?.listen) {
 clearPreview();
 
 invoke("startup_path")
-  .then((p) => p && openPath(p))
+  .then(async (p) => {
+    if (!p) return;
+    await openPath(p);
+    const q = await invoke("startup_select");
+    if (q && S.info) {
+      $("search").value = q;
+      await runSearch(q);
+      if (S.total) select(0);
+    }
+  })
   .catch(() => {});

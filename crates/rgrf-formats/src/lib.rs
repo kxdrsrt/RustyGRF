@@ -13,6 +13,7 @@ pub mod rle;
 pub mod rsm;
 pub mod rsw;
 pub mod spr;
+pub mod tga;
 pub mod version;
 
 pub use version::Version;

@@ -284,9 +284,27 @@ fn cancel_job(state: State<'_, AppState>) {
 /// A GRF path given on the command line (`rustygrf-gui file.grf`), opened by the page at start.
 #[tauri::command]
 fn startup_path() -> Option<String> {
-    std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with('-') && PathBuf::from(a).is_file())
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--select" {
+            args.next();
+        } else if !a.starts_with('-') && PathBuf::from(&a).is_file() {
+            return Some(a);
+        }
+    }
+    None
+}
+
+/// `--select <search>` on the command line: the page searches for it and selects the first hit.
+#[tauri::command]
+fn startup_select() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--select" {
+            return args.next();
+        }
+    }
+    None
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -314,7 +332,8 @@ pub fn run() {
             discard_pending,
             save_edited,
             cancel_job,
-            startup_path
+            startup_path,
+            startup_select
         ])
         .run(tauri::generate_context!())
         .expect("error while running RustyGRF");

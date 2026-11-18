@@ -113,6 +113,16 @@ fn previews_of_real_files() {
         other => panic!("{other:?}"),
     }
 
+    // a TGA (the webview cannot show them itself) becomes a PNG
+    assert!(s.search("*.tga") > 100);
+    let tga = s.page(0, 1)[0].index;
+    match s.preview(tga, None).unwrap() {
+        Preview::Image { mime, data } => {
+            assert_eq!((mime.as_str(), data.is_empty()), ("image/png", false))
+        }
+        other => panic!("{other:?}"),
+    }
+
     // a sprite shows its images
     let spr = find(&mut s, "poporing.spr");
     match s.preview(spr, None).unwrap() {

@@ -250,3 +250,28 @@ fn every_rsm_is_read_to_its_last_byte_and_its_textures_exist() {
         &s.failures[..s.failures.len().min(8)]
     );
 }
+
+/// Every TGA of the real archive decodes (they are used by effects and UI).
+#[test]
+fn every_tga_decodes() {
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let idx = arc.select(Some("*.tga"), NameMode::Cp1252);
+    eprintln!("{} TGA files", idx.len());
+    let bad: Vec<String> = idx
+        .par_iter()
+        .filter_map(|&i| {
+            let name = arc.entries()[i].name.display(NameMode::Cp1252);
+            let data = arc.read(i).unwrap().data;
+            rgrf_formats::tga::parse(&data)
+                .err()
+                .map(|e| format!("{name}: {e}"))
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} failed, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
+    );
+}
