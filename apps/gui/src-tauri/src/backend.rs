@@ -28,6 +28,7 @@ const MAX_SPR_FRAMES: usize = 96;
 pub struct Session {
     pub path: PathBuf,
     arc: Archive,
+    mode: NameMode,
     names: Vec<String>,
     filtered: Vec<usize>,
 }
@@ -214,18 +215,31 @@ fn hex_dump(bytes: &[u8]) -> String {
 impl Session {
     pub fn open(path: &Path) -> Result<Self, String> {
         let arc = Archive::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let names: Vec<String> = arc
-            .entries()
-            .iter()
-            .map(|e| e.name.display(NameMode::Cp1252))
-            .collect();
+        // Korean names are readable; `set_names` switches to Latin-1 (as GRF Editor shows them) or UTF-8.
+        let mode = NameMode::Cp949;
+        let names = Self::display_names(&arc, mode);
         let filtered = (0..names.len()).collect();
         Ok(Self {
             path: path.to_path_buf(),
             arc,
+            mode,
             names,
             filtered,
         })
+    }
+
+    fn display_names(arc: &Archive, mode: NameMode) -> Vec<String> {
+        arc.entries().iter().map(|e| e.name.display(mode)).collect()
+    }
+
+    /// How names are shown and searched: `cp949`, `cp1252` or `utf8`. Extracting always writes
+    /// Latin-1 names, so the result round-trips with `rgrf build`.
+    pub fn set_names(&mut self, mode: &str) -> Result<(), String> {
+        let m = NameMode::parse(mode).ok_or_else(|| format!("unknown name mode '{mode}'"))?;
+        self.mode = m;
+        self.names = Self::display_names(&self.arc, m);
+        self.filtered = (0..self.names.len()).collect();
+        Ok(())
     }
 
     pub fn info(&self) -> ArchiveInfo {
@@ -246,7 +260,7 @@ impl Session {
     /// Sets the filter (empty = everything; `*` and `?` make a glob, else a substring) and returns
     /// the number of matches.
     pub fn search(&mut self, query: &str) -> usize {
-        self.filtered = self.arc.select(Some(query), NameMode::Cp1252);
+        self.filtered = self.arc.select(Some(query), self.mode);
         self.filtered.len()
     }
 
@@ -870,6 +884,42 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn names_can_be_shown_as_korean_or_latin1() {
+        let dir = tmp("names");
+        // the bytes C0 AF C0 FA are the Korean "유저"; written as Latin-1 characters they build that archive path
+        let folder = dir.join("src/data/\u{c0}\u{af}\u{c0}\u{fa}");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.txt"), "x").unwrap();
+        let out = dir.join("n.grf");
+        build(
+            &dir.join("src"),
+            &out,
+            &BuildOptions::default(),
+            &Control {
+                cancel: None,
+                progress: None,
+            },
+        )
+        .unwrap();
+        let mut s = Session::open(&out).unwrap();
+        assert_eq!(s.page(0, 1)[0].name, "data\\\u{c720}\u{c800}\\a.txt");
+        assert_eq!(s.search("\u{c720}\u{c800}"), 1);
+        s.set_names("cp1252").unwrap();
+        assert_eq!(
+            s.page(0, 1)[0].name,
+            "data\\\u{c0}\u{af}\u{c0}\u{fa}\\a.txt"
+        );
+        assert_eq!(s.search("\u{c720}\u{c800}"), 0);
+        assert_eq!(s.search("\u{c0}\u{af}\u{c0}\u{fa}"), 1);
+        assert!(s.set_names("nonsense").is_err());
+        // extracting writes the Latin-1 folder name whatever the display mode
+        let idx = s.filtered().to_vec();
+        s.extract(&idx, &dir.join("out"), false).unwrap();
+        assert!(dir.join("out/data/\u{c0}\u{af}\u{c0}\u{fa}/a.txt").exists());
         let _ = fs::remove_dir_all(dir);
     }
 }

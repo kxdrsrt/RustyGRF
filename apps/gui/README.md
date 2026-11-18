@@ -6,6 +6,8 @@ Desktop-Oberfläche auf dem Rust-Kern (`rgrf-core`, `rgrf-formats`). Eigenes Car
 - `src-tauri/src/backend.rs`: alles, was die App mit einem Archiv tut (öffnen, suchen, blättern, Vorschau, extrahieren, prüfen), ohne Tauri-Typen, mit Tests.
 - `src-tauri/src/lib.rs`: dünne Tauri-Befehle darum; schwere Arbeit läuft auf einem Arbeits-Thread, das Fenster bleibt bedienbar.
 - `ui/`: reines HTML/CSS/JS (kein Build-Werkzeug). Die Liste ist virtualisiert (nur sichtbare Zeilen, Seiten vom Backend), Dark/Light per `prefers-color-scheme`. `ui/mock.js` ersetzt das Backend nur im normalen Browser, in der App ist es inaktiv.
+- Namensanzeige: Standard **Koreanisch** (CP949, z. B. `유저인터페이스`), umschaltbar auf Latin-1 (so zeigt es GRF Editor) oder UTF-8. Gilt auch für die Suche; Extrahieren schreibt immer Latin-1-Namen (rundlauffähig mit `rgrf build`).
+- Startpfad: `rustygrf-gui <datei.grf>` öffnet das Archiv direkt (Grundlage für „Öffnen mit“).
 - Einziges npm-Paket: `@tauri-apps/cli` (Entwicklungsabhängigkeit).
 
 ## Starten und Bauen

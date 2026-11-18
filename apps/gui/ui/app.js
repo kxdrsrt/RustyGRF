@@ -96,8 +96,9 @@ async function openPath(path) {
   document.title = `${S.info.file_name} - RustyGRF`;
   $("empty").hidden = true;
   $("viewport").hidden = false;
-  for (const id of ["search", "btn-extract", "btn-verify"]) $(id).disabled = false;
+  for (const id of ["search", "btn-extract", "btn-verify", "names"]) $(id).disabled = false;
   $("search").value = "";
+  $("names").value = "cp949";
   S.query = "";
   await runSearch("");
   setStatus(
@@ -360,6 +361,15 @@ $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => runSearch(e.target.value.trim()), 180);
 });
+$("names").addEventListener("change", async (e) => {
+  try {
+    await invoke("set_names", { mode: e.target.value });
+    $("search").value = "";
+    await runSearch("");
+  } catch (err) {
+    setStatus(`Error: ${errText(err)}`);
+  }
+});
 $("viewport").addEventListener("scroll", onScroll, { passive: true });
 $("viewport").addEventListener("click", (e) => {
   const row = e.target.closest(".row");
@@ -398,3 +408,7 @@ if (T.event?.listen) {
 }
 
 clearPreview();
+
+invoke("startup_path")
+  .then((p) => p && openPath(p))
+  .catch(() => {});

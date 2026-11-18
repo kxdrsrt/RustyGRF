@@ -13,6 +13,13 @@
     <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" disabled autocomplete="off" spellcheck="false">
     <span id="count" class="muted"></span>
     <span class="spacer"></span>
+    <label class="muted" for="names" title="How file names are shown and searched. Extracting always writes Latin-1 names, so the result matches `rgrf build`.">Names
+      <select id="names" disabled>
+        <option value="cp949" selected>Korean</option>
+        <option value="cp1252">Latin-1</option>
+        <option value="utf8">UTF-8</option>
+      </select>
+    </label>
     <button id="btn-extract" disabled>Extract…</button>
     <button id="btn-verify" disabled>Verify</button>
   </header>

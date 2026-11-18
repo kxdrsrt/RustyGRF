@@ -54,6 +54,11 @@ if (!window.__TAURI__) {
       invoke: async (cmd, a) => {
         await new Promise((r) => setTimeout(r, 15));
         switch (cmd) {
+          case "startup_path":
+            return null;
+          case "set_names":
+            filtered = all;
+            return all.length;
           case "open_archive":
             return { path: a.path, file_name: "mock.grf", format: "0x200", entries: all.length, files: all.length, file_size: 4155996888 };
           case "search": {

@@ -57,6 +57,15 @@ async fn page(state: State<'_, AppState>, offset: usize, limit: usize) -> Res<Ve
 }
 
 #[tauri::command]
+async fn set_names(state: State<'_, AppState>, mode: String) -> Res<usize> {
+    with_session(&state, move |s| {
+        s.set_names(&mode)?;
+        Ok(s.filtered().len())
+    })
+    .await
+}
+
+#[tauri::command]
 async fn details(state: State<'_, AppState>, index: usize) -> Res<Details> {
     with_session(&state, move |s| s.details(index)).await
 }
@@ -92,6 +101,14 @@ async fn verify(state: State<'_, AppState>, decode: bool) -> Res<VerifySummary> 
     with_session(&state, move |s| s.verify(decode)).await
 }
 
+/// A GRF path given on the command line (`rustygrf-gui file.grf`), opened by the page at start.
+#[tauri::command]
+fn startup_path() -> Option<String> {
+    std::env::args()
+        .skip(1)
+        .find(|a| !a.starts_with('-') && PathBuf::from(a).is_file())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -101,10 +118,12 @@ pub fn run() {
             open_archive,
             search,
             page,
+            set_names,
             details,
             preview,
             extract,
-            verify
+            verify,
+            startup_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running RustyGRF");
