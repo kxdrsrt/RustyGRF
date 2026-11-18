@@ -52,12 +52,12 @@ impl Report {
 }
 
 /// Entry of `DATA.INI`.
-struct IniEntry {
-    index: u32,
-    file: String,
+pub(crate) struct IniEntry {
+    pub(crate) index: u32,
+    pub(crate) file: String,
 }
 
-fn find_ci(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn find_ci(dir: &Path, name: &str) -> Option<PathBuf> {
     fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -69,7 +69,7 @@ fn find_ci(dir: &Path, name: &str) -> Option<PathBuf> {
         })
 }
 
-fn parse_ini(text: &str) -> Vec<IniEntry> {
+pub(crate) fn parse_ini(text: &str) -> Vec<IniEntry> {
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -118,7 +118,7 @@ fn connections(xml: &str) -> String {
     }
 }
 
-fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
+pub(crate) fn walk(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
     entries.sort();

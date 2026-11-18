@@ -21,7 +21,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Vorschau **ACT** (`PreviewAct`) | `act info`, `act render` (PNG) | ✅ Lesen/Schreiben/Rendern, Anker-Bindung, GIF (M7b) |
 | Palette (`PreviewPalette`, `PaletteOperations`) | PAL lesen/schreiben, Palette tauschen (`spr set-palette`) | ✅; weitere Operationen 🔨 |
 | Lua/Lub anzeigen, dekompilieren (`PreviewText`, `DecompilerSettings`) | `lua check` (Syntax), `cat` für Text | ✅ Syntaxprüfung (M7c); Dekompilieren von Bytecode 🔨 |
-| Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | – | 🔨 M7e |
+| Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | `map info|png|check` | ✅ GAT/RSW lesen, schreiben, Bild, Ressourcen-Check (M7e); Zellen bearbeiten, Karte extrahieren 🔨 |
 | 3D: RSM, STR (`OpenGLViewport`) | – | 🔨 M7e |
 | Audio/Video (`PreviewWav`, `PreviewBink`) | – | ❓ |
 | `ThumbDb`, `TypeExplorer`, Raw-/Ordnerstruktur, Ressourcen-Indexer | `ls`, `info` teilweise | ❓ |

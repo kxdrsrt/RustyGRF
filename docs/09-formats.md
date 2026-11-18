@@ -70,3 +70,15 @@ Liest einen Client-Ordner nach den gemessenen Regeln (niedrigster Index gewinnt,
 
 ### Warum es keinen Ressourcen-Prüfer („Datei fehlt“) gibt
 Versucht und gemessen: Bildnamen aus den Lua-Tabellen und aus dem Programm gegen die Archive zu prüfen. Von 1.445 verschiedenen Namen je Datei blieben nach Entfernen der Lua-Escapes 337 „fehlend“ in 14 Dateien, überwiegend **falsche Treffer**: der Basisordner hängt von der Tabelle ab (z. B. `petinfo.lub` nennt `ACC_*.act` ohne Ordner, `stateiconimginfo.lub` `.tga` ohne Ordner), und Namen im Programm entstehen oft erst zur Laufzeit (so auch `effect\p2.bmp`, der Name steht weder im Programm noch in den Lua-Dateien als Text). Ein brauchbarer Prüfer braucht je Tabelle eine eigene Regel; das ist nicht gebaut.
+
+## Karten: GAT, GND, RSW – M7e (Teil 1), umgesetzt
+- **GAT** (`gat.rs`): `"GRAT"`, Version, Breite, Höhe, dann je Zelle vier `f32`-Höhen und ein `i32`-Typ (Zeile 0 = Süden). Typen wie in GRF Editor: 0, 3, 6 begehbar (3 = Wasser), 1, 2, 5 nicht begehbar, 4 unbekannt; Werte mit gesetztem höchstem Bit kommen vor und bleiben erhalten. Bild: Norden oben.
+- **RSW** (`rsw.rs`): Kopf, vier 40-Byte-Namen, Wasser (bis 2.5), Licht, Grenzen, ab 2.7 eine Zahlenliste, Objekte (Modelle, Lichter, Sounds, Effekte); was nach den Objekten folgt (Quadtree) bleibt als Bytes erhalten. Unbekannte Objekttypen werden als Fehler gemeldet statt übersprungen (GRF Editor überspringt sie, verliert damit aber die Ausrichtung).
+- **GND** (`gnd.rs`): nur Kopf und Texturliste (reicht, um zu wissen, welche Texturen eine Karte braucht); Kacheln, Lightmaps und Würfelgitter werden **nicht** gelesen.
+- **Gemessen (2026-11-18, kRO-`data.grf`, `crates/rgrf-formats/tests/real_map.rs`):**
+  - **1.029 GAT** (Versionen 1.2: 903, 1.3: 126): alle fehlerfrei und **byteidentisch** zurückgeschrieben.
+  - **1.029 RSW** (1.9: 2, 2.1: 812, 2.2: 57, 2.3: 2, 2.4: 6, 2.5: 24, 2.6: 101, 2.7: 25), **917.911 Objekte**: alle fehlerfrei und **byteidentisch** zurückgeschrieben.
+  - **Genannte Dateien:** von 173.333 nachgeschlagenen Dateien (Boden, Höhen, GND-Texturen, Modelle, Sounds) fehlt **eine**: `air_evt.gnd` (die Karte `air_evt` hat keinen Boden). Der Karten-Check hat damit kaum Fehlalarme; anders als der allgemeine Ressourcen-Prüfer (siehe oben), weil die Ordner (`data\texture\`, `data\model\`, `data\wav\`) hier festliegen.
+  - Auf deinem `client-dev/full` (7,6 s): 1.050 Karten, 174.988 Dateien, ein Problem (dasselbe `air_evt.gnd`).
+  - Sichtprüfung: Prontera als Bild (Achteck, Brunnen, Schloss im Norden oben) ist erkennbar.
+- **Nicht geprüft:** Texturen innerhalb der Modelle (RSM wird noch nicht gelesen), Effekte, ob GND-Kacheln und Lightmaps stimmen, GAT-Typen 4 und 6 (kaum vorhanden, nicht erklärt), Vergleich mit GRF Editor (nur in der Windows-VM).

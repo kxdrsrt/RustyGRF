@@ -28,6 +28,7 @@ mod act_cmd;
 mod client_cmd;
 mod edit_cmd;
 mod lua_cmd;
+mod map_cmd;
 mod spr_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -232,6 +233,39 @@ enum Cmd {
     Client {
         #[command(subcommand)]
         action: ClientCmd,
+    },
+    /// Maps (.gat/.gnd/.rsw): info, picture of the walkability grid, check the files a map needs
+    Map {
+        #[command(subcommand)]
+        action: MapCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum MapCmd {
+    /// Version, size, cell types (GAT), textures (GND) or objects (RSW) of a map file
+    Info {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// Picture of a GAT: green walkable, blue water, grey not walkable; north at the top
+    Png {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Enlarge every cell to scale x scale pixels
+        #[arg(long, default_value_t = 1)]
+        scale: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Check that every file the maps name exists: ground, altitude, textures, models, sounds
+    Check {
+        /// A client folder (with DATA.INI) or a .grf
+        input: PathBuf,
+        /// Only these maps (names without .rsw); default: all
+        maps: Vec<String>,
     },
 }
 
@@ -705,6 +739,27 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Map { action } => match action {
+            MapCmd::Info { input, entry } => {
+                map_cmd::info(input, entry.as_deref(), cli.names, cli.json)
+            }
+            MapCmd::Png {
+                input,
+                entry,
+                scale,
+                output,
+                overwrite,
+            } => map_cmd::png(
+                input,
+                entry.as_deref(),
+                output,
+                *scale,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            MapCmd::Check { input, maps } => map_cmd::check(input, maps, cli.names, cli.json),
+        },
         Cmd::Client { action } => match action {
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)

@@ -1319,3 +1319,203 @@ fn client_check_on_the_real_full_client() {
     assert!(text.contains("Live Server 185.163.118.80:6900"), "{text}");
     assert!(text.contains("0 with syntax errors"), "{text}");
 }
+
+#[test]
+fn map_info_png_and_check() {
+    use rgrf_formats::gat::{Cell, Gat};
+    use rgrf_formats::rsw::{EffectObject, Light, ModelObject, Object, Rsw, SoundObject, Water};
+    use rgrf_formats::version::Version;
+
+    fn name<const N: usize>(s: &str) -> [u8; N] {
+        let mut a = [0u8; N];
+        a[..s.len()].copy_from_slice(s.as_bytes());
+        a
+    }
+    let dir = tmpdir("map");
+    let w = |rel: &str, bytes: &[u8]| {
+        let p = dir.join("src").join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    };
+    let cell = |kind| Cell {
+        heights: [0.0, 1.0, 2.0, 3.0],
+        kind,
+    };
+    let gat = Gat {
+        version: Version::new(1, 2),
+        width: 2,
+        height: 2,
+        cells: vec![cell(0), cell(1), cell(3), cell(5)],
+    };
+    let model = |file: &str| {
+        Object::Model(Box::new(ModelObject {
+            name: [0; 40],
+            animation_type: 0,
+            animation_speed: 1.0,
+            block_type: 0,
+            unknown_byte: 0,
+            unknown_int: 0,
+            model_name: name(file),
+            node_name: name("n"),
+            position: [0.0; 3],
+            rotation: [0.0; 3],
+            scale: [1.0; 3],
+        }))
+    };
+    let rsw = Rsw {
+        version: Version::new(2, 1),
+        build_number: 0,
+        unknown_byte: 0,
+        ini: name("x.ini"),
+        ground: name("town.gnd"),
+        altitude: name("town.gat"),
+        source: [0; 40],
+        water: Some(Water {
+            level: 1.0,
+            kind: 0,
+            wave_height: 0.0,
+            wave_speed: 0.0,
+            wave_pitch: 0.0,
+            texture_cycling: 0,
+        }),
+        light: Some(Light {
+            longitude: 45,
+            latitude: 45,
+            diffuse: [1.0; 3],
+            ambient: [0.3; 3],
+            intensity: 0.5,
+        }),
+        bounds: Some([-500, 500, -500, 500]),
+        extra_ints: vec![],
+        objects: vec![
+            model("house.rsm"),
+            model("tree.rsm"),
+            Object::Sound(SoundObject {
+                name: [0; 80],
+                wave_name: name("wind.wav"),
+                position: [0.0; 3],
+                volume: 1.0,
+                width: 1,
+                height: 1,
+                range: 5.0,
+                cycle: 4.0,
+            }),
+            Object::Effect(EffectObject {
+                name: [0; 80],
+                position: [0.0; 3],
+                effect_number: 1,
+                emit_speed: 1.0,
+                params: [0.0; 4],
+            }),
+        ],
+        tail: vec![],
+    };
+    // a GND header with two textures
+    let mut gnd = b"GRGN\x01\x07".to_vec();
+    gnd.extend(2i32.to_le_bytes());
+    gnd.extend(2i32.to_le_bytes());
+    gnd.extend(10.0f32.to_le_bytes());
+    gnd.extend(2i32.to_le_bytes());
+    gnd.extend(80i32.to_le_bytes());
+    for t in ["town\\grass.bmp", "town\\lost.bmp"] {
+        let mut p = vec![0u8; 80];
+        p[..t.len()].copy_from_slice(t.as_bytes());
+        gnd.extend(p);
+    }
+    w("data/town.gat", &gat.to_bytes());
+    w("data/town.rsw", &rsw.to_bytes());
+    w("data/town.gnd", &gnd);
+    w("data/texture/town/grass.bmp", b"x"); // town\lost.bmp is missing
+    w("data/model/house.rsm", b"x"); // tree.rsm is missing
+    // wind.wav is missing too
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    let grf = p("m.grf");
+    assert!(
+        rgrf(&["build", &p("src"), "-o", &grf, "-q"])
+            .status
+            .success()
+    );
+
+    let o = rgrf(&["--json", "map", "info", &grf, r"data\town.gat"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(
+        (v["width"].as_u64(), v["height"].as_u64()),
+        (Some(2), Some(2))
+    );
+    assert_eq!(v["types"].as_array().unwrap().len(), 4);
+    let v = json(&rgrf(&["--json", "map", "info", &grf, r"data\town.rsw"]));
+    assert_eq!(v["objects"]["models"], 2);
+    assert_eq!(v["ground"], "town.gnd");
+    let v = json(&rgrf(&["--json", "map", "info", &grf, r"data\town.gnd"]));
+    assert_eq!(v["textures"][1], "town\\lost.bmp");
+    assert_eq!(
+        rgrf(&["map", "info", &grf, r"data\town.rsw.bak"])
+            .status
+            .code(),
+        Some(1)
+    );
+
+    let o = rgrf(&[
+        "--json",
+        "map",
+        "png",
+        &grf,
+        r"data\town.gat",
+        "--scale",
+        "4",
+        "-o",
+        &p("t.png"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(
+        (json(&o)["width"].as_u64(), json(&o)["height"].as_u64()),
+        (Some(8), Some(8))
+    );
+    assert_eq!(
+        rgrf(&["map", "png", &grf, r"data\town.gat", "-o", &p("t.png")])
+            .status
+            .code(),
+        Some(1)
+    );
+
+    let o = rgrf(&["--json", "map", "check", &grf]);
+    assert_eq!(o.status.code(), Some(3));
+    let v = json(&o);
+    assert_eq!(v["maps_checked"], 1);
+    assert_eq!(v["problems"], 3);
+    let text = v["maps_with_problems"].to_string();
+    for needle in [
+        "texture data\\\\texture\\\\town\\\\lost.bmp",
+        "model data\\\\model\\\\tree.rsm",
+        "sound data\\\\wav\\\\wind.wav",
+    ] {
+        assert!(text.contains(needle), "{needle} in {text}");
+    }
+    assert!(!text.contains("house.rsm") && !text.contains("grass.bmp"));
+    // a named map that does not exist
+    assert_eq!(
+        rgrf(&["map", "check", &grf, "nowhere"]).status.code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn map_check_on_the_real_full_client() {
+    let Some(full) = testdata("client-dev/full") else {
+        return;
+    };
+    let o = rgrf(&[
+        "--json", "map", "check", &full, "prontera", "payon", "geffen",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let v = json(&o);
+    assert_eq!(v["maps_checked"], 3);
+    assert!(v["files_looked_up"].as_u64().unwrap() > 500);
+}
