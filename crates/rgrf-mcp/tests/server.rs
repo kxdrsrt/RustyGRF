@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 6);
+    assert_eq!(ro.len(), 8);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 11);
+    assert_eq!(names(&rw).len(), 13);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -246,6 +246,60 @@ fn reading_text_binary_and_summaries() {
     assert_eq!(v["decoded_size"], 8);
     assert_eq!(v["preview_hex"], "5350010272657374");
     assert_eq!(v["crc32"].as_str().unwrap().len(), 8);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn tiny_gat() -> Vec<u8> {
+    let mut b = b"GRAT\x01\x02".to_vec();
+    b.extend(2i32.to_le_bytes());
+    b.extend(1i32.to_le_bytes());
+    for kind in [0i32, 1] {
+        for h in [0.0f32, 1.0, 2.0, 3.0] {
+            b.extend(h.to_le_bytes());
+        }
+        b.extend(kind.to_le_bytes());
+    }
+    b
+}
+
+#[test]
+fn inspect_reads_the_format_and_lua_decompile_refuses_plain_text() {
+    let dir = tmp("inspect");
+    let p = make_grf(
+        &dir,
+        "fmt.grf",
+        &[
+            ("data/map.gat", &tiny_gat()),
+            ("data/pal.pal", &[0u8; 1024]),
+            ("data/a.lub", b"print('hi')"),
+            ("data/a.bin", &[1, 2, 3]),
+        ],
+    );
+    let (p, s) = (p.to_str().unwrap(), server(&[], &[]));
+    let v = ok(
+        &s,
+        "grf_inspect",
+        json!({"path": p, "entry": "data/map.gat"}),
+    );
+    assert_eq!(
+        (v["kind"].clone(), v["width"].clone(), v["height"].clone()),
+        ("gat".into(), 2.into(), 1.into())
+    );
+    assert_eq!(v["types"].as_array().unwrap().len(), 2);
+    let v = ok(
+        &s,
+        "grf_inspect",
+        json!({"path": p, "entry": "data/pal.pal"}),
+    );
+    assert_eq!(v["colors"], 256);
+    let msg = fails(&s, "grf_inspect", json!({"path": p, "entry": "data/a.bin"}));
+    assert!(msg.contains("no format reader"), "{msg}");
+    let msg = fails(
+        &s,
+        "grf_lua_decompile",
+        json!({"path": p, "entry": "data/a.lub"}),
+    );
+    assert!(msg.contains("not compiled Lua"), "{msg}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

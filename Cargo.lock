@@ -460,6 +460,7 @@ dependencies = [
  "encoding_rs",
  "rayon",
  "rgrf-core",
+ "rgrf-formats",
  "serde_json",
 ]
 

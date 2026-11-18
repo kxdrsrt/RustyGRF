@@ -89,6 +89,18 @@ const OUTPUT: Param = req(
     "Archive file to create (inside an allowed folder).",
 );
 
+/// The decoded bytes of `entry` in the archive `path` and the entry's name as typed in `names`.
+pub(crate) fn entry_data(ctx: &Ctx, a: &Args) -> Result<(String, Vec<u8>), String> {
+    let arc = open(ctx, a.str("path"))?;
+    let mode = names_mode(a);
+    let i = entry_index(&arc, a.str("entry"), mode)?;
+    let d = arc.read(i).map_err(err)?;
+    if d.status == DecodeStatus::Encrypted {
+        return Err("entry is encrypted; decryption is not supported yet".into());
+    }
+    Ok((arc.entries()[i].name.display(mode), d.data))
+}
+
 pub const TOOLS: &[Tool] = &[
     Tool {
         name: "grf_info",
@@ -165,6 +177,48 @@ pub const TOOLS: &[Tool] = &[
         ],
         writes: false,
         run: read_summary,
+    },
+    Tool {
+        name: "grf_inspect",
+        title: "Look inside a client file",
+        description: "Reads the format of an entry and returns its structure as JSON: SPR (image sizes), ACT (actions, frames, intervals, sounds), PAL, GAT (cell types), GND (size, textures), RSW (models, sounds, water), RSM/RSM2 (nodes, triangles, animation), STR (layers, textures) and compiled Lua (function count). Use it instead of reading binary bytes.",
+        params: &[
+            req("path", Ty::Str, "Path of the .grf file."),
+            req(
+                "entry",
+                Ty::Str,
+                "Entry path inside the archive, e.g. `data\\prontera.rsw`.",
+            ),
+            NAMES,
+        ],
+        writes: false,
+        run: crate::inspect::inspect,
+    },
+    Tool {
+        name: "grf_lua_decompile",
+        title: "Decompile a compiled Lua file",
+        description: "Turns a compiled Lua 5.1 .lub entry back into source text. `complete` is false when some functions could only be shown as a commented bytecode listing (loops and some conditions are not decompiled yet); Lua 5.0 files are not supported. Set `listing` to get the plain bytecode listing instead.",
+        params: &[
+            req("path", Ty::Str, "Path of the .grf file."),
+            req(
+                "entry",
+                Ty::Str,
+                "Entry path inside the archive, e.g. `data\\luafiles514\\lua files\\datainfo\\accessoryid.lub`.",
+            ),
+            opt(
+                "listing",
+                Ty::Bool,
+                "Return the bytecode listing instead of source (default false).",
+            ),
+            opt(
+                "max_bytes",
+                Ty::Int,
+                "Maximum bytes of text to return (default 65536, at most 1048576).",
+            ),
+            NAMES,
+        ],
+        writes: false,
+        run: crate::inspect::lua_decompile,
     },
     Tool {
         name: "grf_verify",
