@@ -54,13 +54,13 @@ pub struct Rsm {
     pub trailing: usize,
 }
 
-struct Reader<'a> {
-    d: &'a [u8],
-    pos: usize,
+pub(crate) struct Reader<'a> {
+    pub(crate) d: &'a [u8],
+    pub(crate) pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], RsmError> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], RsmError> {
         let end = self.pos.checked_add(n).filter(|&e| e <= self.d.len());
         let Some(end) = end else {
             return Err(RsmError::Truncated {
@@ -73,20 +73,20 @@ impl<'a> Reader<'a> {
         self.pos = end;
         Ok(s)
     }
-    fn skip(&mut self, n: usize) -> Result<(), RsmError> {
+    pub(crate) fn skip(&mut self, n: usize) -> Result<(), RsmError> {
         self.take(n).map(|_| ())
     }
-    fn i32(&mut self) -> Result<i32, RsmError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, RsmError> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn f32(&mut self) -> Result<f32, RsmError> {
+    pub(crate) fn f32(&mut self) -> Result<f32, RsmError> {
         Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.d.len() - self.pos
     }
     /// A count of items of at least `min` bytes each.
-    fn count(&mut self, what: &'static str, min: usize) -> Result<usize, RsmError> {
+    pub(crate) fn count(&mut self, what: &'static str, min: usize) -> Result<usize, RsmError> {
         let at = self.pos;
         let n = self.i32()?;
         usize::try_from(n)
@@ -99,27 +99,27 @@ impl<'a> Reader<'a> {
             })
     }
     /// A string with an `i32` length in front.
-    fn lstr(&mut self) -> Result<Vec<u8>, RsmError> {
+    pub(crate) fn lstr(&mut self) -> Result<Vec<u8>, RsmError> {
         let n = self.count("string", 1)?;
         Ok(cut(self.take(n)?))
     }
     /// A NUL-padded string in a fixed field.
-    fn fstr(&mut self, n: usize) -> Result<Vec<u8>, RsmError> {
+    pub(crate) fn fstr(&mut self, n: usize) -> Result<Vec<u8>, RsmError> {
         Ok(cut(self.take(n)?))
     }
 }
 
-fn cut(raw: &[u8]) -> Vec<u8> {
+pub(crate) fn cut(raw: &[u8]) -> Vec<u8> {
     raw.iter().take_while(|&&b| b != 0).copied().collect()
 }
 
-const V1_2: Version = Version::new(1, 2);
-const V1_3: Version = Version::new(1, 3);
-const V1_4: Version = Version::new(1, 4);
-const V1_5: Version = Version::new(1, 5);
-const V1_6: Version = Version::new(1, 6);
-const V2_2: Version = Version::new(2, 2);
-const V2_3: Version = Version::new(2, 3);
+pub(crate) const V1_2: Version = Version::new(1, 2);
+pub(crate) const V1_3: Version = Version::new(1, 3);
+pub(crate) const V1_4: Version = Version::new(1, 4);
+pub(crate) const V1_5: Version = Version::new(1, 5);
+pub(crate) const V1_6: Version = Version::new(1, 6);
+pub(crate) const V2_2: Version = Version::new(2, 2);
+pub(crate) const V2_3: Version = Version::new(2, 3);
 
 impl Rsm {
     pub fn parse(bytes: &[u8]) -> Result<Self, RsmError> {

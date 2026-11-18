@@ -226,6 +226,8 @@ function clearPreview() {
 
 async function showPreview(row, action) {
   const token = ++S.previewToken;
+  S.viewer?.destroy();
+  S.viewer = null;
   const head = $("preview-head");
   const body = $("preview-body");
   head.replaceChildren(el("div", { class: "title", text: row.name }), el("div", { class: "meta", text: "Loading …" }));
@@ -318,6 +320,19 @@ function renderPreview(p, row, meta) {
         el("button", { type: "button", class: "small", text: "Set interval…", title: "Change the frame time of this action (staged, saved with Changes…)", onclick: () => setInterval_(row, p.action, p.interval_ms) }),
       );
       return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: `warning: ${p.note}` }) : null];
+    }
+    case "model": {
+      const host = el("div", { class: "glhost" });
+      const handle = { v: null };
+      // the canvas needs to be in the page before WebGL measures it
+      queueMicrotask(() => (S.viewer = handle.v = Viewer3D.show(host, p)));
+      const lit = el("input", { type: "checkbox", checked: true, onchange: () => handle.v?.set("lit", lit.checked) });
+      const wire = el("input", { type: "checkbox", onchange: () => handle.v?.set("wire", wire.checked) });
+      return [
+        el("div", { class: "controls" }, el("span", { class: "muted", text: `${fmtNum(p.triangles)} triangles — drag to turn, wheel to zoom, double-click to reset` }), el("label", {}, lit, " Lighting"), el("label", {}, wire, " Wireframe")),
+        host,
+        infoBlock(p.info),
+      ];
     }
     case "effect":
       return [el("div", { class: "muted", text: `${p.frames} frame(s) shown at ${p.fps} fps` }), el("div", { class: "fxstage" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "effect" })), infoBlock(p.info)];

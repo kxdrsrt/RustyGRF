@@ -93,8 +93,17 @@ fn previews_of_real_files() {
 
     let i = find(&mut s, r"data\model\ad\ad01.rsm");
     match s.preview(i, None).unwrap() {
-        Preview::Info { lines, .. } => {
-            assert!(lines.iter().any(|l| l.contains("ad_j_01.bmp")), "{lines:?}")
+        Preview::Model {
+            parts,
+            textures,
+            triangles,
+            ..
+        } => {
+            assert!(triangles > 0 && !parts.is_empty());
+            assert!(
+                textures.iter().any(|t| t.name.contains("ad_j_01.bmp") && t.png.is_some()),
+                "the texture is found and decoded"
+            );
         }
         other => panic!("{other:?}"),
     }

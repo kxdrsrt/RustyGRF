@@ -26,7 +26,7 @@ use rgrf_formats::gnd::GndSummary;
 use rgrf_formats::pal::Pal;
 use rgrf_formats::png_io::{Frame as PngFrame, frame_from_png, rgba_to_png};
 use rgrf_formats::render::{bounds_of, render_frame};
-use rgrf_formats::rsm::Rsm;
+use rgrf_formats::rsm_model;
 use rgrf_formats::rsw::{self, Rsw};
 use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr};
 use rgrf_formats::str_effect;
@@ -142,6 +142,22 @@ pub struct Frame {
     pub label: String,
 }
 
+/// Triangles of one texture; the arrays are base64 of little-endian `f32`.
+#[derive(Serialize, Debug)]
+pub struct ModelPartOut {
+    pub texture: usize,
+    pub positions: String,
+    pub normals: String,
+    pub uvs: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct TextureOut {
+    pub name: String,
+    /// `None` when the archive has no such texture.
+    pub png: Option<String>,
+}
+
 #[derive(Serialize, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Preview {
@@ -172,6 +188,15 @@ pub enum Preview {
         interval_ms: u32,
         info: Vec<String>,
         note: Option<String>,
+    },
+    Model {
+        parts: Vec<ModelPartOut>,
+        textures: Vec<TextureOut>,
+        min: [f32; 3],
+        max: [f32; 3],
+        alpha: f32,
+        triangles: usize,
+        info: Vec<String>,
     },
     Effect {
         gif: String,
@@ -1231,28 +1256,7 @@ impl Session {
                     lines,
                 }
             }
-            "rsm" | "rsm2" => {
-                let m = Rsm::parse(&data).map_err(|e| e.to_string())?;
-                let mut lines = vec![format!("RSM {} - {} meshes", m.version, m.meshes.len())];
-                for x in &m.meshes {
-                    lines.push(format!(
-                        "mesh {} ({} vertices, {} faces)",
-                        self.shown(&x.name.iter().map(|&b| char::from(b)).collect::<String>()),
-                        x.vertices,
-                        x.faces
-                    ));
-                }
-                lines.push("Textures:".into());
-                lines.extend(
-                    m.all_textures()
-                        .iter()
-                        .map(|t| self.shown(&t.iter().map(|&b| char::from(b)).collect::<String>())),
-                );
-                Preview::Info {
-                    title: "Model".into(),
-                    lines,
-                }
-            }
+            "rsm" | "rsm2" => self.preview_model(&data)?,
             "txt" | "xml" | "lua" | "lub" | "ini" | "csv" | "json" | "log" => {
                 if data.starts_with(b"\x1bLua") {
                     Preview::Message {
@@ -1290,6 +1294,97 @@ impl Session {
         })
     }
 
+    /// A texture of the archive as pixels: BMP (pure magenta is transparent, as in the client) or TGA.
+    fn texture_image(&self, entry: usize) -> Option<RgbaImage> {
+        let e = self.arc.entry(entry).ok()?;
+        if e.size > MAX_PREVIEW_BYTES {
+            return None;
+        }
+        let data = self.arc.read(entry).ok()?.data;
+        let lower = self.arc.entries()[entry]
+            .name
+            .as_bytes()
+            .to_ascii_lowercase();
+        if lower.ends_with(b".tga") {
+            rgrf_formats::tga::parse(&data).ok()
+        } else {
+            let mut img = rgrf_formats::bmp::parse(&data).ok()?;
+            for p in img.pixels.as_chunks_mut::<4>().0 {
+                if p[..3] == [255, 0, 255] {
+                    p[3] = 0;
+                }
+            }
+            Some(img)
+        }
+    }
+
+    /// An RSM model as triangles with its textures, for the 3D view.
+    fn preview_model(&self, data: &[u8]) -> Result<Preview, String> {
+        let model = rsm_model::parse(data).map_err(|e| e.to_string())?;
+        let posed = rsm_model::static_pose(&model);
+        let keys = self.key_index();
+        let f32s = |v: &[f32]| b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+        let mut textures: Vec<TextureOut> = Vec::new();
+        let mut parts = Vec::new();
+        let mut missing = 0;
+        for p in &posed.parts {
+            let mut full = b"data\\texture\\".to_vec();
+            full.extend(&p.texture);
+            let png = keys
+                .get(&GrfPath::new(full).key())
+                .and_then(|&ti| self.texture_image(ti))
+                .and_then(|img| rgba_to_png(&img).ok())
+                .map(|b| b64(&b));
+            if png.is_none() && !p.texture.is_empty() {
+                missing += 1;
+            }
+            textures.push(TextureOut {
+                name: self.shown_bytes(&p.texture),
+                png,
+            });
+            parts.push(ModelPartOut {
+                texture: textures.len() - 1,
+                positions: f32s(&p.positions),
+                normals: f32s(&p.normals),
+                uvs: f32s(&p.uvs),
+            });
+        }
+        let mut info = vec![format!(
+            "RSM {} - {} nodes, {} triangles, {} textures{}",
+            model.version,
+            model.nodes.len(),
+            posed.triangles,
+            textures.len(),
+            if missing > 0 {
+                format!(" ({missing} missing)")
+            } else {
+                String::new()
+            }
+        )];
+        for n in &model.nodes {
+            info.push(format!(
+                "node {} ({} vertices, {} faces){}",
+                self.shown_bytes(&n.name),
+                n.vertices.len(),
+                n.faces.len(),
+                if n.rot_keys.len() > 1 {
+                    ", rotates"
+                } else {
+                    ""
+                }
+            ));
+        }
+        Ok(Preview::Model {
+            parts,
+            textures,
+            min: posed.min,
+            max: posed.max,
+            alpha: posed.alpha,
+            triangles: posed.triangles,
+            info,
+        })
+    }
+
     /// An STR effect as an animated GIF; its textures come from the folder of the STR file, else
     /// from `data\texture\effect`.
     fn preview_str(&self, index: usize, data: &[u8]) -> Result<Preview, String> {
@@ -1310,26 +1405,7 @@ impl Session {
             let found = [near, shared]
                 .iter()
                 .find_map(|p| keys.get(&GrfPath::new(p.clone()).key()).copied());
-            let image = found.and_then(|ti| {
-                let e = self.arc.entry(ti).ok()?;
-                if e.size > MAX_PREVIEW_BYTES {
-                    return None;
-                }
-                let d = self.arc.read(ti).ok()?.data;
-                let lower = name.to_ascii_lowercase();
-                if lower.ends_with(b".tga") {
-                    rgrf_formats::tga::parse(&d).ok()
-                } else {
-                    let mut img = rgrf_formats::bmp::parse(&d).ok()?;
-                    // the client treats pure magenta as transparent in BMP textures
-                    for p in img.pixels.as_chunks_mut::<4>().0 {
-                        if p[..3] == [255, 0, 255] {
-                            p[3] = 0;
-                        }
-                    }
-                    Some(img)
-                }
-            });
+            let image = found.and_then(|ti| self.texture_image(ti));
             match image {
                 Some(img) => {
                     textures.insert(name, img);

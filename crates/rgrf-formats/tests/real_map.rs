@@ -418,3 +418,63 @@ fn every_str_parses_and_renders() {
         &bad[..bad.len().min(5)]
     );
 }
+
+/// Every RSM parses with its geometry, agrees with the structural reader and has a finite static pose.
+#[test]
+fn every_rsm_has_geometry_and_a_finite_pose() {
+    use rgrf_formats::rsm::Rsm;
+    use rgrf_formats::rsm_model::{parse, static_pose};
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let mut idx = arc.select(Some("*.rsm"), NameMode::Cp1252);
+    idx.extend(arc.select(Some("*.rsm2"), NameMode::Cp1252));
+    eprintln!("{} RSM files", idx.len());
+    let stats = Mutex::new(BTreeMap::<String, (usize, f32, f32)>::new());
+    let bad: Vec<String> = idx
+        .par_iter()
+        .filter_map(|&i| {
+            let name = arc.entries()[i].name.display(NameMode::Cp1252);
+            let data = arc.read(i).unwrap().data;
+            let m = match parse(&data) {
+                Ok(m) => m,
+                Err(e) => return Some(format!("{name}: {e}")),
+            };
+            let s = Rsm::parse(&data).unwrap();
+            let (v1, f1): (usize, usize) = (
+                m.nodes.iter().map(|n| n.vertices.len()).sum(),
+                m.nodes.iter().map(|n| n.faces.len()).sum(),
+            );
+            let (v2, f2): (usize, usize) = (
+                s.meshes.iter().map(|x| x.vertices).sum(),
+                s.meshes.iter().map(|x| x.faces).sum(),
+            );
+            if (v1, f1) != (v2, f2) {
+                return Some(format!("{name}: counts differ"));
+            }
+            let p = static_pose(&m);
+            if p.min.iter().chain(&p.max).any(|v| !v.is_finite()) {
+                return Some(format!("{name}: not finite"));
+            }
+            let size = (p.max[0] - p.min[0])
+                .max(p.max[1] - p.min[1])
+                .max(p.max[2] - p.min[2]);
+            let mut st = stats.lock().unwrap();
+            let e = st
+                .entry(format!("{}", m.version))
+                .or_insert((0, f32::MAX, 0.0));
+            e.0 += 1;
+            e.1 = e.1.min(size);
+            e.2 = e.2.max(size);
+            None
+        })
+        .collect();
+    for (v, (n, lo, hi)) in stats.lock().unwrap().iter() {
+        eprintln!("  RSM {v}: {n} models, size {lo:.1} .. {hi:.1}");
+    }
+    assert!(
+        bad.is_empty(),
+        "{} failed, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
+    );
+}

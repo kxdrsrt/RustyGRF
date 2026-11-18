@@ -12,6 +12,7 @@ pub mod png_io;
 pub mod render;
 pub mod rle;
 pub mod rsm;
+pub mod rsm_model;
 pub mod rsw;
 pub mod spr;
 pub mod str_effect;
