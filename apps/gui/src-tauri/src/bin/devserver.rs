@@ -125,6 +125,14 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_spr_palette(arg(a, "index")?, &PathBuf::from(arg::<String>(a, "pal")?))?;
             to_json(s.pending())
         }),
+        "act_frame" => with(state, |s| {
+            to_json(s.act_view(arg(a, "index")?, arg(a, "action")?, arg(a, "frame")?)?)
+        }),
+        "stage_act_edit" => with(state, |s| {
+            let edit: rustygrf_gui_lib::act_editor::ActEdit = arg(a, "edit")?;
+            s.stage_act_edit(arg(a, "index")?, arg(a, "action")?, arg(a, "frame")?, &edit)?;
+            to_json(s.pending())
+        }),
         "stage_act_interval" => with(state, |s| {
             s.stage_act_interval(arg(a, "index")?, arg(a, "action")?, arg(a, "ms")?)?;
             to_json(s.pending())

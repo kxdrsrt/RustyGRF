@@ -109,6 +109,18 @@ if (!window.__TAURI__) {
           case "stage_spr_palette":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: cmd });
             return pendingRows;
+          case "act_frame": {
+            const c = document.createElement("canvas");
+            c.width = 120;
+            c.height = 100;
+            const g = c.getContext("2d");
+            g.fillStyle = "#6a9";
+            g.fillRect(30 + a.frame * 6, 20, 50, 60);
+            return { version: "2.5", actions: 8, frames: 4, action: a.action, frame: Math.min(a.frame, 3), interval_ms: 100, layers: [{ sprite_index: 0, sprite_type: 0, offset_x: 0, offset_y: 0, mirror: false, scale_x: 1, scale_y: 1, rotation: 0, color: [255, 255, 255, 255] }, { sprite_index: 1, sprite_type: 0, offset_x: 5, offset_y: -3, mirror: true, scale_x: 1, scale_y: 1, rotation: 90, color: [255, 128, 0, 200] }], anchors: [{ x: 4, y: -20 }], anchors_supported: true, separate_scale: true, indexed_images: 6, rgba_images: 0, png: c.toDataURL().split(",")[1], width: 120, height: 100, origin_x: 60, origin_y: 80, scale: 4, error: null };
+          }
+          case "stage_act_edit":
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action} frame ${a.frame}: ${a.edit.op}` });
+            return pendingRows;
           case "stage_act_interval":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action}: ${a.ms} ms per frame` });
             return pendingRows;

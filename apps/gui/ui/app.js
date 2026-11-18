@@ -314,6 +314,7 @@ function renderPreview(p, row, meta) {
         { class: "controls" },
         el("label", { text: "Action " }, sel),
         el("span", { class: "muted", text: `${p.frames} frame(s), ${p.interval_ms} ms each` }),
+        el("button", { type: "button", class: "small", text: "Edit frames…", title: "Edit layers, anchors and frames of this animation (staged)", onclick: () => openActEditor(row, p.action) }),
         el("button", { type: "button", class: "small", text: "Set interval…", title: "Change the frame time of this action (staged, saved with Changes…)", onclick: () => setInterval_(row, p.action, p.interval_ms) }),
       );
       return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: `warning: ${p.note}` }) : null];
@@ -432,6 +433,115 @@ async function setPalette(row) {
   } catch (e) {
     await note("Could not set the palette", errText(e), true);
   }
+}
+
+// ---------- animation editor ----------
+
+const E = { row: null, action: 0, frame: 0, view: null, busy: false };
+
+async function openActEditor(row, action) {
+  Object.assign(E, { row, action, frame: 0, view: null });
+  $("act-title").textContent = `Edit animation: ${row.name}`;
+  $("act-body").replaceChildren(el("p", { class: "muted", text: "Loading …" }));
+  $("act-dlg").showModal();
+  await loadActFrame();
+}
+
+$("act-dlg").addEventListener("close", () => {
+  if (E.row) refreshPreview(E.action);
+  E.row = null;
+});
+
+async function loadActFrame() {
+  try {
+    E.view = await invoke("act_frame", { index: E.row.index, action: E.action, frame: E.frame });
+    E.action = E.view.action;
+    E.frame = E.view.frame;
+    drawActEditor();
+  } catch (e) {
+    $("act-body").replaceChildren(el("p", { class: "error", text: errText(e) }));
+  }
+}
+
+async function actEdit(edit) {
+  if (E.busy) return;
+  E.busy = true;
+  try {
+    setPending(await invoke("stage_act_edit", { index: E.row.index, action: E.action, frame: E.frame, edit }));
+    if (edit.op === "copy_frame") E.frame += 1;
+    if (edit.op === "remove_frame") E.frame = Math.max(0, E.frame - 1);
+  } catch (e) {
+    await loadActFrame();
+    $("act-body").prepend(el("p", { class: "error", text: errText(e) }));
+    E.busy = false;
+    return;
+  }
+  E.busy = false;
+  await loadActFrame();
+}
+
+const hex2 = (n) => n.toString(16).padStart(2, "0");
+
+function drawActEditor() {
+  const v = E.view;
+  const num = (value, onset, opts = {}) => {
+    const i = el("input", { type: "number", value: String(value), step: opts.step ?? "1", class: opts.narrow ? "narrow" : "" });
+    i.addEventListener("change", () => (i.value !== "" && Number.isFinite(Number(i.value)) ? onset(Number(i.value)) : loadActFrame()));
+    return i;
+  };
+  const setL = (layer, fields) => actEdit({ op: "set_layer", layer, ...fields });
+  const actionSel = el("select", { onchange: () => { E.action = Number(actionSel.value); E.frame = 0; loadActFrame(); } });
+  for (let i = 0; i < v.actions; i++) actionSel.append(el("option", { value: i, text: `Action ${i}`, selected: i === v.action }));
+  const bar = el(
+    "div",
+    { class: "bar" },
+    el("label", { text: "Action " }, actionSel),
+    el("button", { type: "button", class: "small", text: "◀", disabled: v.frame === 0, onclick: () => { E.frame -= 1; loadActFrame(); } }),
+    el("span", { text: `Frame ${v.frame + 1} / ${v.frames}` }),
+    el("button", { type: "button", class: "small", text: "▶", disabled: v.frame >= v.frames - 1, onclick: () => { E.frame += 1; loadActFrame(); } }),
+    el("span", { class: "muted", text: `${v.interval_ms} ms per frame, ACT ${v.version}` }),
+    el("button", { type: "button", class: "small", text: "Copy frame", title: "Insert a copy after this frame", onclick: () => actEdit({ op: "copy_frame" }) }),
+    el("button", { type: "button", class: "small", text: "Remove frame", disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
+  );
+  const stage = el("div", { class: "stage checker" });
+  if (v.png) {
+    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width, height: v.height, alt: "frame" }), el("div", { class: "cross-h", style: `top:${v.origin_y}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x}px` }));
+    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: `anchor ${i}`, style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
+  }
+  const left = el("div", {}, stage, v.error ? el("p", { class: "muted", text: `No picture: ${v.error}` }) : null, el("p", { class: "muted", text: "The lines mark the origin; red dots are anchors. Layers are drawn in order, the last one on top." }));
+  const head = ["#", "Type", "Image", "x", "y", "Mirror", v.separate_scale ? "Scale x / y" : "Scale", "Rot", "Colour", "α", ""];
+  const rows = v.layers.map((l, i) => {
+    const typeSel = el("select", { onchange: () => setL(i, { sprite_type: Number(typeSel.value) }) }, el("option", { value: 0, text: `palette (${v.indexed_images})`, selected: l.sprite_type === 0 }), el("option", { value: 1, text: `true colour (${v.rgba_images})`, selected: l.sprite_type === 1 }));
+    const mirror = el("input", { type: "checkbox", checked: l.mirror, onchange: () => setL(i, { mirror: mirror.checked }) });
+    const colour = el("input", { type: "color", value: `#${hex2(l.color[0])}${hex2(l.color[1])}${hex2(l.color[2])}` });
+    colour.addEventListener("change", () => setL(i, { color: [parseInt(colour.value.slice(1, 3), 16), parseInt(colour.value.slice(3, 5), 16), parseInt(colour.value.slice(5, 7), 16), l.color[3]] }));
+    return el(
+      "tr",
+      {},
+      el("td", { text: String(i) }),
+      el("td", {}, typeSel),
+      el("td", {}, num(l.sprite_index, (n) => setL(i, { sprite_index: n }), { narrow: true })),
+      el("td", {}, num(l.offset_x, (n) => setL(i, { offset_x: n }), { narrow: true })),
+      el("td", {}, num(l.offset_y, (n) => setL(i, { offset_y: n }), { narrow: true })),
+      el("td", {}, mirror),
+      el("td", {}, num(l.scale_x, (n) => setL(i, { scale_x: n }), { step: "0.1", narrow: true }), v.separate_scale ? num(l.scale_y, (n) => setL(i, { scale_y: n }), { step: "0.1", narrow: true }) : null),
+      el("td", {}, num(l.rotation, (n) => setL(i, { rotation: Math.round(n) }), { narrow: true })),
+      el("td", {}, colour),
+      el("td", {}, num(l.color[3], (n) => setL(i, { color: [l.color[0], l.color[1], l.color[2], Math.max(0, Math.min(255, Math.round(n)))] }), { narrow: true })),
+      el("td", {}, el("button", { type: "button", class: "small", text: "↑", title: "Draw earlier (below)", disabled: i === 0, onclick: () => actEdit({ op: "move_layer", layer: i, to: i - 1 }) }), el("button", { type: "button", class: "small", text: "↓", title: "Draw later (above)", disabled: i === v.layers.length - 1, onclick: () => actEdit({ op: "move_layer", layer: i, to: i + 1 }) }), el("button", { type: "button", class: "small", text: "✕", title: "Remove the layer", onclick: () => actEdit({ op: "remove_layer", layer: i }) })),
+    );
+  });
+  const layers = el("div", {}, el("div", { class: "tscroll" }, el("table", {}, el("thead", {}, el("tr", {}, head.map((t) => el("th", { text: t })))), el("tbody", {}, rows))), el("div", { class: "bar" }, el("button", { type: "button", class: "small", text: "+ Layer", onclick: () => actEdit({ op: "add_layer" }) })));
+  const anchors = v.anchors_supported
+    ? el(
+        "div",
+        {},
+        el("h3", { text: "Anchors (where other sprites attach, e.g. headgear)" }),
+        el("table", {}, el("tbody", {}, v.anchors.map((a, i) => el("tr", {}, el("td", { text: `#${i}` }), el("td", {}, num(a.x, (n) => actEdit({ op: "set_anchor", anchor: i, x: Math.round(n) }), { narrow: true })), el("td", {}, num(a.y, (n) => actEdit({ op: "set_anchor", anchor: i, y: Math.round(n) }), { narrow: true })), el("td", {}, el("button", { type: "button", class: "small", text: "✕", onclick: () => actEdit({ op: "remove_anchor", anchor: i }) })))))),
+        el("button", { type: "button", class: "small", text: "+ Anchor", onclick: () => actEdit({ op: "add_anchor" }) }),
+      )
+    : el("p", { class: "muted", text: `ACT ${v.version} has no anchors.` });
+  $("act-body").replaceChildren(el("div", { class: "acted" }, bar, left, el("div", {}, layers, anchors)));
 }
 
 async function setInterval_(row, action, current) {

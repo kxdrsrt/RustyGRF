@@ -215,3 +215,23 @@ dialog progress { width: min(420px, 80vw); height: 10px; accent-color: var(--acc
 }
 
 .figactions { display: flex; gap: 4px; }
+
+dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
+.acted { display: grid; grid-template-columns: minmax(260px, 40%) 1fr; gap: 16px; align-items: start; }
+.acted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; grid-column: 1 / -1; }
+.acted .stage { position: relative; display: inline-block; line-height: 0; min-width: 120px; min-height: 120px; }
+.acted .stage img { image-rendering: pixelated; display: block; }
+.acted .cross-h, .acted .cross-v { position: absolute; background: var(--accent); opacity: 0.55; pointer-events: none; }
+.acted .cross-h { height: 1px; left: 0; right: 0; }
+.acted .cross-v { width: 1px; top: 0; bottom: 0; }
+.acted .dot { position: absolute; width: 7px; height: 7px; margin: -3px 0 0 -3px; border: 1px solid #fff; background: #d33; border-radius: 50%; pointer-events: none; }
+.acted table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.acted th { text-align: left; color: var(--muted); font-weight: 500; padding: 2px 4px; }
+.acted td { padding: 2px 3px; white-space: nowrap; }
+.acted input[type="number"] { width: 64px; }
+.acted input.narrow { width: 46px; }
+.acted select, .acted input { font-size: 12px; }
+.acted .err { color: var(--danger, #d33); grid-column: 1 / -1; }
+.acted h3 { margin: 12px 0 4px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.tscroll { overflow-x: auto; }
+.acted > div { min-width: 0; }

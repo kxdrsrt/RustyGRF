@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::act_editor::{self, ActEdit, ActFrameView};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_core::build::{BuildOptions, build};
@@ -721,6 +722,55 @@ impl Session {
         let pal_bytes = std::fs::read(pal).map_err(|e| format!("{}: {e}", pal.display()))?;
         what.push(format!("palette from {}", file_name_of(pal)));
         let out = set_spr_palette(&data, &pal_bytes)?;
+        self.stage(Change::PutBytes {
+            name,
+            data: out,
+            what,
+        });
+        Ok(())
+    }
+
+    /// One frame of an animation as data and picture, with the staged changes applied.
+    pub fn act_view(
+        &self,
+        index: usize,
+        action: usize,
+        frame: usize,
+    ) -> Result<ActFrameView, String> {
+        let (_, act, _) = self.working_bytes(index)?;
+        let spr = self
+            .sibling(index, "spr")
+            .map(|i| self.working_bytes(i))
+            .transpose()?
+            .map(|t| t.1);
+        act_editor::view(&act, spr.as_deref(), action, frame)
+    }
+
+    /// Changes a layer, anchor or frame of an animation.
+    pub fn stage_act_edit(
+        &mut self,
+        index: usize,
+        action: usize,
+        frame: usize,
+        edit: &ActEdit,
+    ) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let out = act_editor::apply(&data, action, frame, edit)?;
+        let kind = match edit {
+            ActEdit::SetLayer { .. } => "layers edited",
+            ActEdit::AddLayer => "layer added",
+            ActEdit::RemoveLayer { .. } => "layer removed",
+            ActEdit::MoveLayer { .. } => "layer moved",
+            ActEdit::SetAnchor { .. } | ActEdit::AddAnchor | ActEdit::RemoveAnchor { .. } => {
+                "anchors edited"
+            }
+            ActEdit::CopyFrame => "frame copied",
+            ActEdit::RemoveFrame => "frame removed",
+        };
+        let note = format!("action {action} frame {frame}: {kind}");
+        if !what.contains(&note) {
+            what.push(note);
+        }
         self.stage(Change::PutBytes {
             name,
             data: out,

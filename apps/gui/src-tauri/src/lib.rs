@@ -1,5 +1,6 @@
 //! RustyGRF desktop app: thin Tauri commands around [`backend::Session`].
 
+pub mod act_editor;
 pub mod backend;
 
 use std::path::PathBuf;
@@ -262,6 +263,33 @@ async fn stage_spr_palette(
     .await
 }
 
+/// One frame of the animation `index`: its layers and anchors as data, and a picture.
+#[tauri::command]
+async fn act_frame(
+    state: State<'_, AppState>,
+    index: usize,
+    action: usize,
+    frame: usize,
+) -> Res<act_editor::ActFrameView> {
+    with_session(&state, move |s| s.act_view(index, action, frame)).await
+}
+
+/// Changes a layer, an anchor or a frame of the animation `index` (staged).
+#[tauri::command]
+async fn stage_act_edit(
+    state: State<'_, AppState>,
+    index: usize,
+    action: usize,
+    frame: usize,
+    edit: act_editor::ActEdit,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_act_edit(index, action, frame, &edit)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Sets the frame interval (milliseconds) of an action of the animation `index`.
 #[tauri::command]
 async fn stage_act_interval(
@@ -381,6 +409,8 @@ pub fn run() {
             stage_spr_remove,
             stage_spr_palette,
             stage_act_interval,
+            act_frame,
+            stage_act_edit,
             pending,
             discard_pending,
             save_edited,
