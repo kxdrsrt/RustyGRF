@@ -61,7 +61,7 @@ Verhalten:
 | `grf_read_text` | `path`, `entry`, `max_bytes?` (65.536, max. 1 MiB), `encoding?` (auto, utf8, cp949, cp1252) | Text und verwendete Kodierung; Binärdaten werden abgelehnt |
 | `grf_read_summary` | `path`, `entry` | Größe, CRC32, MD5, Dateityp (SPR, ACT, RSW, GND, GAT, RSM, BMP, PNG, JPEG, WAV, Ogg, Lua, XML, Text), 64 Byte Hex |
 | `grf_inspect` | `path`, `entry`, `names?` | Aufbau einer Client-Datei als JSON: SPR (Bildgrößen), ACT (Aktionen, Frames, Intervalle, Sounds), PAL, GAT (Zelltypen), GND (Größe, Texturen), RSW (Modelle, Sounds, Wasser), RSM/RSM2 (Knoten, Dreiecke, Animationsschleife), STR (Ebenen, Texturen), kompiliertes Lua (Funktionszahl); Namen aus den Dateien als Koreanisch (CP949) |
-| `grf_lua_decompile` | `path`, `entry`, `listing?`, `max_bytes?`, `names?` | kompiliertes Lua 5.1 als Quelltext; `complete` = false, wenn Funktionen nur als Bytecode-Liste kommen; `listing` liefert die reine Bytecode-Liste |
+| `grf_lua_decompile` | `path`, `entry`, `listing?`, `max_bytes?`, `names?` | kompiliertes Lua (5.0 und 5.1) als Quelltext; `complete` = false, wenn Funktionen nur als Bytecode-Liste kommen; `listing` liefert die reine Bytecode-Liste |
 | `grf_verify` | `path`, `decode?`, `max_issues?` | Zähler und Befunde (Fehler, Warnungen, Hinweise) |
 | `grf_diff` | `a`, `b`, `limit?` | nur in A, nur in B, anderer Inhalt (je Gruppe `count`, `paths`, `truncated`) |
 | `grf_extract` | `path`, `dest`, `pattern?`, `on_collision?`, `overwrite?` | geschriebene Dateien; **schreibend** |

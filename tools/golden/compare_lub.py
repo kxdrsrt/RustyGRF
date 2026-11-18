@@ -58,16 +58,15 @@ for k,rp in R.items():
     key=k[:-4]
     if key not in srcmap: continue
     ver=is5051(srcmap[key])
+    tag="5.0" if ver==0x50 else "5.1"
     if ver==0: cats["plain text (copied)"]+=1; continue
-    if ver==0x50:
-        cats["lua5.0"]+=1; continue
     if k not in O: cats["ours missing"]+=1; continue
     a=norm(demoji(read(rp))); b=norm(read(O[k]))
-    if "-- not decompiled" in read(O[k]): cats["ours partial"]+=1; kind="partial"
+    if "-- not decompiled" in read(O[k]): kind="partial"
     else: kind="full"
-    if a==b: cats[f"identical tokens ({kind})"]+=1; continue
+    if a==b: cats[f"identical tokens ({kind}, Lua {tag})"]+=1; continue
     ca,cb=collections.Counter(a),collections.Counter(b); r=sum((ca&cb).values())*2/max(1,len(a)+len(b))
-    cats[f"different ({kind})"]+=1; ratios.append(r); worst.append((r,k,len(a),len(b)))
+    cats[f"different ({kind}, Lua {tag})"]+=1; ratios.append(r); worst.append((r,k,len(a),len(b)))
 for k,v in sorted(cats.items()): print(v,k)
 worst.sort()
 print("ratio of differing: min %.3f median %.3f"%(worst[0][0],sorted(ratios)[len(ratios)//2]) if worst else "")
@@ -76,7 +75,7 @@ print("--- local declarations: files where counts differ (full files only)")
 bad=0
 for k,rp in R.items():
     key=k[:-4]
-    if key not in srcmap or is5051(srcmap[key])!=0x51 or k not in O: continue
+    if key not in srcmap or is5051(srcmap[key]) not in (0x50,0x51) or k not in O: continue
     ot=read(O[k])
     if "-- not decompiled" in ot: continue
     rl=len(re.findall(r"\blocal\b",demoji(read(rp)))); ol=len(re.findall(r"\blocal\b",ot))

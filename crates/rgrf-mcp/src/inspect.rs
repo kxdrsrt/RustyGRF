@@ -8,7 +8,7 @@ use rgrf_formats::gnd::GndSummary;
 use rgrf_formats::pal::Pal;
 use rgrf_formats::rsw::{self, Rsw};
 use rgrf_formats::spr::Spr;
-use rgrf_formats::{luac, luac50, luadec, rsm_model, str_effect};
+use rgrf_formats::{luac, luadec, rsm_model, str_effect};
 use serde_json::{Value, json};
 
 use crate::params::Args;
@@ -120,7 +120,7 @@ pub fn inspect(ctx: &Ctx, a: &Args) -> Out {
             json!({
                 "kind": "lub", "compiled": true, "lua_version": info.version,
                 "functions": info.functions, "instructions": info.instructions,
-                "decompilable": info.version == "5.1",
+                "decompilable": true,
             })
         }
         _ => {
@@ -142,19 +142,12 @@ pub fn lua_decompile(ctx: &Ctx, a: &Args) -> Out {
         ));
     }
     let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
-    let mut listing = a.flag("listing");
-    let text = if data.get(4) == Some(&0x50) {
-        // Lua 5.0: no decompiler, the structure is listed
-        listing = true;
-        let chunk = luac50::parse(&data).map_err(|e| format!("{name} cannot be read: {e}"))?;
-        luac50::disassemble(&chunk, &show)
+    let listing = a.flag("listing");
+    let chunk = luac::parse_any(&data).map_err(|e| format!("{name} cannot be read: {e}"))?;
+    let text = if listing {
+        luac::disassemble(&chunk, &show)
     } else {
-        let chunk = luac::parse(&data).map_err(|e| format!("{name} cannot be read: {e}"))?;
-        if listing {
-            luac::disassemble(&chunk, &show)
-        } else {
-            luadec::decompile(&chunk, &show)
-        }
+        luadec::decompile(&chunk, &show)
     };
     let complete = listing || luadec::is_complete(&text);
     let max = a.opt_u64("max_bytes").unwrap_or(65_536).clamp(1, 1 << 20) as usize;

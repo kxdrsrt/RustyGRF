@@ -42,6 +42,9 @@ pub struct Function {
     pub lines: Vec<u32>,
     pub locals: Vec<Local>,
     pub upvalue_names: Vec<Vec<u8>>,
+    /// Set for a function translated from Lua 5.0 (see `luac50::to_lua51`): its original code, for
+    /// listings. The decompiler also uses it to know the 5.0 register layout of generic `for` loops.
+    pub orig_code: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -227,6 +230,7 @@ fn read_function(r: &mut Reader<'_>, depth: usize) -> Result<Function, LuacError
         lines,
         locals,
         upvalue_names,
+        orig_code: None,
     })
 }
 
@@ -270,6 +274,17 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
     };
     let main = read_function(&mut r, 0)?;
     Ok(Chunk { main })
+}
+
+/// Reads compiled Lua of either version the client uses; 5.0 is translated to the 5.1 form
+/// (`Function::orig_code` is set then).
+pub fn parse_any(bytes: &[u8]) -> Result<Chunk, LuacError> {
+    if bytes.get(4) == Some(&0x50) && bytes.starts_with(b"\x1bLua") {
+        let c = crate::luac50::parse(bytes)?;
+        crate::luac50::validate(&c).map_err(LuacError::Unsupported)?;
+        return Ok(crate::luac50::to_lua51(&c));
+    }
+    parse(bytes)
 }
 
 /// Structural check of every function of a Lua 5.1 chunk: known opcodes, constant and function
@@ -402,6 +417,9 @@ fn konst(c: &Constant) -> String {
 /// A listing in the style of `luac -l`. `names` turns raw bytes into the text shown (the page uses
 /// the name mode it shows file names in).
 pub fn disassemble(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
+    if let Some(c50) = crate::luac50::chunk_from_lua51(chunk) {
+        return crate::luac50::disassemble(&c50, names);
+    }
     let mut out = String::new();
     list(&chunk.main, "main", names, &mut out);
     out

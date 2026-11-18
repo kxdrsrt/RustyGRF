@@ -1421,33 +1421,18 @@ impl Session {
             "gnd" => self.preview_scene(index, &data, false)?,
             "rsm" | "rsm2" => self.preview_model(&data)?,
             "txt" | "xml" | "lua" | "lub" | "ini" | "csv" | "json" | "log" => {
-                if data.get(4) == Some(&0x50) && data.starts_with(b"\x1bLua") {
-                    // Lua 5.0 has no decompiler; the structure is read and listed
-                    let names = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
-                    match rgrf_formats::luac50::parse(&data) {
-                        Ok(chunk) => {
-                            let mut text = rgrf_formats::luac50::disassemble(&chunk, &names);
-                            let truncated = text.chars().count() > MAX_TEXT_CHARS;
-                            if truncated {
-                                text = text.chars().take(MAX_TEXT_CHARS).collect();
-                            }
-                            Preview::Text {
-                                text,
-                                encoding: "Lua 5.0 bytecode listing (no decompiler for 5.0)".into(),
-                                truncated,
-                            }
-                        }
-                        Err(e) => Preview::Message {
-                            text: format!("Compiled Lua 5.0 that cannot be read: {e}"),
-                        },
-                    }
-                } else if data.starts_with(b"\x1bLua") {
-                    match rgrf_formats::luac::parse(&data) {
+                if data.starts_with(b"\x1bLua") {
+                    match rgrf_formats::luac::parse_any(&data) {
                         Ok(chunk) => {
                             let names =
                                 |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
                             let mut text = rgrf_formats::luadec::decompile(&chunk, &names);
                             let complete = rgrf_formats::luadec::is_complete(&text);
+                            let version = if chunk.main.orig_code.is_some() {
+                                "5.0"
+                            } else {
+                                "5.1"
+                            };
                             let truncated = text.chars().count() > MAX_TEXT_CHARS;
                             if truncated {
                                 text = text.chars().take(MAX_TEXT_CHARS).collect();
@@ -1455,9 +1440,9 @@ impl Session {
                             Preview::Text {
                                 text,
                                 encoding: if complete {
-                                    "decompiled from Lua 5.1 bytecode".into()
+                                    format!("decompiled from Lua {} bytecode", version)
                                 } else {
-                                    "partly decompiled (functions of an unknown shape stay as a listing)".into()
+                                    "partly decompiled (functions of an unknown shape stay as a listing)".to_string()
                                 },
                                 truncated,
                             }

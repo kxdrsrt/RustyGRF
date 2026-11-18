@@ -25,6 +25,8 @@ enum Expr {
     Bin(&'static str, Box<Expr>, Box<Expr>),
     Un(&'static str, Box<Expr>),
     Concat(Vec<Expr>),
+    /// A comparison used as a value (`x = a == b`), already written out.
+    Text(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,12 +48,24 @@ struct Ctx<'a> {
     names: &'a dyn Fn(&[u8]) -> String,
     /// How many functions deep the function being written is nested.
     depth: std::cell::Cell<usize>,
+    /// How many blocks (`if`, loops, condition code) deep the code being walked is.
+    block_depth: std::cell::Cell<usize>,
+}
+
+/// Decrements the block depth when a block is left, however it is left.
+struct BlockGuard<'a>(&'a std::cell::Cell<usize>);
+
+impl Drop for BlockGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
 }
 
 /// Nested functions and expressions deeper than this are not decompiled: the output is built
 /// recursively, so a damaged or hostile file must not be able to exhaust the stack.
 const MAX_NESTING: usize = 40;
 const MAX_EXPR_DEPTH: usize = 100;
+const MAX_BLOCK_DEPTH: usize = 60;
 
 /// True when `e` is nested deeper than [`MAX_EXPR_DEPTH`]. At most a few thousand nodes are looked
 /// at, so checking every instruction stays cheap even for huge data tables.
@@ -138,6 +152,7 @@ fn needs_parens(e: &Expr) -> bool {
         Expr::Bin(..)
             | Expr::Un(..)
             | Expr::Concat(_)
+            | Expr::Text(_)
             | Expr::Func(_)
             | Expr::Nil
             | Expr::Num(_)
@@ -177,12 +192,19 @@ impl Ctx<'_> {
             }
             Expr::Table(entries) => self.table(f, entries, indent),
             Expr::Func(i) => self.function(f, *i, indent),
-            Expr::Bin(op, l, r) => format!(
-                "{} {op} {}",
-                self.operand(f, l, indent),
-                self.operand(f, r, indent)
-            ),
+            Expr::Bin(op, l, r) => {
+                // `a or b or c` is written without parentheses (the same operator on the right)
+                let chain =
+                    matches!(&**r, Expr::Bin(o, ..) if o == op && (*op == "or" || *op == "and"));
+                let right = if chain {
+                    self.expr(f, r, indent)
+                } else {
+                    self.operand(f, r, indent)
+                };
+                format!("{} {op} {right}", self.operand(f, l, indent))
+            }
             Expr::Un(op, x) => format!("{op}{}", self.operand(f, x, indent)),
+            Expr::Text(t) => t.clone(),
             Expr::Concat(parts) => parts
                 .iter()
                 .map(|p| self.operand(f, p, indent))
@@ -199,7 +221,10 @@ impl Ctx<'_> {
 
     fn operand(&self, f: &Function, e: &Expr, indent: usize) -> String {
         let s = self.expr(f, e, indent);
-        if matches!(e, Expr::Bin(..) | Expr::Un(..) | Expr::Concat(_)) {
+        if matches!(
+            e,
+            Expr::Bin(..) | Expr::Un(..) | Expr::Concat(_) | Expr::Text(_)
+        ) {
             format!("({s})")
         } else {
             s
@@ -260,8 +285,11 @@ impl Ctx<'_> {
             Err(Unsupported(why)) => {
                 let pad = "\t".repeat(indent);
                 let mut out = format!("{pad}-- not decompiled ({why}); bytecode:\n");
-                let chunk = Chunk { main: f.clone() };
-                for line in crate::luac::disassemble(&chunk, self.names).lines().skip(1) {
+                let listing = match crate::luac50::from_lua51(f) {
+                    Some(f50) => crate::luac50::list_function(&f50, self.names),
+                    None => crate::luac::disassemble(&Chunk { main: f.clone() }, self.names),
+                };
+                for line in listing.lines().skip(1) {
                     out.push_str(&format!("{pad}-- {line}\n"));
                 }
                 out
@@ -405,14 +433,13 @@ impl Ctx<'_> {
         if v == Expr::Param(name.clone()) {
             return Ok(());
         }
-        // a pending value that still names the variable would read the new value (the register the
-        // value was moved from holds the same expression and is used up)
-        if reg
-            .iter()
-            .enumerate()
-            .any(|(r, e)| r != a && e.as_ref().is_some_and(|e| *e != v && mentions(e, &name)))
-        {
-            return Err(Unsupported("a variable used while it is reassigned".into()));
+        // a register that still holds a value naming the variable would read the new value if it
+        // were used later: it becomes unknown. Left-over temporaries are never read again; a real
+        // swap (`a, b = b, a`) reads one, and the function then falls back to the listing.
+        for (r, e) in reg.iter_mut().enumerate() {
+            if r != a && e.as_ref().is_some_and(|e| *e != v && mentions(e, &name)) {
+                *e = None;
+            }
         }
         let pad = "\t".repeat(indent);
         out.push_str(&format!("{pad}{name} = {}\n", self.expr(f, &v, indent)));
@@ -465,6 +492,198 @@ impl Ctx<'_> {
         }))
     }
 
+    /// The targets of `x, y, z = f()`: after a CALL with `c - 1` results come `c - 1` stores, last
+    /// result first, each into a global, an upvalue or a local variable. None when they do not
+    /// have that shape.
+    fn multi_targets(&self, f: &Function, pc: usize, a: usize, c: usize) -> Option<Vec<String>> {
+        let live = active_at(f, pc).len();
+        let mut targets = Vec::new();
+        for k in 0..c - 1 {
+            let n = Instr::decode(*f.code.get(pc + k)?);
+            let src = a + (c - 2 - k);
+            let name = match n.name() {
+                "SETGLOBAL" if n.a as usize == src => match f.constants.get(n.bx() as usize)? {
+                    Constant::Str(s) => (self.names)(s),
+                    _ => return None,
+                },
+                "SETUPVAL" if n.a as usize == src => {
+                    (self.names)(f.upvalue_names.get(n.b as usize)?)
+                }
+                "MOVE" if n.b as usize == src && (n.a as usize) < live => {
+                    reg_name(self, f, pc + k, n.a as usize)?
+                }
+                _ => return None,
+            };
+            targets.push(name);
+        }
+        Some(targets)
+    }
+
+    /// A comparison as a value: `CMP; JMP -> L; LOADBOOL r 0 1; L: LOADBOOL r 1 0` is `r = (a == b)`.
+    fn compare_value(
+        &self,
+        f: &Function,
+        reg: &mut [Option<Expr>],
+        at: usize,
+        end: usize,
+        indent: usize,
+    ) -> Result<Option<usize>, Unsupported> {
+        let at_ins = |q: usize| f.code.get(q).map(|r| Instr::decode(*r));
+        let (Some(j), Some(no), Some(yes)) = (at_ins(at + 1), at_ins(at + 2), at_ins(at + 3))
+        else {
+            return Ok(None);
+        };
+        let shape = j.name() == "JMP"
+            && at as i64 + 2 + j.sbx() == at as i64 + 3
+            && no.name() == "LOADBOOL"
+            && (no.b, no.c) == (0, 1)
+            && yes.name() == "LOADBOOL"
+            && (yes.b, yes.c) == (1, 0)
+            && yes.a == no.a;
+        if !shape || at + 4 > end || (yes.a as usize) >= reg.len() {
+            return Ok(None);
+        }
+        let Some(p) = self.cond_pair(f, reg, at, indent)? else {
+            return Ok(None);
+        };
+        reg[yes.a as usize] = Some(Expr::Text(p.taken));
+        Ok(Some(at + 4))
+    }
+
+    /// `x or y` / `x and y` as a value: `TEST a; JMP over; <y into a>`. The value of `y` is
+    /// computed by temporaries only (no statements); the register then holds the combined value.
+    /// Returns where the code goes on, or None when this test is not that shape.
+    fn value_test(
+        &self,
+        f: &Function,
+        reg: &mut [Option<Expr>],
+        top: usize,
+        at: usize,
+        end: usize,
+        indent: usize,
+    ) -> Result<Option<usize>, Unsupported> {
+        let i = Instr::decode(f.code[at]);
+        let Some(j) = f
+            .code
+            .get(at + 1)
+            .map(|r| Instr::decode(*r))
+            .filter(|j| i.name() == "TEST" && j.name() == "JMP")
+        else {
+            return Ok(None);
+        };
+        let Ok(t) = usize::try_from(at as i64 + 2 + j.sbx()) else {
+            return Ok(None);
+        };
+        let a = i.a as usize;
+        if t <= at + 2 || t > end || a >= reg.len() || !(at + 2..t).all(|q| temp_write(f, q)) {
+            return Ok(None);
+        }
+        if Instr::decode(f.code[t - 1]).a as usize != a || jumped_into(f, at + 2, t) {
+            return Ok(None);
+        }
+        let mut cs = State {
+            reg: reg.to_vec(),
+            top,
+        };
+        if !self
+            .block(f, &mut cs, at + 2, t, indent, Exits::default())?
+            .is_empty()
+        {
+            return Ok(None);
+        }
+        let (Some(first), Some(second)) = (reg[a].clone(), cs.reg[a].clone()) else {
+            return Ok(None);
+        };
+        let op = if i.c == 1 { "or" } else { "and" };
+        reg[a] = Some(Expr::Bin(op, Box::new(first), Box::new(second)));
+        let n = reg.len();
+        reg[a + 1..].clone_from_slice(&cs.reg[a + 1..n]);
+        Ok(Some(t))
+    }
+
+    /// Lua 5.0's `while`: a jump over the body to the condition, which sits after the body and
+    /// jumps back to the body while it holds. `at` is the first jump, `t` the condition.
+    #[allow(clippy::too_many_arguments)]
+    fn inverted_while(
+        &self,
+        f: &Function,
+        reg: &mut [Option<Expr>],
+        top: usize,
+        at: usize,
+        t: usize,
+        end: usize,
+        indent: usize,
+    ) -> Result<(String, usize), Unsupported> {
+        let body_start = at + 1;
+        let mut cs = State {
+            reg: reg.to_vec(),
+            top,
+        };
+        let mut pairs: Vec<Pair> = Vec::new();
+        let mut q = t;
+        loop {
+            let mut r = q;
+            while r < end && temp_write(f, r) {
+                r += 1;
+            }
+            if r + 1 >= end || pairs.len() > 8 {
+                return Err(Unsupported("a loop condition of an unknown shape".into()));
+            }
+            let pre = self.block(f, &mut cs, q, r, indent, Exits::default())?;
+            let p = self
+                .cond_pair(f, &cs.reg, r, indent)?
+                .ok_or_else(|| Unsupported("a loop condition of an unknown shape".into()))?;
+            if !pre.is_empty() {
+                return Err(Unsupported("a loop condition of an unknown shape".into()));
+            }
+            q = p.jmp + 1;
+            let last = p.target == body_start;
+            pairs.push(p);
+            if last {
+                break;
+            }
+        }
+        let exit = q;
+        let n = pairs.len();
+        if exit > end
+            || !pairs[..n - 1]
+                .iter()
+                .all(|p| p.target == exit || p.target == body_start)
+        {
+            return Err(Unsupported("a loop condition of an unknown shape".into()));
+        }
+        let mut cond = pairs[n - 1].taken.clone();
+        let mut bare_or = false;
+        for p in pairs[..n - 1].iter().rev() {
+            if p.target == exit {
+                let rest = if bare_or { format!("({cond})") } else { cond };
+                cond = format!("{} and {rest}", p.enter);
+                bare_or = false;
+            } else {
+                cond = format!("{} or {cond}", p.taken);
+                bare_or = true;
+            }
+        }
+        let mut inner = State {
+            reg: reg.to_vec(),
+            top,
+        };
+        let body = self.block(
+            f,
+            &mut inner,
+            body_start,
+            t,
+            indent + 1,
+            Exits {
+                brk: Some(exit),
+                tail: None,
+            },
+        )?;
+        let pad = "\t".repeat(indent);
+        forget_changed(reg, &[&inner, &cs], 0..0);
+        Ok((format!("{pad}while {cond} do\n{body}{pad}end\n"), exit))
+    }
+
     /// The instructions `start..end` as statements. Comparisons become `if` (with `else`, `and`,
     /// `or`) or `while`; loops become `for`; locals come from the debug information. A shape that
     /// is not understood makes the whole function fall back to the listing.
@@ -477,6 +696,11 @@ impl Ctx<'_> {
         indent: usize,
         exits: Exits,
     ) -> Result<String, Unsupported> {
+        if self.block_depth.get() >= MAX_BLOCK_DEPTH {
+            return Err(Unsupported("blocks nested too deeply".into()));
+        }
+        self.block_depth.set(self.block_depth.get() + 1);
+        let _guard = BlockGuard(&self.block_depth);
         let Exits { brk, tail } = exits;
         let pad = "\t".repeat(indent);
         let State { reg, top } = st;
@@ -559,7 +783,7 @@ impl Ctx<'_> {
                             // the operands were used up
                             let live = active_at(f, at).len();
                             for r in [b, c] {
-                                if r < 256 && r >= live {
+                                if r < rk_base(f) as usize && r >= live {
                                     reg[r] = None;
                                 }
                             }
@@ -615,6 +839,11 @@ impl Ctx<'_> {
                         args.push(get(reg, r)?);
                     }
                     let call = Expr::Call(Box::new(get(reg, a)?), args);
+                    let multi = if c > 2 && pc + c - 1 <= end {
+                        self.multi_targets(f, pc, a, c)
+                    } else {
+                        None
+                    };
                     if i.name() == "TAILCALL" {
                         out.push_str(&format!("{pad}return {}\n", self.expr(f, &call, indent)));
                         // a RETURN follows a TAILCALL; it carries no value of its own
@@ -625,26 +854,8 @@ impl Ctx<'_> {
                         for r in reg.iter_mut().skip(a) {
                             *r = None;
                         }
-                    } else if c > 2
-                        && (0..c - 1).all(|k| {
-                            f.code
-                                .get(pc + k)
-                                .map(|r| Instr::decode(*r))
-                                .is_some_and(|n| {
-                                    n.name() == "SETGLOBAL" && n.a as usize == a + (c - 2 - k)
-                                })
-                        })
-                        && pc + c - 1 <= end
-                    {
+                    } else if let Some(mut targets) = multi {
                         // `x, y = f()`: the results are stored last to first
-                        let mut targets = Vec::new();
-                        for k in 0..c - 1 {
-                            let n = Instr::decode(f.code[pc + k]);
-                            let Expr::Str(name) = konst(f, n.bx() as usize)? else {
-                                return Err(Unsupported("global name".into()));
-                            };
-                            targets.push((self.names)(&name));
-                        }
                         targets.reverse();
                         out.push_str(&format!(
                             "{pad}{} = {}\n",
@@ -725,8 +936,18 @@ impl Ctx<'_> {
                         // the jump to the block's end; only unreachable jumps (a threaded `else
                         // break`) lie between
                         pc = end;
-                    } else if target.is_some() && target == brk {
+                    } else if target.is_some_and(|t| is_break_target(f, brk, t)) {
                         out.push_str(&format!("{pad}break\n"));
+                    } else if f.orig_code.is_some()
+                        && target.is_some_and(|t| {
+                            t > at && t < end && Instr::decode(f.code[t]).name() != "TFORLOOP"
+                        })
+                    {
+                        // Lua 5.0 writes `while` with the condition at the bottom
+                        let t = target.unwrap_or(end);
+                        let (text, next) = self.inverted_while(f, reg, *top, at, t, end, indent)?;
+                        out.push_str(&text);
+                        pc = next;
                     } else if let Some(t) = target.filter(|&t| t > at && t + 2 <= end) {
                         // `for ... in ...`: a jump to the TFORLOOP, whose own jump comes back here
                         let tf = Instr::decode(f.code[t]);
@@ -737,8 +958,15 @@ impl Ctx<'_> {
                         {
                             return Err(Unsupported("JMP (control flow)".into()));
                         }
-                        let (ga, nv) = (tf.a as usize, tf.c as usize);
-                        if ga + 3 + nv > reg.len() {
+                        // 5.1: the loop variables follow a hidden control register (A + 3); in 5.0
+                        // the first one is the control (A + 2) and C counts the others
+                        let ga = tf.a as usize;
+                        let (vbase, nv) = if f.orig_code.is_some() {
+                            (ga + 2, tf.c as usize + 1)
+                        } else {
+                            (ga + 3, tf.c as usize)
+                        };
+                        if vbase + nv > reg.len() {
                             return Err(Unsupported("register out of range".into()));
                         }
                         let first = get(reg, ga)?;
@@ -759,12 +987,12 @@ impl Ctx<'_> {
                         };
                         let mut vars = Vec::new();
                         for k in 0..nv {
-                            let name = reg_name(self, f, pc, ga + 3 + k).unwrap_or_else(|| {
+                            let name = reg_name(self, f, pc, vbase + k).unwrap_or_else(|| {
                                 ["k", "v"]
                                     .get(k)
                                     .map_or_else(|| format!("v{k}"), |s| (*s).into())
                             });
-                            inner.reg[ga + 3 + k] = Some(Expr::Param(name.clone()));
+                            inner.reg[vbase + k] = Some(Expr::Param(name.clone()));
                             vars.push(name);
                         }
                         let body = self.block(
@@ -783,7 +1011,7 @@ impl Ctx<'_> {
                             vars.join(", "),
                             list.join(", ")
                         ));
-                        forget_changed(reg, &[&inner], ga..ga + 3 + nv);
+                        forget_changed(reg, &[&inner], ga..vbase + nv);
                         pc = t + 2;
                     } else {
                         return Err(Unsupported("JMP (control flow)".into()));
@@ -829,10 +1057,18 @@ impl Ctx<'_> {
                     pc = fl + 1;
                 }
                 "EQ" | "LT" | "LE" | "TEST" => 'cmp: {
+                    if let Some(next) = self.compare_value(f, reg, at, end, indent)? {
+                        pc = next;
+                        break 'cmp;
+                    }
+                    if let Some(next) = self.value_test(f, reg, *top, at, end, indent)? {
+                        pc = next;
+                        break 'cmp;
+                    }
                     let first_cmp = at;
                     // a jump to the end of the whole `if ... else` leaves this block like its end does
                     let norm = |mut p: Pair| {
-                        if Some(p.target) == tail && p.target > end {
+                        if Some(p.target) == tail && (p.target > end || p.target <= p.jmp) {
                             p.target = end;
                         }
                         p
@@ -864,8 +1100,11 @@ impl Ctx<'_> {
                         pairs.push(p);
                     }
                     // `if cond then break end` is one conditional jump straight to the loop's exit
-                    if let Some(b) = brk.filter(|&b| pairs[0].target == b) {
-                        let k = pairs.iter().take_while(|p| p.target == b).count();
+                    if let Some(b) = brk.filter(|&b| is_break_target(f, Some(b), pairs[0].target)) {
+                        let k = pairs
+                            .iter()
+                            .take_while(|p| is_break_target(f, Some(b), p.target))
+                            .count();
                         let cond: Vec<&str> = pairs[..k].iter().map(|p| p.taken.as_str()).collect();
                         out.push_str(&format!(
                             "{pad}if {} then\n{pad}\tbreak\n{pad}end\n",
@@ -906,7 +1145,7 @@ impl Ctx<'_> {
                         }
                     }
                     // `while`: the body ends in a jump back to where the condition is computed
-                    let looped = (target - 1 > jmp_pc)
+                    let loop_head = (target - 1 > jmp_pc)
                         .then(|| Instr::decode(f.code[target - 1]))
                         .filter(|e| e.name() == "JMP")
                         .and_then(|e| usize::try_from(target as i64 + e.sbx()).ok())
@@ -914,14 +1153,18 @@ impl Ctx<'_> {
                             tb >= start
                                 && tb <= first_cmp
                                 && (tb..first_cmp).all(|q| temp_write(f, q))
-                        })
-                        .is_some();
+                        });
+                    let looped = loop_head.is_some();
                     // `if ... else ...`: the body ends in a jump over the else part
                     let else_jump = (!looped && target - 1 > jmp_pc)
                         .then(|| Instr::decode(f.code[target - 1]))
                         .filter(|e| e.name() == "JMP")
                         .and_then(|e| usize::try_from(target as i64 + e.sbx()).ok())
-                        .filter(|&u| u > target && (u <= end || Some(u) == tail) && Some(u) != brk);
+                        .filter(|&u| {
+                            u > target
+                                && (u <= end || Some(u) == tail)
+                                && !is_break_target(f, brk, u)
+                        });
                     let then_end = if looped || else_jump.is_some() {
                         target - 1
                     } else {
@@ -932,7 +1175,10 @@ impl Ctx<'_> {
                     // a body that ends where this block ends also leaves the way this block does
                     let then_tail = if else_jump.is_some() {
                         else_jump
-                    } else if target == end && !looped {
+                    } else if looped {
+                        // an `if` at the end of the body may jump straight back to the head
+                        loop_head
+                    } else if target == end {
                         tail
                     } else {
                         None
@@ -944,7 +1190,8 @@ impl Ctx<'_> {
                         if matches!(ins.name(), "JMP" | "FORLOOP" | "FORPREP") {
                             let t = q as i64 + 1 + ins.sbx();
                             let leaves = ins.name() == "JMP"
-                                && (Some(t as usize) == inner_brk || Some(t as usize) == then_tail);
+                                && (is_break_target(f, inner_brk, t as usize)
+                                    || Some(t as usize) == then_tail);
                             if !leaves && (t < jmp_pc as i64 + 1 || t > then_end as i64) {
                                 return Err(Unsupported("a complex condition or loop".into()));
                             }
@@ -1008,7 +1255,7 @@ impl Ctx<'_> {
                 "CONCAT" => (b..=c).collect(),
                 "ADD" | "SUB" | "MUL" | "DIV" | "MOD" | "POW" | "GETTABLE" => [i.b, i.c]
                     .into_iter()
-                    .filter(|&r| r < 256)
+                    .filter(|&r| r < rk_base(f))
                     .map(|r| r as usize)
                     .collect(),
                 "UNM" | "NOT" | "LEN" => vec![b],
@@ -1040,6 +1287,19 @@ impl Ctx<'_> {
 struct Exits {
     brk: Option<usize>,
     tail: Option<usize>,
+}
+
+/// True when a jump to `t` leaves the innermost loop: `t` is its exit, or the exit instruction is
+/// itself a jump to `t` (the compiler sends a `break` straight to where the exit jump goes).
+fn is_break_target(f: &Function, brk: Option<usize>, t: usize) -> bool {
+    let Some(b) = brk else { return false };
+    if b == t {
+        return true;
+    }
+    f.code
+        .get(b)
+        .map(|r| Instr::decode(*r))
+        .is_some_and(|j| j.name() == "JMP" && b as i64 + 1 + j.sbx() == t as i64)
 }
 
 /// One comparison with its jump, see [`Ctx::cond_pair`].
@@ -1132,9 +1392,18 @@ fn forget_changed(reg: &mut [Option<Expr>], inner: &[&State], also: std::ops::Ra
     }
 }
 
+/// The first operand value that names a constant: 256 in Lua 5.1, 250 in 5.0.
+pub fn rk_base(f: &Function) -> u32 {
+    if f.orig_code.is_some() {
+        crate::luac50::RK_BASE
+    } else {
+        256
+    }
+}
+
 fn rk_of(f: &Function, reg: &[Option<Expr>], v: u32) -> Result<Expr, Unsupported> {
-    if v >= 256 {
-        konst(f, (v - 256) as usize)
+    if v >= rk_base(f) {
+        konst(f, (v - rk_base(f)) as usize)
     } else {
         get(reg, v as usize)
     }
@@ -1176,8 +1445,14 @@ pub fn decompile(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
     let ctx = Ctx {
         names,
         depth: std::cell::Cell::new(0),
+        block_depth: std::cell::Cell::new(0),
     };
-    let mut out = String::from("-- decompiled by RustyGRF from Lua 5.1 bytecode\n");
+    let version = if chunk.main.orig_code.is_some() {
+        "5.0"
+    } else {
+        "5.1"
+    };
+    let mut out = format!("-- decompiled by RustyGRF from Lua {version} bytecode\n");
     out.push_str(&ctx.body(&chunk.main, 0));
     out
 }
@@ -1222,6 +1497,7 @@ mod tests {
             lines: vec![],
             locals: vec![],
             upvalue_names: vec![],
+            orig_code: None,
         }
     }
 
@@ -1426,6 +1702,63 @@ mod tests {
     }
 
     #[test]
+    fn lua_50_while_has_its_condition_at_the_bottom() {
+        // while x do print("hi") end, as Lua 5.0 writes it: a jump to the test, the body, the test
+        // that jumps back while it holds (instructions are in the 5.1 form `to_lua51` makes)
+        let code = vec![
+            jmp(3),           // 0 -> 4
+            insx(5, 0, 0),    // 1 print
+            insx(1, 1, 1),    // 2 "hi"
+            ins(28, 0, 2, 1), // 3 CALL
+            insx(5, 0, 2),    // 4 x
+            ins(26, 0, 0, 1), // 5 TEST R0, jump back when true
+            jmp(-6),          // 6 -> 1
+            ins(30, 0, 1, 0), // 7
+        ];
+        let mut f = func(code, vec![s("print"), s("hi"), s("x")], vec![]);
+        f.orig_code = Some(vec![0; 8]);
+        let out = decompile(&Chunk { main: f }, &text);
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("Lua 5.0"), "{out}");
+        assert!(out.ends_with("while x do\n\tprint(\"hi\")\nend\n"), "{out}");
+    }
+
+    #[test]
+    fn or_and_comparisons_as_values() {
+        // x = a or {}
+        let out = decompiled(
+            vec![
+                insx(5, 0, 0),    // GETGLOBAL R0 "a"
+                ins(26, 0, 0, 1), // TEST R0: keep it when true
+                jmp(1),
+                ins(10, 0, 0, 0), // NEWTABLE R0
+                insx(7, 0, 1),    // SETGLOBAL R0 "x"
+                ins(30, 0, 1, 0),
+            ],
+            vec![s("a"), s("x")],
+            vec![],
+        );
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("x = a or {}"), "{out}");
+        // x = (a == 1)
+        let out = decompiled(
+            vec![
+                insx(5, 0, 0),
+                ins(23, 1, 0, 257), // EQ 1 R0 K1
+                jmp(1),
+                ins(2, 1, 0, 1), // LOADBOOL R1 false, skip the next
+                ins(2, 1, 1, 0), // LOADBOOL R1 true
+                insx(7, 1, 2),
+                ins(30, 0, 1, 0),
+            ],
+            vec![s("a"), Constant::Number(1.0), s("x")],
+            vec![],
+        );
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("x = a == 1"), "{out}");
+    }
+
+    #[test]
     fn a_swap_of_locals_is_not_guessed() {
         // local a, b = 1, 2; a, b = b, a  (the temporary holds `b` while `b` is overwritten)
         let consts = vec![Constant::Number(1.0), Constant::Number(2.0)];
@@ -1463,6 +1796,50 @@ mod tests {
             "{}",
             &out[..200.min(out.len())]
         );
+    }
+
+    #[test]
+    fn deeply_nested_blocks_and_or_chains_do_not_overflow_the_stack() {
+        let run = |chunk: Chunk| {
+            std::thread::Builder::new()
+                .stack_size(2 << 20)
+                .spawn(move || decompile(&chunk, &text))
+                .unwrap()
+                .join()
+                .expect("no stack overflow or panic")
+        };
+        // 20000 `if a then ... end f()` inside each other (the statement after each inner `end`
+        // keeps the ends apart): n x (GETGLOBAL, TEST, JMP), `f()`, then n x `f()`
+        let n = 20_000usize;
+        let mut code = Vec::new();
+        for k in 0..n {
+            let jmp_pc = 3 * k + 2;
+            let target = 3 * n + 2 + 2 * (n - 1 - k);
+            code.extend([
+                insx(5, 0, 0),
+                ins(26, 0, 0, 0),
+                jmp(target as i64 - (jmp_pc as i64 + 1)),
+            ]);
+        }
+        for _ in 0..=n {
+            code.extend([insx(5, 0, 1), ins(28, 0, 1, 1)]);
+        }
+        code.push(ins(30, 0, 1, 0));
+        let out = run(Chunk {
+            main: func(code, vec![s("a"), s("f")], vec![]),
+        });
+        assert!(!is_complete(&out) || out.len() > 100);
+        // `x = a or a or a ...` 20000 times: one TEST/JMP pair per link, all jumping to the end
+        let mut code = vec![insx(5, 0, 0)];
+        for k in 0..n {
+            let to_end = (n - k - 1) * 3 + 1;
+            code.extend([ins(26, 0, 0, 1), jmp(to_end as i64), insx(5, 0, 0)]);
+        }
+        code.extend([insx(7, 0, 0), ins(30, 0, 1, 0)]);
+        let out = run(Chunk {
+            main: func(code, vec![s("a")], vec![]),
+        });
+        assert!(!out.is_empty());
     }
 
     #[test]

@@ -103,7 +103,7 @@ fn damaged_real_lua_files_are_detected() {
 /// are decompiled and the result must be valid Lua source. Counts show how much is complete.
 #[test]
 fn every_compiled_lub_is_read_and_decompiled() {
-    use rgrf_formats::luac::{LuacError, parse};
+    use rgrf_formats::luac::parse_any;
     use rgrf_formats::luadec::{decompile, is_complete};
     let Some(base) = base() else { return };
     let path = base.join("0 OTHER CLIENTS/client-kro/data.grf");
@@ -122,17 +122,14 @@ fn every_compiled_lub_is_read_and_decompiled() {
             continue;
         }
         compiled += 1;
-        let chunk = match parse(&data) {
+        let chunk = match parse_any(&data) {
             Ok(c) => c,
-            Err(LuacError::Unsupported(m)) if m.contains("0x50") => {
-                v50 += 1;
-                continue;
-            }
             Err(e) => {
                 bad_parse.push(format!("{name}: {e}"));
                 continue;
             }
         };
+        v50 += usize::from(chunk.main.orig_code.is_some());
         let text = decompile(&chunk, &names);
         functions_total += text.matches("function(").count();
         for l in text.lines().filter(|l| l.contains("-- not decompiled (")) {
@@ -153,6 +150,7 @@ fn every_compiled_lub_is_read_and_decompiled() {
             }
             // nothing may be dropped: every plain string constant of a fully decompiled file is in the text
             let mut missing = 0usize;
+            let mut missing_first = String::new();
             fn strings(f: &rgrf_formats::luac::Function, out: &mut Vec<Vec<u8>>) {
                 for c in &f.constants {
                     if let rgrf_formats::luac::Constant::Str(s) = c {
@@ -169,11 +167,14 @@ fn every_compiled_lub_is_read_and_decompiled() {
                 }
                 if !text.contains(&rgrf_formats::luadec::string_text(&s, &names)) {
                     missing += 1;
+                    if missing_first.is_empty() {
+                        missing_first = rgrf_formats::luadec::string_text(&s, &names);
+                    }
                 }
             }
             if missing > 0 {
                 bad_syntax.push(format!(
-                    "{name}: {missing} string constants are missing in the source"
+                    "{name}: {missing} string constants are missing in the source, e.g. {missing_first:?}"
                 ));
             }
             if let Err(e) = lua::check(text.as_bytes()) {
@@ -191,7 +192,7 @@ fn every_compiled_lub_is_read_and_decompiled() {
         }
     }
     eprintln!(
-        "{compiled} compiled: {v50} Lua 5.0 (not read yet), {complete} fully decompiled, {partial} with control flow left as listing, {functions_total} functions written"
+        "{compiled} compiled ({v50} of them Lua 5.0): {complete} fully decompiled, {partial} with control flow left as listing, {functions_total} functions written"
     );
     eprintln!("functions left as listing, by reason: {reasons:?}");
     for p in &partial_samples {

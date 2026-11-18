@@ -168,25 +168,7 @@ pub fn decompile(
     }
     // names and strings in the client's scripts are Korean text (CP949)
     let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
-    if data.get(4) == Some(&0x50) {
-        // Lua 5.0 has no decompiler; its structure is read and listed
-        let chunk =
-            rgrf_formats::luac50::parse(&data).with_context(|| format!("{what} cannot be read"))?;
-        let text = rgrf_formats::luac50::disassemble(&chunk, &show);
-        eprintln!("{what} is Lua 5.0: there is no decompiler for it, showing the bytecode listing");
-        match output {
-            Some(p) => {
-                if p.exists() {
-                    bail!("{} exists already; remove it first", p.display());
-                }
-                fs::write(p, &text).with_context(|| format!("cannot write {}", p.display()))?;
-                eprintln!("wrote {}", p.display());
-            }
-            None => print!("{text}"),
-        }
-        return Ok(2);
-    }
-    let chunk = luac::parse(&data).with_context(|| format!("{what} cannot be read"))?;
+    let chunk = luac::parse_any(&data).with_context(|| format!("{what} cannot be read"))?;
     let (text, complete) = if listing {
         (luac::disassemble(&chunk, &show), true)
     } else {

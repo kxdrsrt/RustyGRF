@@ -270,6 +270,20 @@ pub fn validate(chunk: &Chunk) -> Result<(), String> {
                 "CLOSURE" if i.bx() as usize >= f.protos.len() => {
                     return Err(bad("function index out of range"));
                 }
+                "SETTABLE" | "ADD" | "SUB" | "MUL" | "DIV" | "POW" | "EQ" | "LT" | "LE"
+                | "GETTABLE" | "SELF" => {
+                    let operands: &[u32] = if matches!(i.name(), "GETTABLE" | "SELF") {
+                        &[i.c]
+                    } else {
+                        &[i.b, i.c]
+                    };
+                    if operands
+                        .iter()
+                        .any(|&x| x >= RK_BASE && ((x - RK_BASE) as usize) >= f.constants.len())
+                    {
+                        return Err(bad("constant operand out of range"));
+                    }
+                }
                 "JMP" | "FORLOOP" | "TFORPREP" => {
                     let t = pc as i64 + 1 + i.sbx();
                     if t < 0 || t > n {
@@ -290,6 +304,108 @@ pub fn validate(chunk: &Chunk) -> Result<(), String> {
     go(&chunk.main, "main")
 }
 
+/// Opcode number of a 5.1 instruction by name (63 = unknown, shown as unsupported by the decompiler).
+fn op51(name: &str) -> u32 {
+    crate::luac::OPS
+        .iter()
+        .position(|n| *n == name)
+        .map_or(63, |i| i as u32)
+}
+
+fn enc51(op: u32, a: u32, b: u32, c: u32) -> u32 {
+    op | (a << 6) | (c << 14) | (b << 23)
+}
+
+/// In 5.0 an operand is a constant from 250 on (5.1: from 256, and at most 256 of them). The
+/// operands are left as they are; the decompiler asks `luadec::rk_base` for the threshold.
+pub const RK_BASE: u32 = 250;
+
+/// Translates one 5.0 instruction to the 5.1 encoding. What 5.1 cannot say the same way (numeric
+/// `for`, `SETLISTO`, `TEST` that also copies a register) becomes opcode 63: the decompiler then
+/// leaves that function as a listing.
+fn convert(raw: u32) -> u32 {
+    let i = Instr::decode(raw);
+    let name = i.name();
+    let (a, b, c) = (i.a, i.b, i.c);
+    match name {
+        "LOADK" | "GETGLOBAL" | "SETGLOBAL" | "CLOSURE" => {
+            // 5.0 and 5.1 both have Bx = B * 512 + C
+            op51(name) | (a << 6) | (i.bx() << 14)
+        }
+        "JMP" => op51("JMP") | (i.bx() << 14),
+        // generic `for`: the jump to the loop test
+        "TFORPREP" => op51("JMP") | (i.bx() << 14),
+        "TFORLOOP" => enc51(op51("TFORLOOP"), a, 0, c),
+        "SETTABLE" | "ADD" | "SUB" | "MUL" | "DIV" | "POW" | "EQ" | "LT" | "LE" => {
+            enc51(op51(name), a, b, c)
+        }
+        "GETTABLE" | "SELF" => enc51(op51(name), a, b, c),
+        // `if R(B) <=> C then R(A) := R(B)`: a plain TEST when A is B, else it needs TESTSET
+        "TEST" if a == b => enc51(op51("TEST"), a, 0, c),
+        "TEST" => enc51(op51("TESTSET"), a, b, c),
+        "SETLIST" => {
+            // R(A)[Bx - Bx % 32 + i] := R(A + i), 1 <= i <= Bx % 32 + 1
+            let n = (i.bx() & 31) + 1;
+            enc51(op51("SETLIST"), a, n, (i.bx() >> 5) + 1)
+        }
+        "SETLISTO" | "FORLOOP" => enc51(63, a, b, c),
+        _ => enc51(op51(name), a, b, c),
+    }
+}
+
+/// The chunk in the 5.1 representation the decompiler works on (`orig_code` keeps the 5.0 code).
+pub fn to_lua51(chunk: &Chunk) -> crate::luac::Chunk {
+    fn go(f: &Function) -> crate::luac::Function {
+        crate::luac::Function {
+            source: f.source.clone(),
+            line_defined: f.line_defined,
+            last_line: 0,
+            upvalue_count: f.upvalue_count,
+            params: f.params,
+            is_vararg: f.is_vararg,
+            max_stack: f.max_stack,
+            code: f.code.iter().map(|&r| convert(r)).collect(),
+            constants: f.constants.clone(),
+            protos: f.protos.iter().map(go).collect(),
+            lines: f.lines.clone(),
+            locals: f.locals.clone(),
+            upvalue_names: f.upvalue_names.clone(),
+            orig_code: Some(f.code.clone()),
+        }
+    }
+    crate::luac::Chunk {
+        main: go(&chunk.main),
+    }
+}
+
+/// The whole translated chunk back in its 5.0 form (for the listing).
+pub fn chunk_from_lua51(c: &crate::luac::Chunk) -> Option<Chunk> {
+    fn go(f: &crate::luac::Function) -> Option<Function> {
+        let mut out = from_lua51(f)?;
+        out.protos = f.protos.iter().map(go).collect::<Option<_>>()?;
+        Some(out)
+    }
+    Some(Chunk { main: go(&c.main)? })
+}
+
+/// The 5.0 form of a translated function, for listings.
+pub fn from_lua51(f: &crate::luac::Function) -> Option<Function> {
+    Some(Function {
+        source: f.source.clone(),
+        line_defined: f.line_defined,
+        upvalue_count: f.upvalue_count,
+        params: f.params,
+        is_vararg: f.is_vararg,
+        max_stack: f.max_stack,
+        lines: f.lines.clone(),
+        locals: f.locals.clone(),
+        upvalue_names: f.upvalue_names.clone(),
+        constants: f.constants.clone(),
+        protos: Vec::new(),
+        code: f.orig_code.clone()?,
+    })
+}
+
 fn quote(s: &[u8], names: &dyn Fn(&[u8]) -> String) -> String {
     let t: String = names(s).chars().take(60).collect();
     format!("{t:?}")
@@ -299,6 +415,13 @@ fn quote(s: &[u8], names: &dyn Fn(&[u8]) -> String) -> String {
 pub fn disassemble(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
     let mut out = String::new();
     list(&chunk.main, "main", names, &mut out);
+    out
+}
+
+/// The listing of one function (without its nested functions).
+pub fn list_function(f: &Function, names: &dyn Fn(&[u8]) -> String) -> String {
+    let mut out = String::new();
+    list(f, "main", names, &mut out);
     out
 }
 
