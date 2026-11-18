@@ -6,7 +6,7 @@ Stand 2026-11-18. **Gebaut und geprüft** ist nur das macOS-Bundle; alles andere
 
 | Ziel | Befehl (in `apps/gui`) | Stand |
 |---|---|---|
-| macOS `.app` (Apple Silicon) | `npx tauri build --bundles app` | **gebaut** (9,3 MB, unsigniert, Dateizuordnung `.grf`/`.gpf` im `Info.plist` geprüft) |
+| macOS `.app` (Apple Silicon) | `npx tauri build --bundles app` | **gebaut** (9,9 MB, mit Icon, unsigniert, Dateizuordnung `.grf`/`.gpf` im `Info.plist` geprüft) |
 | macOS `.dmg` | `npx tauri build --bundles dmg` | nicht gebaut: das Tauri-Skript öffnet ein Finder-Fenster zum Anordnen der Symbole |
 | Windows `.msi` / `.exe` | `npx tauri build` unter Windows (ARM64-VM oder x64) | nicht gebaut; braucht Rust, Node und die Visual-Studio-Build-Tools in der VM |
 | Linux AppImage / `.deb` | `npx tauri build` unter Linux | nicht gebaut; braucht `webkit2gtk-4.1` und `libayatana-appindicator` |
@@ -26,7 +26,7 @@ Die Tests mit echten Archiven brauchen `RGRF_TESTDATA` (siehe `apps/gui/.cargo/c
 ## Offen, braucht deine Entscheidung
 
 - **Signierung und Notarisierung** (macOS: Apple-Developer-Konto; Windows: Zertifikat). Ohne sie warnt das System beim ersten Start („nicht verifizierter Entwickler“, SmartScreen). Für den Eigengebrauch reicht Rechtsklick → Öffnen.
-- **Icon:** Platzhalter, Entwürfe kann ich erzeugen (`npx tauri icon <1024-px-PNG>` macht daraus alle Größen).
+- **Icon:** Entwurf A (Kiste, Rostorange) ist eingebaut und im `.app` geprüft; Entwürfe und Vorgehen in [icon-drafts/](icon-drafts/README.md). Ein endgültiges Design ist deine Entscheidung.
 - **Versionsnummer:** `0.0.0` in `tauri.conf.json` und den `Cargo.toml`; vor dem ersten Release festlegen.
 - **Automatische Builds** (CI für macOS/Windows/Linux): erst sinnvoll, wenn das Projekt ein eigenes Repository hat (bisher nur lokales Git, kein Push).
 - **Updater:** nicht eingebaut.

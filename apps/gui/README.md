@@ -30,4 +30,4 @@ Das Bauverzeichnis steht lokal in `.cargo/config.toml` (nicht im Git).
 Layout ohne App ausprobieren: `python3 -m http.server -d ui 8765`, dann `http://127.0.0.1:8765` öffnen (Mock-Daten).
 
 ## Stand
-Gemessen und geprüft siehe [docs/03-roadmap.md](../../docs/03-roadmap.md), Abschnitt M8. Noch nicht in der App: Einstellungen, 3D-Ansicht und STR-Effekte, Installer für Windows/Linux (siehe [docs/11-release.md](../../docs/11-release.md)). Das Icon ist ein Platzhalter (`src-tauri/icons`, erzeugt aus einem 1024-px-PNG mit `npx tauri icon`).
+Gemessen und geprüft siehe [docs/03-roadmap.md](../../docs/03-roadmap.md), Abschnitt M8. Noch nicht in der App: Einstellungen, 3D-Ansicht und STR-Effekte, Installer für Windows/Linux (siehe [docs/11-release.md](../../docs/11-release.md)). Das Icon ist ein erster Entwurf (`src-tauri/icons`, Quelle `icons/source/`, erzeugt mit `npx tauri icon`; Entwürfe in [docs/icon-drafts](../../docs/icon-drafts/README.md)).

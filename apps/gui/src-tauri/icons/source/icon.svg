@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F08A3C"/><stop offset="1" stop-color="#B2461B"/></linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="208" fill="url(#bg)"/>
+  <g stroke="#7A2E0F" stroke-width="10" stroke-linejoin="round">
+    <polygon points="512,236 784,392 512,548 240,392" fill="#FFF1E3"/>
+    <polygon points="240,392 512,548 512,860 240,704" fill="#F6C79F"/>
+    <polygon points="784,392 512,548 512,860 784,704" fill="#E9A06B"/>
+  </g>
+  <g fill="#B2461B" opacity="0.9">
+    <polygon points="512,312 608,367 512,422 416,367"/>
+  </g>
+  <g fill="#7A2E0F" transform="matrix(1 0.577 0 1 0 0)">
+    <rect x="296" y="270" width="48" height="48"/>
+    <rect x="296" y="350" width="48" height="48"/>
+    <rect x="376" y="350" width="48" height="48"/>
+  </g>
+  <g fill="#FFF1E3" transform="matrix(1 -0.577 0 1 0 0)">
+    <rect x="590" y="900" width="48" height="48"/>
+    <rect x="670" y="900" width="48" height="48"/>
+    <rect x="670" y="980" width="48" height="48"/>
+  </g>
+</svg>
