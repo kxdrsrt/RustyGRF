@@ -98,7 +98,11 @@ fn previews_of_real_files() {
             assert!(textures.iter().filter(|t| t.png.is_some()).count() > 150);
             assert!(water.is_some());
             assert!(info[1].contains("RSW 2.1"), "{info:?}");
-            assert!(instances.iter().all(|i| i.matrix.len() == 16 && i.matrix.iter().all(|v| v.is_finite())));
+            assert!(
+                instances
+                    .iter()
+                    .all(|i| i.matrix.len() == 16 && i.matrix.iter().all(|v| v.is_finite()))
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -106,18 +110,45 @@ fn previews_of_real_files() {
     let i = find(&mut s, r"data\model\ad\ad01.rsm");
     match s.preview(i, None).unwrap() {
         Preview::Model {
-            parts,
+            nodes,
             textures,
             triangles,
             ..
         } => {
-            assert!(triangles > 0 && !parts.is_empty());
+            assert!(triangles > 0 && !nodes.is_empty());
             assert!(
                 textures
                     .iter()
                     .any(|t| t.name.contains("ad_j_01.bmp") && t.png.is_some()),
                 "the texture is found and decoded"
             );
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // the clock tower's hands turn: some node matrix differs between two moments of the loop
+    let i = find(&mut s, "data\\model\\프론테라\\시계탑.rsm");
+    match s.preview(i, None).unwrap() {
+        Preview::Model {
+            nodes,
+            duration_ms,
+            samples,
+            ..
+        } => {
+            assert!(duration_ms > 0.0 && samples > 1);
+            let floats = |b: &str| -> Vec<f32> {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(b).unwrap();
+                let (words, _) = bytes.as_chunks::<4>();
+                words.iter().map(|c| f32::from_le_bytes(*c)).collect()
+            };
+            let moved = nodes.iter().any(|n| {
+                let m = floats(&n.matrices);
+                assert_eq!(m.len(), samples * 16);
+                assert!(m.iter().all(|v| v.is_finite()));
+                m[..16] != m[(samples / 4) * 16..(samples / 4) * 16 + 16]
+            });
+            assert!(moved, "an animated node changes over the loop");
         }
         other => panic!("{other:?}"),
     }

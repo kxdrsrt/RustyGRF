@@ -190,6 +190,14 @@ pub struct GroundOut {
     pub lightmaps: String,
 }
 
+/// One node of a model: its triangles in the node's own space and, per sampled moment, the matrix
+/// that takes them to the viewer (4 x 4 column-major `f32`, base64).
+#[derive(Serialize, Debug)]
+pub struct ModelNodeOut {
+    pub parts: Vec<ModelPartOut>,
+    pub matrices: String,
+}
+
 #[derive(Serialize, Debug)]
 pub struct ModelDefOut {
     pub parts: Vec<ModelPartOut>,
@@ -275,8 +283,12 @@ pub enum Preview {
         info: Vec<String>,
     },
     Model {
-        parts: Vec<ModelPartOut>,
+        nodes: Vec<ModelNodeOut>,
         textures: Vec<TextureOut>,
+        /// Length of the animation loop in milliseconds, 0 when the model does not move.
+        duration_ms: f32,
+        /// Number of sampled moments in `matrices`.
+        samples: usize,
         min: [f32; 3],
         max: [f32; 3],
         alpha: f32,
@@ -1306,7 +1318,8 @@ impl Session {
                 if data.starts_with(b"\x1bLua") {
                     match rgrf_formats::luac::parse(&data) {
                         Ok(chunk) => {
-                            let names = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+                            let names =
+                                |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
                             let mut text = rgrf_formats::luadec::decompile(&chunk, &names);
                             let complete = rgrf_formats::luadec::is_complete(&text);
                             let truncated = text.chars().count() > MAX_TEXT_CHARS;
@@ -1603,45 +1616,60 @@ impl Session {
         })
     }
 
-    /// An RSM model as triangles with its textures, for the 3D view.
+    /// An RSM model for the 3D view: node geometry plus the node matrices sampled over the animation.
     fn preview_model(&self, data: &[u8]) -> Result<Preview, String> {
         let model = rsm_model::parse(data).map_err(|e| e.to_string())?;
         let posed = rsm_model::static_pose(&model);
         let keys = self.key_index();
         let f32s = |v: &[f32]| b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
-        let mut textures: Vec<TextureOut> = Vec::new();
-        let mut parts = Vec::new();
-        let mut missing = 0;
-        for p in &posed.parts {
-            let mut full = b"data\\texture\\".to_vec();
-            full.extend(&p.texture);
-            let png = keys
-                .get(&GrfPath::new(full).key())
-                .and_then(|&ti| self.texture_image(ti))
-                .and_then(|img| rgba_to_png(&img).ok())
-                .map(|b| b64(&b));
-            if png.is_none() && !p.texture.is_empty() {
-                missing += 1;
+        let mut pool = TexturePool::default();
+        let duration = rsm_model::duration_ms(&model);
+        let samples = if duration > 0.0 {
+            ((duration / 33.0).ceil() as usize).clamp(2, 360)
+        } else {
+            1
+        };
+        let view = rsm_model::view_matrix(&model);
+        let mut nodes = Vec::new();
+        for ni in 0..model.nodes.len() {
+            let parts = rsm_model::node_parts(&model, ni)
+                .iter()
+                .map(|p| ModelPartOut {
+                    texture: pool.get(self, keys, b"data\\texture\\", &p.texture),
+                    positions: f32s(&p.positions),
+                    normals: f32s(&p.normals),
+                    uvs: f32s(&p.uvs),
+                })
+                .collect();
+            let mut matrices: Vec<f32> = Vec::with_capacity(samples * 16);
+            for k in 0..samples {
+                let t = duration * k as f32 / samples as f32;
+                let world = rsm_model::node_matrices_at(&model, t);
+                matrices.extend(rsm_model::multiply(&view, &world[ni]));
             }
-            textures.push(TextureOut {
-                name: self.shown_bytes(&p.texture),
-                png,
-            });
-            parts.push(ModelPartOut {
-                texture: textures.len() - 1,
-                positions: f32s(&p.positions),
-                normals: f32s(&p.normals),
-                uvs: f32s(&p.uvs),
+            nodes.push(ModelNodeOut {
+                parts,
+                matrices: f32s(&matrices),
             });
         }
+        let missing = pool
+            .out
+            .iter()
+            .filter(|t| t.png.is_none() && !t.name.is_empty())
+            .count();
         let mut info = vec![format!(
-            "RSM {} - {} nodes, {} triangles, {} textures{}",
+            "RSM {} - {} nodes, {} triangles, {} textures{}{}",
             model.version,
             model.nodes.len(),
             posed.triangles,
-            textures.len(),
+            pool.out.len(),
             if missing > 0 {
                 format!(" ({missing} missing)")
+            } else {
+                String::new()
+            },
+            if duration > 0.0 {
+                format!(", animation loops every {:.1} s", duration / 1000.0)
             } else {
                 String::new()
             }
@@ -1652,16 +1680,18 @@ impl Session {
                 self.shown_bytes(&n.name),
                 n.vertices.len(),
                 n.faces.len(),
-                if n.rot_keys.len() > 1 {
-                    ", rotates"
+                if n.rot_keys.len() > 1 || n.pos_keys.len() > 1 || n.scale_keys.len() > 1 {
+                    ", moves"
                 } else {
                     ""
                 }
             ));
         }
         Ok(Preview::Model {
-            parts,
-            textures,
+            nodes,
+            textures: pool.out,
+            duration_ms: duration,
+            samples,
             min: posed.min,
             max: posed.max,
             alpha: posed.alpha,

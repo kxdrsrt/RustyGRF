@@ -423,9 +423,10 @@ fn every_str_parses_and_renders() {
 #[test]
 fn every_rsm_has_geometry_and_a_finite_pose() {
     use rgrf_formats::rsm::Rsm;
-    use rgrf_formats::rsm_model::{parse, static_pose};
+    use rgrf_formats::rsm_model::{duration_ms, node_matrices_at, parse, static_pose};
     let Some(path) = data_grf() else { return };
     let arc = Archive::open(&path).unwrap();
+    let animated = std::sync::atomic::AtomicUsize::new(0);
     let mut idx = arc.select(Some("*.rsm"), NameMode::Cp1252);
     idx.extend(arc.select(Some("*.rsm2"), NameMode::Cp1252));
     eprintln!("{} RSM files", idx.len());
@@ -455,6 +456,19 @@ fn every_rsm_has_geometry_and_a_finite_pose() {
             if p.min.iter().chain(&p.max).any(|v| !v.is_finite()) {
                 return Some(format!("{name}: not finite"));
             }
+            let d = duration_ms(&m);
+            if d > 0.0 {
+                animated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            for t in [0.0, d / 3.0, d / 2.0, d] {
+                if node_matrices_at(&m, t)
+                    .iter()
+                    .flatten()
+                    .any(|v| !v.is_finite())
+                {
+                    return Some(format!("{name}: animation not finite at {t}"));
+                }
+            }
             let size = (p.max[0] - p.min[0])
                 .max(p.max[1] - p.min[1])
                 .max(p.max[2] - p.min[2]);
@@ -468,6 +482,10 @@ fn every_rsm_has_geometry_and_a_finite_pose() {
             None
         })
         .collect();
+    eprintln!(
+        "  {} animated",
+        animated.load(std::sync::atomic::Ordering::Relaxed)
+    );
     for (v, (n, lo, hi)) in stats.lock().unwrap().iter() {
         eprintln!("  RSM {v}: {n} models, size {lo:.1} .. {hi:.1}");
     }

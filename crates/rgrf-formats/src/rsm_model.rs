@@ -49,6 +49,8 @@ pub struct Model {
     pub animation_length: i32,
     pub shade_type: i32,
     pub alpha: f32,
+    /// Frames per second of the key frames (0 before version 2.2, where they count milliseconds).
+    pub frame_rate: f32,
     pub main_name: Vec<u8>,
     pub nodes: Vec<Node>,
 }
@@ -71,8 +73,9 @@ pub fn parse(bytes: &[u8]) -> Result<Model, RsmError> {
     };
     let mut textures = Vec::new();
     let mut main_name = Vec::new();
+    let mut frame_rate = 0.0;
     let n_nodes = if version >= V2_3 {
-        r.f32()?;
+        frame_rate = r.f32()?;
         let n = r.count("main mesh name", 4)?;
         for i in 0..n {
             let name = r.lstr()?;
@@ -82,7 +85,7 @@ pub fn parse(bytes: &[u8]) -> Result<Model, RsmError> {
         }
         r.count("mesh", 8)?
     } else if version >= V2_2 {
-        r.f32()?;
+        frame_rate = r.f32()?;
         let n = r.count("texture", 4)?;
         for _ in 0..n {
             textures.push(r.lstr()?);
@@ -113,6 +116,7 @@ pub fn parse(bytes: &[u8]) -> Result<Model, RsmError> {
         animation_length,
         shade_type,
         alpha,
+        frame_rate,
         main_name,
         nodes,
     })
@@ -572,6 +576,242 @@ pub fn static_pose(m: &Model) -> StaticModel {
     }
 }
 
+// ---------- animation: node matrices over time, geometry in node space ----------
+
+/// Time in milliseconds of a key frame number.
+fn key_ms(m: &Model, frame: i32) -> f32 {
+    if m.version >= V2_2 && m.frame_rate > 0.0 {
+        frame as f32 * 1000.0 / m.frame_rate
+    } else {
+        frame as f32
+    }
+}
+
+/// Length of the animation loop in milliseconds (0 when the model does not move).
+pub fn duration_ms(m: &Model) -> f32 {
+    let moves = m
+        .nodes
+        .iter()
+        .any(|n| n.rot_keys.len() > 1 || n.pos_keys.len() > 1 || n.scale_keys.len() > 1);
+    if !moves {
+        return 0.0;
+    }
+    let last_key = m
+        .nodes
+        .iter()
+        .flat_map(|n| {
+            n.rot_keys
+                .iter()
+                .map(|k| k.0)
+                .chain(n.pos_keys.iter().map(|k| k.0))
+                .chain(n.scale_keys.iter().map(|k| k.0))
+        })
+        .max()
+        .unwrap_or(0);
+    let from_header = key_ms(m, m.animation_length);
+    from_header.max(key_ms(m, last_key)).max(1.0)
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+/// Spherical interpolation of two quaternions (x, y, z, w) on the shorter arc.
+fn slerp(a: [f32; 4], mut b: [f32; 4], t: f32) -> [f32; 4] {
+    let mut dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    if dot < 0.0 {
+        b = b.map(|v| -v);
+        dot = -dot;
+    }
+    let (wa, wb) = if dot > 0.9995 {
+        (1.0 - t, t)
+    } else {
+        let theta = dot.clamp(-1.0, 1.0).acos();
+        let s = theta.sin();
+        (((1.0 - t) * theta).sin() / s, (t * theta).sin() / s)
+    };
+    std::array::from_fn(|i| a[i] * wa + b[i] * wb)
+}
+
+/// The two key frames around `t` and how far between them `t` is (clamped at both ends).
+fn bracket<T: Copy>(m: &Model, keys: &[(i32, T)], t: f32) -> Option<(T, T, f32)> {
+    let first = keys.first()?;
+    let last = keys.last()?;
+    if t <= key_ms(m, first.0) || keys.len() == 1 {
+        return Some((first.1, first.1, 0.0));
+    }
+    if t >= key_ms(m, last.0) {
+        return Some((last.1, last.1, 0.0));
+    }
+    let i = keys.partition_point(|k| key_ms(m, k.0) <= t);
+    let (a, b) = (&keys[i - 1], &keys[i]);
+    let (ta, tb) = (key_ms(m, a.0), key_ms(m, b.0));
+    Some((a.1, b.1, if tb > ta { (t - ta) / (tb - ta) } else { 0.0 }))
+}
+
+/// World matrices of all nodes at `t` milliseconds into the loop (position, rotation and scale
+/// interpolated between the key frames), in the file's own space.
+pub fn node_matrices_at(m: &Model, t: f32) -> Vec<[f32; 16]> {
+    let by_name: HashMap<&[u8], usize> = m
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.name.as_slice(), i))
+        .collect();
+    let mut done: Vec<Option<Mat4>> = vec![None; m.nodes.len()];
+    fn go(
+        i: usize,
+        m: &Model,
+        t: f32,
+        by_name: &HashMap<&[u8], usize>,
+        done: &mut Vec<Option<Mat4>>,
+        depth: usize,
+    ) -> Mat4 {
+        if let Some(d) = done[i] {
+            return d;
+        }
+        let n = &m.nodes[i];
+        let parent = by_name
+            .get(n.parent.as_slice())
+            .copied()
+            .filter(|&p| p != i && depth < 64);
+        let base = parent.map_or(IDENTITY, |p| go(p, m, t, by_name, done, depth + 1));
+        let pos = bracket(m, &n.pos_keys, t).map_or(n.pos, |(a, b, f)| lerp3(a, b, f));
+        let rot = bracket(m, &n.rot_keys, t).map_or_else(
+            || axis_angle(n.rot_angle, n.rot_axis),
+            |(a, b, f)| from_quat(slerp(a, b, f)),
+        );
+        let scale = bracket(m, &n.scale_keys, t).map_or(n.scale, |(a, b, f)| lerp3(a, b, f));
+        let mat = mul(&mul(&mul(&base, &translation(pos)), &rot), &scaling(scale));
+        done[i] = Some(mat);
+        mat
+    }
+    (0..m.nodes.len())
+        .map(|i| go(i, m, t, &by_name, &mut done, 0))
+        .collect()
+}
+
+/// The part of a node's vertex transform that does not move: offset and the 3 x 3 matrix.
+pub fn local_matrix(m: &Model, node: usize) -> [f32; 16] {
+    let n = &m.nodes[node];
+    let mut vm = IDENTITY;
+    if m.nodes.len() != 1 {
+        vm = mul(&vm, &translation(n.offset));
+    }
+    mul(&vm, &from_mat3(&n.mat3))
+}
+
+/// Triangles of one node in node space (offset and 3 x 3 matrix applied, the node's own movement
+/// not), grouped by texture, in the file's space (y down). Normals are made in the same space.
+pub fn node_parts(m: &Model, node: usize) -> Vec<Part> {
+    let n = &m.nodes[node];
+    let lm = local_matrix(m, node);
+    let local: Vec<[f32; 3]> = n.vertices.iter().map(|&v| apply(&lm, v)).collect();
+    let get = |i: u16| local.get(usize::from(i)).copied().unwrap_or([0.0; 3]);
+    let fnormals: Vec<[f32; 3]> = n
+        .faces
+        .iter()
+        .map(|f| {
+            let (a, b, c) = (get(f.vertices[0]), get(f.vertices[1]), get(f.vertices[2]));
+            let (u, v) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let x = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let l = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+            if l < 1e-9 {
+                [0.0, -1.0, 0.0]
+            } else {
+                [x[0] / l, x[1] / l, x[2] / l]
+            }
+        })
+        .collect();
+    let mut smooth: HashMap<(u16, i32), [f32; 3]> = HashMap::new();
+    if m.shade_type == 2 {
+        for (f, fnrm) in n.faces.iter().zip(&fnormals) {
+            for &vi in &f.vertices {
+                let e = smooth.entry((vi, f.smooth_group)).or_insert([0.0; 3]);
+                for k in 0..3 {
+                    e[k] += fnrm[k];
+                }
+            }
+        }
+    }
+    let mut parts: Vec<Part> = Vec::new();
+    let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
+    for (f, fnrm) in n.faces.iter().zip(&fnormals) {
+        let tex = n
+            .textures
+            .get(usize::from(f.texture))
+            .cloned()
+            .unwrap_or_default();
+        let at = *index.entry(tex.clone()).or_insert_with(|| {
+            parts.push(Part {
+                texture: tex,
+                positions: Vec::new(),
+                normals: Vec::new(),
+                uvs: Vec::new(),
+            });
+            parts.len() - 1
+        });
+        let part = &mut parts[at];
+        for k in 0..3 {
+            part.positions.extend(get(f.vertices[k]));
+            let nn = match m.shade_type {
+                0 => [0.0, -1.0, 0.0],
+                2 => smooth
+                    .get(&(f.vertices[k], f.smooth_group))
+                    .copied()
+                    .unwrap_or(*fnrm),
+                _ => *fnrm,
+            };
+            let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2])
+                .sqrt()
+                .max(1e-9);
+            part.normals.extend([nn[0] / l, nn[1] / l, nn[2] / l]);
+            part.uvs.extend(
+                n.tex_coords
+                    .get(usize::from(f.tex_vertices[k]))
+                    .copied()
+                    .unwrap_or([0.0; 2]),
+            );
+        }
+    }
+    parts
+}
+
+/// The matrix from the file's space (y down) to the viewer's (y up, centred on x and z, standing
+/// on y = 0), made from the static pose's bounds.
+pub fn view_matrix(m: &Model) -> [f32; 16] {
+    let mats = node_matrices_at(m, 0.0);
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for (i, n) in m.nodes.iter().enumerate() {
+        let vm = mul(&mats[i], &local_matrix(m, i));
+        for &v in &n.vertices {
+            let p = apply(&vm, v);
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+    }
+    if lo[0] > hi[0] {
+        return IDENTITY;
+    }
+    let (cx, cz, bottom) = ((lo[0] + hi[0]) / 2.0, (lo[2] + hi[2]) / 2.0, hi[1]);
+    // y' = bottom - y, x' = x - cx, z' = z - cz
+    let shift = translation([-cx, -bottom, -cz]);
+    mul(&scaling([1.0, -1.0, 1.0]), &shift)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,6 +931,66 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(static_pose(&looped).triangles, 2);
+    }
+
+    fn spinner(keys: Vec<(i32, [f32; 4])>) -> Model {
+        let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut m = parse(&model(&[("root", "", [0.0; 3], tri)])).unwrap();
+        m.nodes[0].rot_keys = keys;
+        m
+    }
+
+    #[test]
+    fn rotation_keys_are_interpolated_over_time() {
+        // identity at 0 ms, a quarter turn about y at 1000 ms
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        let m = spinner(vec![(0, [0.0, 0.0, 0.0, 1.0]), (1000, [0.0, s, 0.0, s])]);
+        assert_eq!(duration_ms(&m), 1000.0);
+        let at = |t: f32| apply(&node_matrices_at(&m, t)[0], [1.0, 0.0, 0.0]);
+        let p = at(0.0);
+        assert!((p[0] - 1.0).abs() < 1e-5 && p[2].abs() < 1e-5, "{p:?}");
+        let p = at(500.0); // an eighth of a turn
+        assert!((p[0] - s).abs() < 1e-4 && (p[2] + s).abs() < 1e-4, "{p:?}");
+        let p = at(1000.0);
+        assert!(p[0].abs() < 1e-4 && (p[2] + 1.0).abs() < 1e-4, "{p:?}");
+        // after the last key it stays there; a model without keys does not move
+        assert_eq!(at(5000.0), at(1000.0));
+        let still = spinner(vec![]);
+        assert_eq!(duration_ms(&still), 0.0);
+    }
+
+    #[test]
+    fn node_space_parts_and_matrices_rebuild_the_static_pose() {
+        let tri = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, -10.0, 0.0]];
+        let m = parse(&model(&[
+            ("body", "", [100.0, 0.0, 0.0], tri),
+            ("arm", "body", [0.0, 0.0, 50.0], tri),
+        ]))
+        .unwrap();
+        let st = static_pose(&m);
+        let view = view_matrix(&m);
+        let mats = node_matrices_at(&m, 0.0);
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for (i, mat) in mats.iter().enumerate() {
+            let full = multiply(&view, mat);
+            for p in node_parts(&m, i) {
+                for v in p.positions.as_chunks::<3>().0 {
+                    let w = apply(&full, [v[0], v[1], v[2]]);
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(w[k]);
+                        hi[k] = hi[k].max(w[k]);
+                    }
+                }
+            }
+        }
+        for k in 0..3 {
+            assert!(
+                (lo[k] - st.min[k]).abs() < 1e-3 && (hi[k] - st.max[k]).abs() < 1e-3,
+                "axis {k}: {lo:?} {hi:?} vs {:?} {:?}",
+                st.min,
+                st.max
+            );
+        }
     }
 
     #[test]

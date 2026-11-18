@@ -328,8 +328,9 @@ function renderPreview(p, row, meta) {
       queueMicrotask(() => (S.viewer = handle.v = Viewer3D.show(host, p)));
       const lit = el("input", { type: "checkbox", checked: true, onchange: () => handle.v?.set("lit", lit.checked) });
       const wire = el("input", { type: "checkbox", onchange: () => handle.v?.set("wire", wire.checked) });
+      const animate = el("input", { type: "checkbox", checked: true, onchange: () => handle.v?.set("animate", animate.checked) });
       return [
-        el("div", { class: "controls" }, el("span", { class: "muted", text: `${fmtNum(p.triangles)} triangles — drag to turn, wheel to zoom, double-click to reset` }), el("label", {}, lit, " Lighting"), el("label", {}, wire, " Wireframe")),
+        el("div", { class: "controls" }, el("span", { class: "muted", text: `${fmtNum(p.triangles)} triangles — drag to turn, wheel to zoom, double-click to reset` }), el("label", {}, lit, " Lighting"), el("label", {}, wire, " Wireframe"), p.duration_ms > 0 ? el("label", {}, animate, " Animate") : null),
         host,
         infoBlock(p.info),
       ];

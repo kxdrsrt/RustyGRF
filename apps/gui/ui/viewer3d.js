@@ -6,9 +6,9 @@
 const Viewer3D = (() => {
   const VS = `#version 300 es
 in vec3 aPos; in vec3 aNormal; in vec2 aUv;
-uniform mat4 uMvp; uniform mat3 uNormalMat;
+uniform mat4 uMvp; uniform mat4 uModel; uniform mat3 uNormalMat;
 out vec3 vNormal; out vec2 vUv;
-void main() { vNormal = uNormalMat * aNormal; vUv = aUv; gl_Position = uMvp * vec4(aPos, 1.0); }`;
+void main() { vNormal = uNormalMat * mat3(uModel) * aNormal; vUv = aUv; gl_Position = uMvp * uModel * vec4(aPos, 1.0); }`;
   const FS = `#version 300 es
 precision mediump float;
 in vec3 vNormal; in vec2 vUv;
@@ -143,7 +143,7 @@ void main() {
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     const loc = (n) => gl.getUniformLocation(prog, n);
-    const U = { mvp: loc("uMvp"), nm: loc("uNormalMat"), tex: loc("uTex"), has: loc("uHasTex"), lit: loc("uLit"), light: loc("uLight"), alpha: loc("uAlpha"), flat: loc("uFlat") };
+    const U = { mvp: loc("uMvp"), model: loc("uModel"), nm: loc("uNormalMat"), tex: loc("uTex"), has: loc("uHasTex"), lit: loc("uLit"), light: loc("uLight"), alpha: loc("uAlpha"), flat: loc("uFlat") };
 
     const textures = model.textures.map((t) => {
       if (!t.png) return null;
@@ -164,7 +164,8 @@ void main() {
       return tex;
     });
 
-    const parts = model.parts.map((p) => {
+    const nodes = model.nodes.map((node) => ({ matrices: f32(node.matrices), parts: node.parts.map(makePart) }));
+    function makePart(p) {
       const vao = gl.createVertexArray();
       gl.bindVertexArray(vao);
       const attr = (name, data, size) => {
@@ -180,13 +181,24 @@ void main() {
       attr("aNormal", f32(p.normals), 3);
       attr("aUv", f32(p.uvs), 2);
       return { vao, count: pos.length / 3, texture: textures[p.texture] || null };
-    });
+    }
 
     const c = [0, 1, 2].map((i) => (model.min[i] + model.max[i]) / 2);
     const radius = Math.max(1, Math.hypot(model.max[0] - model.min[0], model.max[1] - model.min[1], model.max[2] - model.min[2]) / 2);
     const cam = { yaw: 0.6, pitch: 0.35, dist: radius * 2.6, target: [...c] };
-    const opts = { lit: true, wire: false };
+    const opts = { lit: true, wire: false, animate: true };
+    const moving = model.duration_ms > 0 && model.samples > 1;
     let dirty = false;
+    let timer = null;
+    const clock = performance.now();
+    const sampleNow = () => (moving && opts.animate ? Math.floor(((performance.now() - clock) % model.duration_ms) / model.duration_ms * model.samples) : 0);
+    function loop() {
+      render();
+      timer = opts.animate ? requestAnimationFrame(loop) : null;
+    }
+    function startLoop() {
+      if (moving && opts.animate && timer === null) timer = requestAnimationFrame(loop);
+    }
 
     function draw() {
       if (dirty) return;
@@ -213,17 +225,21 @@ void main() {
       gl.uniform1i(U.lit, opts.lit ? 1 : 0);
       gl.uniform1f(U.alpha, model.alpha ?? 1);
       gl.uniform1i(U.tex, 0);
-      for (const p of parts) {
-        gl.bindVertexArray(p.vao);
-        gl.uniform1i(U.has, p.texture ? 1 : 0);
-        gl.uniform3f(U.flat, 0.7, 0.7, 0.75);
-        if (p.texture) gl.bindTexture(gl.TEXTURE_2D, p.texture);
-        if (opts.wire) {
-          gl.uniform1i(U.has, 0);
-          gl.uniform3f(U.flat, 0.85, 0.85, 0.9);
-          for (let i = 0; i + 2 < p.count; i += 3) gl.drawArrays(gl.LINE_LOOP, i, 3);
-        } else {
-          gl.drawArrays(gl.TRIANGLES, 0, p.count);
+      const sample = sampleNow();
+      for (const node of nodes) {
+        gl.uniformMatrix4fv(U.model, false, node.matrices.subarray(sample * 16, sample * 16 + 16));
+        for (const p of node.parts) {
+          gl.bindVertexArray(p.vao);
+          gl.uniform1i(U.has, p.texture ? 1 : 0);
+          gl.uniform3f(U.flat, 0.7, 0.7, 0.75);
+          if (p.texture) gl.bindTexture(gl.TEXTURE_2D, p.texture);
+          if (opts.wire) {
+            gl.uniform1i(U.has, 0);
+            gl.uniform3f(U.flat, 0.85, 0.85, 0.9);
+            for (let i = 0; i + 2 < p.count; i += 3) gl.drawArrays(gl.LINE_LOOP, i, 3);
+          } else {
+            gl.drawArrays(gl.TRIANGLES, 0, p.count);
+          }
         }
       }
     }
@@ -233,11 +249,14 @@ void main() {
     const ro = new ResizeObserver(draw);
     ro.observe(canvas);
     draw();
+    startLoop();
 
     return {
       canvas,
-      set(name, value) { opts[name] = value; draw(); },
-      destroy() { ro.disconnect(); gl.getExtension("WEBGL_lose_context")?.loseContext(); canvas.remove(); },
+      set(name, value) { opts[name] = value; if (name === "animate") startLoop(); draw(); },
+      /** Index of the animation sample shown right now (for tests). */
+      sample: sampleNow,
+      destroy() { opts.animate = false; if (timer !== null) cancelAnimationFrame(timer); ro.disconnect(); gl.getExtension("WEBGL_lose_context")?.loseContext(); canvas.remove(); },
     };
   }
 
