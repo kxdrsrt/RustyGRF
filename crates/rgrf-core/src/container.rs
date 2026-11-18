@@ -1,10 +1,11 @@
-//! GRF container, versions 0x200 and 0x300: 46-byte header and zlib-compressed file table
-//! (see docs/02-format-notes.md).
+//! GRF container, versions 0x102, 0x103, 0x200 and 0x300: 46-byte header and file table (zlib
+//! compressed from 0x200 on, plain with DES-scrambled names before; see docs/02-format-notes.md).
 //!
 //! Derived from observation of real archives; the 0x300 header rule (64-bit offset only if
 //! bytes 35..37 are zero) and the key-block meaning follow GRF Editor's reader (Tokeiburu,
 //! used with permission, see docs/05-licensing.md).
 
+use crate::des;
 use crate::error::{Error, Result};
 use crate::io::ReadAt;
 use crate::name::GrfPath;
@@ -16,6 +17,36 @@ const MAX_TABLE_SIZE: u64 = 1 << 30;
 /// Upper bound for the protected-archive key block (GRF Editor uses the same limit).
 const MAX_KEY_BLOCK: u32 = 20 + 65535 * 64;
 
+/// Which container format an [`crate::Archive`] was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// GRF (also the `.gpf` patch files of Gravity, which are GRFs).
+    Grf,
+    /// Thor patch (`.thor`).
+    Thor,
+    /// gzip-compressed file list (`.rgz`).
+    Rgz,
+}
+
+impl Kind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Grf => "grf",
+            Self::Thor => "thor",
+            Self::Rgz => "rgz",
+        }
+    }
+}
+
+/// What a patch container says about how it is to be applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchInfo {
+    /// Merge into the target GRF (else the files go into the client folder).
+    pub merge_into_grf: bool,
+    /// Name of the target GRF; empty means the client's default one.
+    pub target_grf: Vec<u8>,
+}
+
 pub mod flags {
     /// Entry is a file (0 = folder/empty marker).
     pub const FILE: u8 = 0x01;
@@ -23,6 +54,8 @@ pub mod flags {
     pub const HEADER_CRYPT: u8 = 0x02;
     /// Whole content encrypted (DES); with `FILE` this is 0x05, GRF Editor: `FileAndDataCrypted`.
     pub const DATA_CRYPT: u8 = 0x04;
+    /// Patch directive: delete this path in the target (GRF Editor: `RemoveFile`; Thor and GPF).
+    pub const REMOVE: u8 = 0x10;
     /// Encrypted with GRF Editor's own scheme (GRF Editor: `GrfEditorCrypted`).
     pub const GRF_EDITOR_CRYPT: u8 = 0x20;
     /// Gravity's protected-entry scheme of newer archives (needs the key block of a 0x300 archive).
@@ -40,7 +73,11 @@ pub struct Header {
     pub seed: u32,
     /// Real number of entries in the table (already corrected for seed and the +7 of 0x200).
     pub entry_count: u32,
+    /// GRF version (0x102 to 0x300); for Thor the mode byte (0x30 patch, 0x21 single file); 0 for RGZ.
     pub version: u32,
+    pub kind: Kind,
+    /// Thor patches: how to apply them.
+    pub patch: Option<PatchInfo>,
 }
 
 impl Header {
@@ -55,7 +92,7 @@ impl Header {
         }
         let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         let version = u32_at(42);
-        if version != 0x200 && version != 0x300 {
+        if !matches!(version, 0x102 | 0x103 | 0x200 | 0x300) {
             return Err(Error::UnsupportedVersion(version));
         }
         let (table_offset, seed, entry_count) = if version == 0x300 && b[35..38] == [0, 0, 0] {
@@ -76,12 +113,28 @@ impl Header {
             seed,
             entry_count,
             version,
+            kind: Kind::Grf,
+            patch: None,
         })
     }
 
     /// Bytes per entry in the table: 17 (32-bit offset) or 21 (64-bit offset).
     pub fn entry_tail_len(&self) -> usize {
         if self.version == 0x300 { 21 } else { 17 }
+    }
+
+    /// "GRF 0x200", "Thor (mode 0x30)", "RGZ": for messages.
+    pub fn format_name(&self) -> String {
+        match self.kind {
+            Kind::Grf => format!("GRF 0x{:03x}", self.version),
+            Kind::Thor => format!("Thor (mode 0x{:02x})", self.version),
+            Kind::Rgz => "RGZ".to_owned(),
+        }
+    }
+
+    /// Versions 0x102 and 0x103: scrambled names, plain file table, all file data scrambled.
+    pub fn is_legacy(&self) -> bool {
+        self.kind == Kind::Grf && self.version < 0x200
     }
 }
 
@@ -101,10 +154,10 @@ impl Entry {
         self.flags & flags::FILE != 0
     }
 
-    /// Empty marker: flags 0 and no data (e.g. a folder entry). Measured: 1 entry in the 2024
+    /// Empty marker: flags 0 and no data (e.g. a folder entry), or a delete directive of a patch. Measured: 1 entry in the 2024
     /// `data.grf`; the other flags-0 entries of real archives carry data, see [`Entry::is_raw`].
     pub fn is_marker(&self) -> bool {
-        self.flags & flags::FILE == 0 && self.zsize == 0 && self.size == 0
+        self.is_removal() || self.flags & flags::FILE == 0 && self.zsize == 0 && self.size == 0
     }
 
     /// Flags 0 with data: a file stored **uncompressed** (`zsize == size`, GRF Editor:
@@ -113,8 +166,43 @@ impl Entry {
         self.flags & (flags::FILE | flags::ANY_CRYPT) == 0 && (self.zsize != 0 || self.size != 0)
     }
 
+    /// Any encryption flag: the stored stream is not the plain compressed stream. Copying such an
+    /// entry (repack, merge) keeps the stored bytes and flags unchanged.
+    /// A patch directive to delete the path (Thor, GPF).
+    pub fn is_removal(&self) -> bool {
+        self.flags & flags::REMOVE != 0
+    }
+
+    /// Content stored without a zlib/LZMA stream (flags without the file bit and with data),
+    /// whether or not the old DES scrambling is applied on top.
+    pub fn stores_uncompressed(&self) -> bool {
+        self.flags & flags::FILE == 0 && (self.zsize != 0 || self.size != 0)
+    }
+
     pub fn is_encrypted(&self) -> bool {
         self.flags & flags::ANY_CRYPT != 0
+    }
+
+    /// Scrambled with the old DES scheme of [`crate::des`]: readable without a key.
+    pub fn is_des(&self) -> bool {
+        self.flags & (flags::HEADER_CRYPT | flags::DATA_CRYPT) != 0
+            && self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT) == 0
+    }
+
+    /// Encrypted in a way that needs a key we do not have (GRF Editor's scheme, Gravity's).
+    pub fn needs_key(&self) -> bool {
+        self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT) != 0
+    }
+
+    /// How the data of a DES entry is scrambled.
+    pub fn des_cycle(&self) -> Option<des::Cycle> {
+        if !self.is_des() {
+            None
+        } else if self.flags & flags::DATA_CRYPT != 0 {
+            Some(des::Cycle::Head)
+        } else {
+            Some(des::Cycle::for_size(self.zsize))
+        }
     }
 
     pub fn abs_offset(&self) -> u64 {
@@ -183,6 +271,85 @@ pub fn parse_entries(table: &[u8], count: usize, tail_len: usize) -> Result<Vec<
     Ok(entries)
 }
 
+/// The type byte of a 0x102/0x103 entry: 1 file, 0 "directory" (an entry with a dot in its name is
+/// a file stored uncompressed).
+const LEGACY_FILE: u8 = 1;
+
+/// Extensions whose legacy entries only have their first 20 blocks scrambled.
+fn legacy_head_only(name: &[u8]) -> bool {
+    let n = name.len();
+    n > 4
+        && [&b".gnd"[..], b".gat", b".act", b".str"]
+            .iter()
+            .any(|e| name[n - 4..].eq_ignore_ascii_case(e))
+}
+
+/// Entries of a 0x102/0x103 table: `[u32 len][u16][name: len-6 bytes, DES][u32][u32 zsize+size+715]
+/// [u32 zsize_aligned+37579][u32 size][u8 type][u32 offset]`. Directory entries are dropped. The
+/// flags are synthesised: `FILE|HEADER_CRYPT` (0x03) or, for `.gnd/.gat/.act/.str`,
+/// `FILE|DATA_CRYPT` (0x05), the same flags a 0x200 archive uses for DES entries.
+pub fn parse_legacy_entries(table: &[u8], count: usize) -> Result<Vec<Entry>> {
+    let corrupt = |i: usize, what: &str| Error::CorruptTable(format!("entry {i}: {what}"));
+    let mut entries = Vec::with_capacity(count.min(table.len() / 32));
+    let mut p = 0usize;
+    for i in 0..count {
+        let head = table.get(p..p + 6).ok_or_else(|| corrupt(i, "truncated"))?;
+        let len = u32::from_le_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let name_len = len
+            .checked_sub(6)
+            .ok_or_else(|| corrupt(i, "bad name length"))?;
+        let name_at = p + 6;
+        let tail_at = p + 4 + len;
+        let stored = table
+            .get(name_at..name_at + name_len)
+            .ok_or_else(|| corrupt(i, "name outside the table"))?;
+        let tail = table
+            .get(tail_at..tail_at + 17)
+            .ok_or_else(|| corrupt(i, "truncated"))?;
+        p = tail_at + 17;
+        let u32_at =
+            |o: usize| u32::from_le_bytes([tail[o], tail[o + 1], tail[o + 2], tail[o + 3]]);
+        let name = des::decode_name(stored);
+        let kind = tail[12];
+        if kind != LEGACY_FILE && !name.contains(&b'.') {
+            continue; // a directory
+        }
+        let size = u32_at(8);
+        let zsize = u32_at(0)
+            .checked_sub(size)
+            .and_then(|v| v.checked_sub(715))
+            .ok_or_else(|| corrupt(i, "stored size is negative"))?;
+        let zsize_aligned = u32_at(4)
+            .checked_sub(37579)
+            .ok_or_else(|| corrupt(i, "aligned size is negative"))?;
+        let crypt = if legacy_head_only(&name) || name.len() <= 4 {
+            flags::DATA_CRYPT
+        } else {
+            flags::HEADER_CRYPT
+        };
+        entries.push(Entry {
+            name: GrfPath::new(name),
+            zsize,
+            zsize_aligned,
+            size,
+            // type 0 with a dot: stored uncompressed (no FILE bit, like `Entry::is_raw`)
+            flags: if kind == LEGACY_FILE {
+                flags::FILE | crypt
+            } else {
+                crypt
+            },
+            offset: u64::from(u32_at(13)),
+        });
+    }
+    if p != table.len() {
+        return Err(Error::CorruptTable(format!(
+            "{} unexpected bytes after {count} entries",
+            table.len() - p
+        )));
+    }
+    Ok(entries)
+}
+
 pub struct Container {
     pub header: Header,
     pub table: TableInfo,
@@ -199,6 +366,9 @@ pub fn read_container(src: &dyn ReadAt) -> Result<Container> {
     src.read_exact_at(&mut hb, 0)?;
     let header = Header::parse(&hb)?;
 
+    if header.is_legacy() {
+        return read_legacy_container(src, header, file_len);
+    }
     let prefix_len: u32 = if header.version == 0x300 { 12 } else { 8 };
     let abs = HEADER_LEN
         .checked_add(header.table_offset)
@@ -252,6 +422,35 @@ pub fn read_container(src: &dyn ReadAt) -> Result<Container> {
     Ok(Container {
         header,
         table: info,
+        entries,
+        file_len,
+    })
+}
+
+/// 0x102/0x103: the table is not compressed and runs to the end of the file.
+fn read_legacy_container(src: &dyn ReadAt, header: Header, file_len: u64) -> Result<Container> {
+    let abs = HEADER_LEN
+        .checked_add(header.table_offset)
+        .filter(|&a| a <= file_len)
+        .ok_or_else(|| Error::CorruptTable("file table lies outside the file".into()))?;
+    let size = file_len - abs;
+    if size > MAX_TABLE_SIZE {
+        return Err(Error::CorruptTable(format!("file table of {size} bytes")));
+    }
+    let mut table = vec![0u8; size as usize];
+    src.read_exact_at(&mut table, abs)?;
+    let entries = parse_legacy_entries(&table, header.entry_count as usize)?;
+    let size =
+        u32::try_from(size).map_err(|_| Error::CorruptTable("file table too large".into()))?;
+    Ok(Container {
+        header,
+        table: TableInfo {
+            abs_offset: abs,
+            prefix_len: 0,
+            zsize: size,
+            size,
+            key_block: 0,
+        },
         entries,
         file_len,
     })

@@ -334,14 +334,14 @@ mod tests {
             name: GrfPath::new(&b"data\\enc.lub"[..]),
             placed: p,
             size: 33,
-            flags: flags::FILE | flags::HEADER_CRYPT,
+            flags: flags::FILE | flags::GRF_EDITOR_CRYPT,
         };
         let (_, out) = w.finish(&[e]).unwrap();
         let g = Archive::from_source(out.into_inner()).unwrap();
         let e = g.entry(0).unwrap();
         assert_eq!(
             (e.zsize, e.zsize_aligned, e.size, e.flags),
-            (20, 24, 33, 0x03)
+            (20, 24, 33, 0x21)
         );
         assert_eq!(g.read(0).unwrap().status, DecodeStatus::Encrypted);
         assert_eq!(g.read_raw(0).unwrap(), vec![9u8; 20]);

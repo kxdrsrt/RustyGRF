@@ -158,6 +158,12 @@ impl<R: ReadAt> Selection<'_, R> {
         }
     }
 
+    /// Entry of a 0x102/0x103 archive: its scrambling is part of the old format, so it is decoded
+    /// and stored plainly in the output (the flags of 0x200 would be a valid choice, too).
+    fn is_legacy_des(&self, i: usize) -> bool {
+        self.archive(i).header().is_legacy() && self.entry(i).is_ok_and(Entry::is_des)
+    }
+
     fn read(&self, i: usize) -> Result<codec::Decoded> {
         self.archive(i).read(self.sel[i].idx)
     }
@@ -269,6 +275,49 @@ pub(crate) fn prepare<R: ReadAt>(
 ) -> Result<Prepared> {
     let rep = unit.members[0];
     let e = s.entry(rep)?;
+    let legacy_des = s.is_legacy_des(rep);
+    if legacy_des {
+        let d = s.read(rep)?;
+        let expected = if opts.verify {
+            Expected::Data(sha(&d.data), status_class(&d.status))
+        } else {
+            Expected::Nothing
+        };
+        if !d.status.is_ok() {
+            // cannot be re-encoded faithfully: keep the scrambled bytes and the DES flags
+            return Ok(Prepared {
+                unit: unit_id,
+                kind: Kind::Damaged,
+                expected,
+                stream: s.read_raw_aligned(rep)?,
+                raw: Some((e.zsize, e.zsize_aligned)),
+                flags: e.flags,
+            });
+        }
+        if e.flags & flags::FILE == 0 {
+            // stored uncompressed
+            let mut stream = d.data;
+            let size = stream.len() as u32;
+            stream.resize(stream.len().div_ceil(8) * 8, 0);
+            let aligned = stream.len() as u32;
+            return Ok(Prepared {
+                unit: unit_id,
+                kind: Kind::Stored,
+                expected,
+                stream,
+                raw: Some((size, aligned)),
+                flags: 0,
+            });
+        }
+        return Ok(Prepared {
+            unit: unit_id,
+            kind: Kind::Encoded,
+            expected,
+            stream: encode(opts.method, &d.data),
+            raw: None,
+            flags: flags::FILE,
+        });
+    }
     if e.is_encrypted() {
         let raw = s.read_raw_aligned(rep)?;
         let expected = if opts.verify {
@@ -374,7 +423,11 @@ pub fn repack<R: ReadAt>(
     let sources = [src];
     let s = Selection {
         sources: &sources,
-        sel: (0..src.len()).map(|idx| Sel { src: 0, idx }).collect(),
+        // delete directives of a patch are instructions, not content: they are not copied
+        sel: (0..src.len())
+            .filter(|&idx| !src.entries()[idx].is_removal())
+            .map(|idx| Sel { src: 0, idx })
+            .collect(),
         names: Vec::new(),
     };
     let format = opts.format.unwrap_or(if src.header().version == 0x300 {
@@ -565,7 +618,7 @@ pub(crate) fn verify_output<R: ReadAt>(
         if *s.name(i)? != b.name
             || a.size != b.size && !a.is_marker()
             || a.is_marker() != b.is_marker()
-            || a.is_raw() != b.is_raw()
+            || a.stores_uncompressed() != b.stores_uncompressed()
         {
             return fail(format!("entry {i} differs in name, size or kind"));
         }

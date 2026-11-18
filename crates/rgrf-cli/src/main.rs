@@ -29,6 +29,7 @@ mod client_cmd;
 mod edit_cmd;
 mod lua_cmd;
 mod map_cmd;
+mod patch_cmd;
 mod spr_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -238,6 +239,64 @@ enum Cmd {
     Map {
         #[command(subcommand)]
         action: MapCmd,
+    },
+    /// Thor patches (.thor): create; every other command opens them like a GRF
+    Thor {
+        #[command(subcommand)]
+        action: ThorCmd,
+    },
+    /// RGZ patches (.rgz): create; every other command opens them like a GRF
+    Rgz {
+        #[command(subcommand)]
+        action: RgzCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ThorCmd {
+    /// Create a Thor patch from a folder (the folder is the patch root) or from an archive
+    Create {
+        /// Folder or archive (GRF, GPF, Thor, RGZ) whose files go into the patch
+        source: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Merge the files into a GRF (paths inside `data\`) instead of the client folder
+        #[arg(long)]
+        merge_into_grf: bool,
+        /// Name of the target GRF (default: the client's own), only with --merge-into-grf
+        #[arg(long)]
+        target: Option<String>,
+        /// Delete this path in the target (repeatable)
+        #[arg(long = "remove")]
+        remove: Vec<String>,
+        /// Add the data.integrity list of CRC32 hashes, as GRF Editor does
+        #[arg(long)]
+        integrity: bool,
+        /// zlib (default, every client), zopfli (slow, smaller) or lzma (needs the LZMA cps.dll)
+        #[arg(long, value_enum, default_value = "zlib")]
+        method: MethodArg,
+        /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
+        #[arg(long)]
+        level: Option<u32>,
+        /// Replace an existing output file
+        #[arg(long)]
+        overwrite: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum RgzCmd {
+    /// Create an RGZ patch from a folder (the folder is the patch root) or from an archive
+    Create {
+        source: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// gzip level 0-9 (default 9)
+        #[arg(long, default_value_t = 9)]
+        level: u32,
+        /// Replace an existing output file
+        #[arg(long)]
+        overwrite: bool,
     },
 }
 
@@ -621,8 +680,10 @@ fn open(path: &Path) -> Result<(Archive, u128)> {
 
 fn flags_text(e: &Entry) -> String {
     let mut s = String::new();
-    // F compressed file, R file stored uncompressed (flags 0 with data)
-    s.push(if e.is_file() {
+    // F compressed file, R file stored uncompressed (flags 0 with data), X delete directive
+    s.push(if e.is_removal() {
+        'X'
+    } else if e.is_file() {
         'F'
     } else if e.is_raw() {
         'R'
@@ -642,12 +703,16 @@ fn flags_text(e: &Entry) -> String {
 }
 
 fn entry_json(i: usize, e: &Entry, mode: NameMode) -> Value {
-    let kind = if e.is_marker() {
+    let kind = if e.is_removal() {
+        "remove"
+    } else if e.is_marker() {
         "marker"
     } else if e.is_raw() {
         "raw"
-    } else if e.is_encrypted() {
+    } else if e.needs_key() {
         "encrypted"
+    } else if e.is_des() {
+        "des"
     } else {
         "file"
     };
@@ -754,6 +819,40 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Thor { action } => match action {
+            ThorCmd::Create {
+                source,
+                output,
+                merge_into_grf,
+                target,
+                remove,
+                integrity,
+                method,
+                level,
+                overwrite,
+            } => patch_cmd::thor_create(
+                &patch_cmd::ThorArgs {
+                    source,
+                    output,
+                    merge_into_grf: *merge_into_grf,
+                    target: target.as_deref(),
+                    remove,
+                    integrity: *integrity,
+                    method: method_from(*method, *level)?,
+                    overwrite: *overwrite,
+                },
+                cli.names,
+                cli.json,
+            ),
+        },
+        Cmd::Rgz { action } => match action {
+            RgzCmd::Create {
+                source,
+                output,
+                level,
+                overwrite,
+            } => patch_cmd::rgz_create(source, output, *level, *overwrite, cli.names, cli.json),
+        },
         Cmd::Map { action } => match action {
             MapCmd::Info { input, entry } => {
                 map_cmd::info(input, entry.as_deref(), cli.names, cli.json)
@@ -1096,8 +1195,10 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
     let (a, open_ms) = open(grf)?;
     let es = a.entries();
     let markers = es.iter().filter(|e| e.is_marker()).count();
+    let removals = es.iter().filter(|e| e.is_removal()).count();
     let raw = es.iter().filter(|e| e.is_raw()).count();
-    let encrypted = es.iter().filter(|e| e.is_encrypted()).count();
+    let encrypted = es.iter().filter(|e| e.needs_key()).count();
+    let des = es.iter().filter(|e| e.is_des()).count();
     let packed: u64 = es.iter().map(|e| u64::from(e.zsize)).sum();
     let unpacked: u64 = es.iter().map(|e| u64::from(e.size)).sum();
     let mut seen = HashSet::new();
@@ -1124,8 +1225,10 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             "path": grf.display().to_string(),
             "file_size": a.file_len(),
             "version": format!("0x{:03x}", a.header().version),
+            "kind": a.header().kind.name(),
             "entries": es.len(), "files": es.len() - markers, "markers": markers, "raw": raw,
-            "encrypted": encrypted, "shared_data_entries": shared,
+            "removals": removals,
+            "encrypted": encrypted, "des_scrambled": des, "shared_data_entries": shared,
             "packed_bytes": packed, "unpacked_bytes": unpacked,
             "table": {"offset": t.abs_offset, "packed": t.zsize, "unpacked": t.size, "key_block": t.key_block},
             "open_ms": open_ms,
@@ -1133,17 +1236,41 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
         if let Some((z, l)) = counts {
             v["codecs"] = json!({"zlib": z, "lzma": l});
         }
+        if let Some(p) = &a.header().patch {
+            v["patch"] = json!({
+                "merge_into_grf": p.merge_into_grf,
+                "target_grf": GrfPath::new(p.target_grf.clone()).display(cli.names),
+            });
+        }
         print_json(&v)?;
     } else {
         println!("File:       {} ({} bytes)", grf.display(), a.file_len());
-        println!("Version:    0x{:03x}", a.header().version);
+        if a.header().kind == rgrf_core::container::Kind::Grf {
+            println!("Version:    0x{:03x}", a.header().version);
+        } else {
+            println!("Format:     {}", a.header().format_name());
+        }
+        if let Some(p) = &a.header().patch {
+            let target = GrfPath::new(p.target_grf.clone()).display(cli.names);
+            println!(
+                "Applies to: {}",
+                match (p.merge_into_grf, target.is_empty()) {
+                    (true, true) => "merged into the default GRF".to_owned(),
+                    (true, false) => format!("merged into {target}"),
+                    (false, _) => "the client folder".to_owned(),
+                }
+            );
+        }
         println!(
             "Entries:    {} ({} files, {} empty markers; {} files stored uncompressed)",
             es.len(),
             es.len() - markers,
-            markers,
+            markers - removals,
             raw
         );
+        if removals > 0 {
+            println!("Removals:   {removals} delete directives");
+        }
         println!("Content:    {packed} bytes packed, {unpacked} bytes unpacked (sum over entries)");
         println!(
             "Table:      at {}, {} bytes packed, {} unpacked",
@@ -1153,6 +1280,9 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             println!("Key block:  {} bytes (protected archive)", t.key_block);
         }
         println!("Encrypted:  {encrypted}");
+        if des > 0 {
+            println!("DES:        {des} entries scrambled with the old DES scheme (readable)");
+        }
         println!("Shared:     {shared} entries share data with another entry");
         if let Some((z, l)) = counts {
             println!("Codecs:     zlib {z}, LZMA {l}");

@@ -1,9 +1,10 @@
-//! RustyGRF core library (milestone M1: read and verify GRF 0x200).
+//! RustyGRF core library: read, verify, build, repack, merge GRF archives (0x102 to 0x300).
 
 pub mod archive;
 pub mod build;
 pub mod codec;
 pub mod container;
+pub mod des;
 pub mod edit;
 pub mod encode;
 pub mod error;
@@ -15,6 +16,8 @@ pub mod name;
 mod pipeline;
 pub mod progress;
 pub mod repack;
+pub mod rgz;
+pub mod thor;
 pub mod verify;
 pub mod writer;
 

@@ -81,7 +81,7 @@ async function chooseArchive() {
   const path = await T.dialog.open({
     multiple: false,
     directory: false,
-    filters: [{ name: "GRF archives", extensions: ["grf", "gpf"] }],
+    filters: [{ name: "GRF, GPF, Thor and RGZ archives", extensions: ["grf", "gpf", "thor", "rgz"] }],
   });
   if (path) await openPath(Array.isArray(path) ? path[0] : path);
 }
@@ -111,7 +111,7 @@ async function openPath(path, force = false) {
   S.query = "";
   await runSearch("");
   setStatus(
-    `${S.info.file_name}: GRF ${S.info.format}, ${fmtNum(S.info.files)} files, ${fmtBytes(S.info.file_size)}`,
+    `${S.info.file_name}: ${S.info.format}, ${fmtNum(S.info.files)} files, ${fmtBytes(S.info.file_size)}`,
   );
   $("viewport").focus();
 }
@@ -749,7 +749,7 @@ async function doBuild() {
 }
 
 async function doMerge() {
-  const picked = await T.dialog.open({ multiple: true, directory: false, title: "Archives to merge (at least two)", filters: [{ name: "GRF archives", extensions: ["grf", "gpf"] }] });
+  const picked = await T.dialog.open({ multiple: true, directory: false, title: "Archives to merge (at least two)", filters: [{ name: "GRF, GPF, Thor and RGZ archives", extensions: ["grf", "gpf", "thor", "rgz"] }] });
   const paths = Array.isArray(picked) ? [...picked] : picked ? [picked] : [];
   if (paths.length < 2) {
     if (paths.length) await note("Merge", "Choose at least two archives.", true);

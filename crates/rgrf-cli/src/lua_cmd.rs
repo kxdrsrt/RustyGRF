@@ -75,10 +75,11 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
                 Ok(check_data(name, &data))
             })
             .collect::<Result<_>>()?
-    } else if input
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("grf"))
-    {
+    } else if input.extension().is_some_and(|e| {
+        ["grf", "gpf", "thor", "rgz"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    }) {
         let a = Archive::open(input)?;
         let idx: Vec<usize> = a
             .select(pattern, names)

@@ -33,3 +33,7 @@ Die Tabelle ist freiwillig; der Inhaber hat die Freigabe als geklärt gemeldet.
 - Namensprüfung "RustyGRF": laut Inhaber frei (nicht von mir geprüft).
 
 - **STR-Effekte (`str_effect.rs`):** Dateiaufbau und Animationsregeln wurden am Verhalten von roBrowsers `StrEffect`/`Str` (GPL-3.0) geprüft und danach selbst geschrieben; es wurde **kein Code übernommen**, die Datei nennt die Quelle des Wissens.
+
+## Herkunft abgeleiteten Codes (Stand 2026-11-19)
+Mit Erlaubnis von Tokeiburu nach GRF Editors Quelltext gelesen und in Rust neu geschrieben (Vermerk im Kopf der Datei): `crates/rgrf-core/src/des.rs` (`Utilities/DesDecryption.cs`: Tabellen und Ablauf), `container.rs` (0x102/0x103-Eintragsform nach `FileTable._load100`, 0x300-Header), `thor.rs` (`ThorFormat/*`), `rgz.rs` (`RgzFormat/*`) und die Lua-Dekompilierung (`LubFormat`, nur als Gegenprobe). Lua 5.0.3/5.1 (MIT, lua.org) dient nur dem Prüfwerkzeug `tools/lua-verify` und wird nicht ausgeliefert.
+

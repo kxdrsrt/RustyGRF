@@ -3,6 +3,7 @@
 use crate::archive::Archive;
 
 mod build;
+mod legacy;
 mod merge;
 mod raw;
 mod repack;
@@ -218,11 +219,11 @@ fn rejects_non_grf_unsupported_and_damaged_containers() {
         Archive::from_source(bad_magic),
         Err(Error::NotGrf(_))
     ));
-    let mut v103 = good.clone();
-    v103[42..46].copy_from_slice(&0x103u32.to_le_bytes());
+    let mut v400 = good.clone();
+    v400[42..46].copy_from_slice(&0x400u32.to_le_bytes());
     assert!(matches!(
-        Archive::from_source(v103),
-        Err(Error::UnsupportedVersion(0x103))
+        Archive::from_source(v400),
+        Err(Error::UnsupportedVersion(0x400))
     ));
     assert!(matches!(
         Archive::from_source(good[..good.len() - 4].to_vec()),
@@ -336,7 +337,7 @@ fn out_of_range_overlap_duplicates_alignment_encrypted_and_sharing() {
     let mut shared = file("data\\shared", &s);
     shared.share_with = Some(0);
     let mut enc = file("data\\enc", &s);
-    enc.flags = flags::FILE | flags::HEADER_CRYPT | flags::DATA_CRYPT;
+    enc.flags = flags::FILE | flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT;
     let mut misaligned = file("data\\mis", &s);
     misaligned.aligned = Some(1);
     let dup = file("DATA/A", &s);
@@ -531,7 +532,7 @@ fn damaged_entries_are_written_with_recovered_data_and_reported() {
     let mut damaged = file("data\\wav\\worm.wav", &data);
     damaged.stream = Stream::Literal(stored[..stored.len() - 11].to_vec());
     let mut enc = file("data\\enc.lub", &data);
-    enc.flags = 3;
+    enc.flags = flags::FILE | flags::GRF_EDITOR_CRYPT;
     let g = open(&[damaged, enc]);
     let dir = tmpdir("damaged");
     let r = extract(

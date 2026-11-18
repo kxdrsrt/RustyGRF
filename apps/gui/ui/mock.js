@@ -63,7 +63,7 @@ if (!window.__TAURI__) {
             filtered = all;
             return all.length;
           case "open_archive":
-            return { path: a.path, file_name: "mock.grf", format: "0x200", entries: all.length, files: all.length, file_size: 4155996888 };
+            return { path: a.path, file_name: "mock.grf", format: "GRF 0x200", entries: all.length, files: all.length, file_size: 4155996888 };
           case "search": {
             const q = a.query.toLowerCase();
             filtered = !q ? all : all.filter((r) => r.name.toLowerCase().includes(q.replaceAll("*", "")));

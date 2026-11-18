@@ -185,6 +185,20 @@ fn scan(root: &Path, names: NameMode, skipped: &mut Vec<Skipped>) -> Result<Vec<
     Ok(items)
 }
 
+/// Files of a folder with their archive paths, and what was left out.
+pub type ScannedFolder = (Vec<(GrfPath, PathBuf)>, Vec<Skipped>);
+
+/// The files below `root` with the archive path each would get (the folder is the archive root),
+/// in path order; symbolic links and file manager droppings are listed in the second value.
+pub fn scan_folder(root: &Path, names: NameMode) -> Result<ScannedFolder> {
+    let mut skipped = Vec::new();
+    let items = scan(root, names, &mut skipped)?;
+    Ok((
+        items.into_iter().map(|i| (i.name, i.path)).collect(),
+        skipped,
+    ))
+}
+
 fn hash_file(path: &Path) -> Result<(u64, [u8; 32])> {
     use sha2::{Digest as _, Sha256};
     let mut f = File::open(path)?;

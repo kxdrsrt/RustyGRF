@@ -40,7 +40,7 @@ fn run(
     o: &RepackOptions,
 ) -> (
     crate::repack::RepackReport,
-    Archive<std::fs::File>,
+    Archive<crate::io::Source>,
     std::path::PathBuf,
 ) {
     let dir = tmpdir(tag);
@@ -66,7 +66,7 @@ fn mixed_source() -> Archive<Vec<u8>> {
     ])
 }
 
-fn assert_same_content(src: &Archive<Vec<u8>>, out: &Archive<std::fs::File>) {
+fn assert_same_content(src: &Archive<Vec<u8>>, out: &Archive<crate::io::Source>) {
     assert_eq!(src.len(), out.len());
     for i in 0..src.len() {
         let (a, b) = (src.entry(i).unwrap(), out.entry(i).unwrap());
@@ -207,7 +207,7 @@ fn encrypted_and_damaged_entries_are_copied_unchanged() {
     let mut damaged = file("data\\wav\\worm.wav", &data);
     damaged.stream = Stream::Literal(stored[..stored.len() - 11].to_vec());
     let mut enc = file("data\\enc.lub", &text(3000, 4));
-    enc.flags = flags::FILE | flags::HEADER_CRYPT;
+    enc.flags = flags::FILE | flags::GRF_EDITOR_CRYPT;
     enc.stream = Stream::Literal((0..40u8).collect());
     let src = open(&[file("data\\ok.txt", &text(3000, 2)), damaged, enc]);
     for format in [Format::V200, Format::V300] {

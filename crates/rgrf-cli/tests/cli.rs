@@ -162,16 +162,19 @@ fn verify_exit_codes_clean_and_with_warning() {
         );
     }
     if let Some(grf) = testdata("0 OTHER CLIENTS/client-kro/rdata.grf") {
+        // the one DES-scrambled entry (flags 0x03, msgstring_kr_s.lub) is decrypted and checked
         let o = rgrf(&["verify", &grf, "--json"]);
-        assert_eq!(o.status.code(), Some(2), "encrypted entry gives a warning");
+        assert_eq!(o.status.code(), Some(0));
         let v = json(&o);
-        assert_eq!(v["warnings"], 1);
-        assert_eq!(v["issues"][0]["kind"], "Encrypted");
-        assert!(
-            v["issues"][0]["entry"]["name"]
-                .as_str()
-                .unwrap()
-                .ends_with("msgstring_kr_s.lub")
+        assert_eq!(
+            (v["errors"].as_u64(), v["warnings"].as_u64()),
+            (Some(0), Some(0))
+        );
+        let o = rgrf(&["info", &grf, "--json"]);
+        let v = json(&o);
+        assert_eq!(
+            (v["encrypted"].as_u64(), v["des_scrambled"].as_u64()),
+            (Some(0), Some(1))
         );
     }
 }
@@ -1609,5 +1612,102 @@ fn lua_decompile_prints_source_and_refuses_text() {
             .status
             .success()
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn thor_and_rgz_patches_are_created_opened_and_merged() {
+    let dir = tmpdir("patches");
+    let root = dir.join("root/data/sprite");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), b"alpha".repeat(500)).unwrap();
+    std::fs::write(dir.join("root/data/b.txt"), b"beta").unwrap();
+    let (src, thor, rgz) = (
+        dir.join("root").to_string_lossy().into_owned(),
+        dir.join("p.thor").to_string_lossy().into_owned(),
+        dir.join("p.rgz").to_string_lossy().into_owned(),
+    );
+    let o = rgrf(&[
+        "thor",
+        "create",
+        &src,
+        "-o",
+        &thor,
+        "--merge-into-grf",
+        "--target",
+        "data.grf",
+        "--remove",
+        "data\\gone.txt",
+        "--json",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(
+        (v["files"].as_u64(), v["removals"].as_u64()),
+        (Some(2), Some(1))
+    );
+    let o = rgrf(&["info", &thor, "--json"]);
+    let v = json(&o);
+    assert_eq!(v["kind"], "thor");
+    assert_eq!(v["removals"], 1);
+    assert_eq!(v["patch"]["target_grf"], "data.grf");
+    let o = rgrf(&["ls", &thor, "--json"]);
+    let v = json(&o);
+    let kinds: Vec<&str> = v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds.iter().filter(|k| **k == "remove").count(), 1);
+    assert_eq!(rgrf(&["verify", &thor]).status.code(), Some(0));
+    let out = dir.join("out");
+    let o = rgrf(&["extract", &thor, &out.to_string_lossy()]);
+    assert!(o.status.success());
+    assert_eq!(std::fs::read(out.join("data/b.txt")).unwrap(), b"beta");
+    assert!(!out.join("data/gone.txt").exists());
+    // RGZ from the Thor patch, then both merged into a GRF
+    assert!(rgrf(&["rgz", "create", &thor, "-o", &rgz]).status.success());
+    let o = rgrf(&["info", &rgz, "--json"]);
+    assert_eq!(json(&o)["kind"], "rgz");
+    let grf = dir.join("m.grf").to_string_lossy().into_owned();
+    let o = rgrf(&["merge", &rgz, &thor, "-o", &grf, "-q"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(json(&rgrf(&["info", &grf, "--json"]))["entries"], 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_old_event_grf_0x102_opens_verifies_and_converts() {
+    let Some(grf) = testdata("0 OTHER CLIENTS/RO O.G Client/Ragnarök Online/event.grf") else {
+        return;
+    };
+    let v = json(&rgrf(&["info", &grf, "--json"]));
+    assert_eq!(
+        (
+            v["version"].as_str(),
+            v["entries"].as_u64(),
+            v["des_scrambled"].as_u64()
+        ),
+        (Some("0x102"), Some(39), Some(39))
+    );
+    let o = rgrf(&["verify", &grf, "--json"]);
+    assert_eq!(o.status.code(), Some(0));
+    let v = json(&o);
+    assert_eq!(
+        (v["errors"].as_u64(), v["warnings"].as_u64()),
+        (Some(0), Some(0))
+    );
+    let dir = tmpdir("event");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("event200.grf").to_string_lossy().into_owned();
+    assert!(rgrf(&["repack", &grf, "-o", &out, "-q"]).status.success());
+    let o = rgrf(&["diff", &grf, &out, "--json"]);
+    let v = json(&o);
+    assert_eq!(
+        (v["same"].as_u64(), v["changed"].as_array().map(Vec::len)),
+        (Some(39), Some(0))
+    );
+    assert_eq!(json(&rgrf(&["info", &out, "--json"]))["version"], "0x200");
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -32,6 +32,12 @@
         "name": "GRF archive",
         "description": "Ragnarok Online GRF archive",
         "role": "Editor"
+      },
+      {
+        "ext": ["thor", "rgz"],
+        "name": "Patch archive",
+        "description": "Ragnarok Online Thor or RGZ patch",
+        "role": "Viewer"
       }
     ],
     "icon": [

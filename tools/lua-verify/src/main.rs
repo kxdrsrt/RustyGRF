@@ -510,6 +510,155 @@ fn dump_roundtrip(files: &[Entry]) -> usize {
     bad
 }
 
+/// The source bytes a decompiled text stands for: each run of non-ASCII characters becomes CP949
+/// bytes, or Latin-1 bytes when it is not Korean (the inverse of the decompiler's string rule).
+fn encode_text(text: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut Vec<u8>| -> Result<(), String> {
+        if run.is_empty() {
+            return Ok(());
+        }
+        let bytes = match rgrf_core::GrfPath::from_display(run, NameMode::Cp949) {
+            Some(p) => p.as_bytes().to_vec(),
+            None => run
+                .chars()
+                .map(|c| u8::try_from(u32::from(c)).map_err(|_| format!("cannot encode {c:?}")))
+                .collect::<Result<_, _>>()?,
+        };
+        out.extend(bytes);
+        run.clear();
+        Ok(())
+    };
+    for c in text.chars() {
+        if c.is_ascii() {
+            flush(&mut run, &mut out)?;
+            out.push(c as u8);
+        } else {
+            run.push(c);
+        }
+    }
+    flush(&mut run, &mut out)?;
+    Ok(out)
+}
+
+/// Compiles with the real Lua 5.1 of mlua (`string.dump`), 64-bit layout.
+fn compile_real(source: &[u8]) -> Result<Vec<u8>, String> {
+    let lua = unsafe { Lua::unsafe_new() };
+    let f = lua
+        .load(source)
+        .set_mode(ChunkMode::Text)
+        .into_function()
+        .map_err(|e| e.to_string())?;
+    let dump: mlua::Function = lua
+        .load("return string.dump")
+        .eval()
+        .map_err(|e| e.to_string())?;
+    let s: mlua::LuaString = dump.call(f).map_err(|e| e.to_string())?;
+    Ok(s.as_bytes().to_vec())
+}
+
+/// First difference between the code of two functions (debug line numbers and source names are
+/// ignored: the decompiled text has other line breaks than the original source).
+fn compare_functions(a: &luac::Function, b: &luac::Function, path: &str) -> Option<String> {
+    let flat = |f: &luac::Function| {
+        (
+            f.upvalue_count,
+            f.params,
+            f.is_vararg,
+            f.max_stack,
+            f.protos.len(),
+        )
+    };
+    if flat(a) != flat(b) {
+        return Some(format!("{path}: header {:?} / {:?}", flat(a), flat(b)));
+    }
+    if a.code != b.code {
+        let i = a.code.iter().zip(&b.code).position(|(x, y)| x != y);
+        return Some(format!(
+            "{path}: code differs at {i:?} ({} / {} instructions)",
+            a.code.len(),
+            b.code.len()
+        ));
+    }
+    if a.constants != b.constants {
+        return Some(format!("{path}: constants differ"));
+    }
+    let names = |f: &luac::Function| f.locals.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    if names(a) != names(b) {
+        return Some(format!("{path}: local names differ"));
+    }
+    if a.upvalue_names != b.upvalue_names {
+        return Some(format!("{path}: upvalue names differ"));
+    }
+    a.protos
+        .iter()
+        .zip(&b.protos)
+        .enumerate()
+        .find_map(|(i, (x, y))| compare_functions(x, y, &format!("{path}/{i}")))
+}
+
+/// Compiles the decompiled text of every 5.1 file with the compiler `$RILUAC` (a `luac`-style
+/// program) and compares the result with the original bytecode.
+fn recompile_check(files: &[Entry]) -> usize {
+    let luac_bin = std::env::var_os("RILUAC");
+    let dir = std::env::temp_dir().join(format!("rgrf-recompile-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let results: Vec<(String, Result<(), String>)> = files
+        .par_iter()
+        .enumerate()
+        .filter(|(_, f)| f.data[4] == 0x51)
+        .filter(|(_, f)| std::env::var("LV_ONLY").map_or(true, |o| f.name.contains(&o)))
+        .map(|(n, f)| {
+            let verdict = (|| {
+                let original = luac::parse(&f.data).map_err(|e| e.to_string())?;
+                let text = decompile(&f.data).ok_or("cannot decompile")?;
+                let source = encode_text(&text)?;
+                let bytes = if let Some(luac_bin) = &luac_bin {
+                    let (src, out) =
+                        (dir.join(format!("{n}.lua")), dir.join(format!("{n}.out")));
+                    std::fs::write(&src, &source).map_err(|e| e.to_string())?;
+                    let st = std::process::Command::new(luac_bin)
+                        .arg("-o")
+                        .arg(&out)
+                        .arg(&src)
+                        .output()
+                        .map_err(|e| e.to_string())?;
+                    if !st.status.success() {
+                        return Err(format!(
+                            "compiler failed: {}",
+                            String::from_utf8_lossy(&st.stderr).trim()
+                        ));
+                    }
+                    let bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
+                    let _ = std::fs::remove_file(&src);
+                    let _ = std::fs::remove_file(&out);
+                    bytes
+                } else {
+                    compile_real(&source)?
+                };
+                let again = luac::parse(&bytes).map_err(|e| e.to_string())?;
+                match compare_functions(&original.main, &again.main, "main") {
+                    None => Ok(()),
+                    Some(d) => Err(d),
+                }
+            })();
+            (f.name.clone(), verdict)
+        })
+        .collect();
+    let bad = results.iter().filter(|(_, r)| r.is_err()).count();
+    println!(
+        "recompile check: {} 5.1 files, {} give the original code again, {bad} differ",
+        results.len(),
+        results.len() - bad
+    );
+    for (n, r) in results.iter().filter(|(_, r)| r.is_err()).take(40) {
+        println!("DIFF {n}: {}", r.as_ref().unwrap_err());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    bad
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(grf) = args.iter().find(|a| !a.starts_with("--")) else {
@@ -518,6 +667,9 @@ fn main() {
     };
     let files = compiled_files(grf);
     let mut bad = parse_check(&files);
+    if args.iter().any(|a| a == "--recompile") {
+        std::process::exit(i32::from(recompile_check(&files) > 0));
+    }
     if args.iter().any(|a| a == "--dump-only") {
         std::process::exit(i32::from(dump_roundtrip(&files) > 0));
     }

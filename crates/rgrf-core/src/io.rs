@@ -41,6 +41,42 @@ impl ReadAt for File {
     }
 }
 
+/// Where an opened archive reads from: the file itself, the file seen behind a 46-byte
+/// pseudo header (Thor patches: their offsets are absolute in the file), or a decompressed
+/// buffer (RGZ).
+pub enum Source {
+    File(File),
+    /// Reading position `p` of the archive reads position `p - shift` of the file.
+    Shifted {
+        file: File,
+        shift: u64,
+    },
+    Memory(Vec<u8>),
+}
+
+impl ReadAt for Source {
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        match self {
+            Self::File(f) => f.read_exact_at(buf, offset),
+            Self::Shifted { file, shift } => file.read_exact_at(
+                buf,
+                offset
+                    .checked_sub(*shift)
+                    .ok_or(io::ErrorKind::UnexpectedEof)?,
+            ),
+            Self::Memory(v) => v.read_exact_at(buf, offset),
+        }
+    }
+
+    fn len(&self) -> io::Result<u64> {
+        match self {
+            Self::File(f) => ReadAt::len(f),
+            Self::Shifted { file, shift } => Ok(ReadAt::len(file)? + shift),
+            Self::Memory(v) => Ok(v.len() as u64),
+        }
+    }
+}
+
 impl ReadAt for Vec<u8> {
     fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
         let start = usize::try_from(offset).map_err(|_| io::ErrorKind::UnexpectedEof)?;

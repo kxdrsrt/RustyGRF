@@ -4,16 +4,18 @@ use std::path::Path;
 
 use crate::codec::{self, Decoded};
 use crate::container::{self, Entry, Header, TableInfo};
+use crate::des;
 use crate::error::{Error, Result};
-use crate::io::ReadAt;
+use crate::io::{ReadAt, Source};
 use crate::name::{GrfPath, NameMode, glob_match};
+use crate::{rgz, thor};
 
 /// Default limit for the decoded size of one entry (the largest real entry measured is 21 MB).
 /// Protects against archives whose table claims huge sizes; see [`Archive::set_max_entry_size`].
 pub const DEFAULT_MAX_ENTRY_SIZE: u64 = 1 << 30;
 
-/// An opened GRF 0x200. Reading is positional, so one `Archive` can be shared between threads.
-pub struct Archive<R: ReadAt = File> {
+/// An opened GRF (0x102, 0x103, 0x200 or 0x300). Reading is positional, so one `Archive` can be shared between threads.
+pub struct Archive<R: ReadAt = Source> {
     src: R,
     header: Header,
     table: TableInfo,
@@ -22,23 +24,46 @@ pub struct Archive<R: ReadAt = File> {
     max_entry_size: u64,
 }
 
-impl Archive<File> {
+impl Archive<Source> {
+    /// Opens a GRF (any version, also `.gpf` patch files, which are GRFs), a Thor patch or an RGZ
+    /// patch; the kind is recognised from the content, not from the file name.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_source(File::open(path)?)
+        let file = File::open(path)?;
+        let mut head = [0u8; 24];
+        let n = (ReadAt::len(&file)?).min(head.len() as u64) as usize;
+        file.read_exact_at(&mut head[..n], 0)?;
+        if head[..n].starts_with(thor::MAGIC) {
+            let c = thor::read_container(&file)?;
+            let src = Source::Shifted {
+                file,
+                shift: container::HEADER_LEN,
+            };
+            return Ok(Self::from_parts(src, c));
+        }
+        if rgz::is_gzip(&head[..n]) {
+            let (c, data) = rgz::read_container(&file)?;
+            return Ok(Self::from_parts(Source::Memory(data), c));
+        }
+        Self::from_source(Source::File(file))
     }
 }
 
 impl<R: ReadAt> Archive<R> {
+    /// Reads a GRF (0x102 to 0x300) from any positional source.
     pub fn from_source(src: R) -> Result<Self> {
         let c = container::read_container(&src)?;
-        Ok(Self {
+        Ok(Self::from_parts(src, c))
+    }
+
+    fn from_parts(src: R, c: container::Container) -> Self {
+        Self {
             src,
             header: c.header,
             table: c.table,
             entries: c.entries,
             file_len: c.file_len,
             max_entry_size: DEFAULT_MAX_ENTRY_SIZE,
-        })
+        }
     }
 
     /// Entries whose declared or stored size exceeds this are not decoded (status `Corrupt`).
@@ -151,6 +176,14 @@ impl<R: ReadAt> Archive<R> {
                     e.size, e.zsize, self.max_entry_size
                 )),
             });
+        }
+        if let Some(cycle) = e.des_cycle() {
+            // the scrambling covers the stored bytes including the alignment padding
+            let mut stream = self.read_raw_aligned(index)?;
+            des::decrypt_data(&mut stream, cycle);
+            stream.truncate(e.zsize as usize);
+            let plain = e.flags & container::flags::FILE;
+            return Ok(codec::decode(&stream, e.size as usize, plain));
         }
         let raw = self.read_raw(index)?;
         Ok(codec::decode(&raw, e.size as usize, e.flags))

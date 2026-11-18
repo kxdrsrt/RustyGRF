@@ -13,19 +13,19 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Bauen, neu komprimieren, `Compact`/`GrfShrinker` | `build`, `repack` | ✅ M2 |
 | Zusammenführen (`MergeDialog`), Subtrahieren (`SubtractDialog`), Patch | `merge`, `diff`, `patch` | ✅ M3 (Subtrahieren: `diff` + Auswahl, nicht eigener Befehl) |
 | Hash (`HashDialog`) | `hash` | ✅ |
-| GRF/GPF/RGZ/Thor lesen, `Patcher`/`TkPatch` | GRF 0x200/0x300 | ✅ GRF; Thor/RGZ/GPF 🔨 M6 |
-| Verschlüsselung (`Encryptor`) | – | 🔨 M6 (Entscheidung offen) |
+| GRF/GPF/RGZ/Thor lesen, `Patcher`/`TkPatch` | alle Befehle öffnen **GRF 0x102, 0x103, 0x200, 0x300, GPF, Thor (Modus 0x30 und 0x21) und RGZ** (Erkennung am Inhalt); `thor create`, `rgz create`; Patches anwenden mit `merge` | ✅ GRF 0x200/0x300 (Millionen Einträge gemessen), **0x102 an `event.grf`** (39 Dateien, CRC/Inhalt gegen 0x200-Umwandlung gleich); 0x103, Thor, RGZ nur an selbst erzeugten Dateien getestet (keine echte Datei vorhanden); 0x102/0x103 schreiben 🔨 |
+| Verschlüsselung (`Encryptor`) | DES (Flags 3/5, 0x102/0x103) wird gelesen; verschlüsselte Einträge werden beim Umpacken unverändert kopiert | ✅ DES lesen (CRC32 gegen GRF Editor gleich); DES schreiben, GRF-Editor-Schlüssel (Flag 0x20, `__encryption.info`) und Gravity-Schutz (0x80, Schlüsselblock von 0x300) 🔨 (Entscheidung offen) |
 | Dateinamen-Kodierung ansehen (`ViewEncoding`) | `--names cp1252|cp949|utf8|raw` | ✅ |
-| Vorschau Bild/BMP/TGA/JPG (`PreviewImage`, `ImageConverter`) | – | 🔨 M7d |
+| Vorschau Bild/BMP/TGA/JPG (`PreviewImage`, `ImageConverter`) | GUI-Vorschau (BMP/JPG/PNG/GIF, TGA → PNG, Magenta durchsichtig) | ✅ (51.782 BMP, 9.063 TGA gemessen); Bilder umwandeln/optimieren 🔨 M7d |
 | Vorschau und Bearbeiten **SPR** (`PreviewSpr`, `SpriteEditor`, `SpriteConverter`) | `spr info|export|build|replace|add|remove|set-palette` | ✅ Lesen/Schreiben/PNG (M7a), Bearbeiten (M7b); Oberfläche 🔨 M8 |
 | Vorschau **ACT** (`PreviewAct`) | `act info`, `act render` (PNG) | ✅ Lesen/Schreiben/Rendern, Anker-Bindung, GIF (M7b) |
 | Palette (`PreviewPalette`, `PaletteOperations`) | PAL lesen/schreiben, Palette tauschen (`spr set-palette`) | ✅; weitere Operationen 🔨 |
 | Lua/Lub anzeigen, dekompilieren (`PreviewText`, `DecompilerSettings`) | `lua check` (Syntax), `cat` für Text | ✅ Syntaxprüfung (M7c); Dekompilieren Lua 5.1 ✅ (alle 504 kompilierten Dateien vollständig, mit lokalen Namen, Schleifen und `and`/`or`; Inhalt bei 445 von 504 Dateien gleich GRF Editor, Rest erklärt; mit echtem Lua 5.1 geprüft: alle 504 Texte vom Parser angenommen, alle 442 Lua-5.1- und alle 62 Lua-5.0-Dateien verhalten sich wie das Original, siehe 09-formats.md), Lua 5.0 ✅ |
 | Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | `map info|png|check` | ✅ GAT/RSW lesen, schreiben, Bild, Ressourcen-Check (M7e); Zellen bearbeiten, Karte extrahieren 🔨 |
 | 3D: RSM, STR (`OpenGLViewport`) | `map info` (RSM-Struktur und Texturen), `map check` | ✅ RSM strukturell lesen (M7e); STR-Vorschau als GIF (vereinfacht) ✅; RSM-3D-Ansicht mit Knotenanimation ✅ (654 animierte Modelle); Karten-3D (Gelände, Modelle, Wasser) ✅; Wasser als Bildzyklus ✅, bewegte Modelle in Karten ✅, Wasserwellen 🔨 |
-| Audio/Video (`PreviewWav`, `PreviewBink`) | – | ❓ |
+| Audio/Video (`PreviewWav`, `PreviewBink`) | GUI: WAV/MP3/OGG abspielen (ADPCM → PCM) | ✅ Audio; Bink-Video ❓ |
 | `ThumbDb`, `TypeExplorer`, Raw-/Ordnerstruktur, Ressourcen-Indexer | `ls`, `info` teilweise | ❓ |
-| Hex-Ansicht (Be.HexBox), `MagicEdit` | – | ❓ |
+| Hex-Ansicht (Be.HexBox), `MagicEdit` | GUI: erste 512 Byte als Hexdump für unbekannte Dateien | ✅ Ansicht; Bearbeiten ❓ |
 | GrfCL (Kommandozeile) | `rgrf` | ✅ (Vergleich in `BENCHMARKS.md`) |
 
 ## ACT Editor (Tokeiburu)

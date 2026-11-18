@@ -1227,7 +1227,7 @@ impl Session {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            format: format!("0x{:03x}", self.arc.header().version),
+            format: self.arc.header().format_name(),
             entries: self.arc.len(),
             files: self.arc.entries().iter().filter(|e| e.is_file()).count(),
             file_size: self.arc.file_len(),
@@ -2172,7 +2172,7 @@ mod tests {
         let info = s.info();
         assert_eq!(
             (info.format.as_str(), info.entries, info.files),
-            ("0x200", 7, 7)
+            ("GRF 0x200", 7, 7)
         );
         assert_eq!(info.file_name, "t.grf");
         assert_eq!(s.search(""), 7);

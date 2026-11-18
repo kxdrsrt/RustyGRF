@@ -23,6 +23,8 @@ pub enum Severity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IssueKind {
     Markers,
+    /// Delete directives of a patch (Thor, GPF): nothing to extract.
+    Removals,
     RawEntries,
     SharedData,
     OutOfRange,
@@ -95,8 +97,9 @@ pub fn verify<R: ReadAt>(
         entries: a.len(),
         ..VerifyReport::default()
     };
-    rep.markers = a.entries().iter().filter(|e| e.is_marker()).count();
-    rep.files = rep.entries - rep.markers;
+    let removals = a.entries().iter().filter(|e| e.is_removal()).count();
+    rep.markers = a.entries().iter().filter(|e| e.is_marker()).count() - removals;
+    rep.files = rep.entries - rep.markers - removals;
     rep.raw = a.entries().iter().filter(|e| e.is_raw()).count();
     if rep.raw > 0 {
         rep.issues.push(Issue {
@@ -107,6 +110,14 @@ pub fn verify<R: ReadAt>(
                 "{} files are stored uncompressed (flags 0, as in the official archive)",
                 rep.raw
             ),
+        });
+    }
+    if removals > 0 {
+        rep.issues.push(Issue {
+            severity: Severity::Info,
+            kind: IssueKind::Removals,
+            entry: None,
+            message: format!("{removals} delete directives (patch), nothing to extract"),
         });
     }
     if rep.markers > 0 {
@@ -186,7 +197,7 @@ fn status_issue(index: usize, s: &DecodeStatus) -> Option<Issue> {
         DecodeStatus::Encrypted => (
             Severity::Warning,
             IssueKind::Encrypted,
-            "encrypted entry, content not checked (decryption not supported yet)".to_owned(),
+            "encrypted entry (needs a key), content not checked".to_owned(),
         ),
     };
     Some(Issue {

@@ -38,9 +38,9 @@ fn last_by_key<R: ReadAt>(a: &Archive<R>) -> (Vec<usize>, usize) {
     (order, duplicates)
 }
 
-/// SHA-256 of what the client would read; of the stored bytes for encrypted entries.
+/// SHA-256 of what the client would read; of the stored bytes for entries that need a key.
 fn fingerprint<R: ReadAt>(a: &Archive<R>, i: usize) -> Result<[u8; 32]> {
-    if a.entry(i)?.is_encrypted() {
+    if a.entry(i)?.needs_key() {
         return Ok(sha(&a.read_raw_aligned(i)?));
     }
     Ok(sha(&a.read(i)?.data))
@@ -151,6 +151,10 @@ pub struct SourceStats {
     pub ignored_new: usize,
     /// Files left out because their path is in the exclude set of [`merge_excluding`].
     pub excluded: usize,
+    /// Delete directives of a patch (Thor, GPF) that this archive carries.
+    pub removals: usize,
+    /// Paths from lower-priority archives that those directives removed from the output.
+    pub removed: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -211,12 +215,26 @@ pub fn merge_excluding<R: ReadAt>(
     let mut at: HashMap<Vec<u8>, usize> = HashMap::new();
     let mut sel: Vec<Sel> = Vec::new();
     let mut names: Vec<Option<GrfPath>> = Vec::new();
+    let mut dead: HashSet<usize> = HashSet::new();
     for (src, a) in sources.iter().enumerate().rev() {
         let (order, dup) = last_by_key(a);
-        stats[src].markers_skipped = a.entries().iter().filter(|e| e.is_marker()).count();
+        stats[src].markers_skipped = a
+            .entries()
+            .iter()
+            .filter(|e| e.is_marker() && !e.is_removal())
+            .count();
         stats[src].shadowed = dup;
         for idx in order {
             let e = a.entry(idx)?;
+            if e.is_removal() {
+                // a delete directive acts on the archives of lower priority only
+                stats[src].removals += 1;
+                if let Some(pos) = at.remove(&e.name.key()) {
+                    dead.insert(pos);
+                    stats[src].removed += 1;
+                }
+                continue;
+            }
             if e.is_marker() {
                 continue;
             }
@@ -245,6 +263,12 @@ pub fn merge_excluding<R: ReadAt>(
                 }
             }
         }
+    }
+    if !dead.is_empty() {
+        let keep = |i: &usize| !dead.contains(i);
+        let kept: Vec<usize> = (0..sel.len()).filter(keep).collect();
+        sel = kept.iter().map(|&i| sel[i]).collect();
+        names = kept.iter().map(|&i| names[i].clone()).collect();
     }
     for s in &sel {
         stats[s.src].used += 1;

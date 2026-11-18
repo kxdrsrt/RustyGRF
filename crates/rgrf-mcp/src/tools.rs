@@ -392,12 +392,16 @@ fn entry_index(a: &Archive, text: &str, mode: NameMode) -> Result<usize, String>
 }
 
 fn kind(e: &Entry) -> &'static str {
-    if e.is_marker() {
+    if e.is_removal() {
+        "remove"
+    } else if e.is_marker() {
         "marker"
     } else if e.is_raw() {
         "raw"
-    } else if e.is_encrypted() {
+    } else if e.needs_key() {
         "encrypted"
+    } else if e.is_des() {
+        "des"
     } else {
         "file"
     }
@@ -452,7 +456,8 @@ fn info(ctx: &Ctx, a: &Args) -> Out {
         "version": format!("0x{:03x}", arc.header().version),
         "entries": es.len(), "files": es.len() - markers, "markers": markers,
         "stored_uncompressed": es.iter().filter(|e| e.is_raw()).count(),
-        "encrypted": es.iter().filter(|e| e.is_encrypted()).count(),
+        "encrypted": es.iter().filter(|e| e.needs_key()).count(),
+        "des_scrambled": es.iter().filter(|e| e.is_des()).count(),
         "entries_sharing_data": shared,
         "packed_bytes": es.iter().map(|e| u64::from(e.zsize)).sum::<u64>(),
         "unpacked_bytes": es.iter().map(|e| u64::from(e.size)).sum::<u64>(),

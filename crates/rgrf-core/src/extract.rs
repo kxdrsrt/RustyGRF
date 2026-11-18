@@ -191,7 +191,7 @@ pub fn extract<R: ReadAt>(
         .iter()
         .map(|&i| {
             let e = a.entry(i)?;
-            if e.is_marker() || e.is_encrypted() {
+            if e.is_marker() || e.needs_key() {
                 return Ok(None);
             }
             safe_relative_path(&e.name, opts.names).map(Some)

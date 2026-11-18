@@ -42,7 +42,7 @@ fn opts(method: Method, format: Format) -> BuildOptions {
     }
 }
 
-fn names(g: &Archive<std::fs::File>) -> Vec<Vec<u8>> {
+fn names(g: &Archive<crate::io::Source>) -> Vec<Vec<u8>> {
     g.entries()
         .iter()
         .map(|e| e.name.as_bytes().to_vec())
