@@ -82,9 +82,7 @@ pub fn parse(bytes: &[u8]) -> Result<RgbaImage, TgaError> {
     if !matches!(h.kind, 1..=3 | 9..=11) {
         return Err(TgaError::Unsupported(h.kind));
     }
-    let depth_ok = if mapped {
-        h.bits == 8
-    } else if matches!(h.kind, 3 | 11) {
+    let depth_ok = if mapped || matches!(h.kind, 3 | 11) {
         h.bits == 8
     } else {
         matches!(h.bits, 15 | 16 | 24 | 32)
