@@ -1,0 +1,23 @@
+# RustyGRF App (Tauri 2)
+
+Desktop-Oberfläche auf dem Rust-Kern (`rgrf-core`, `rgrf-formats`). Eigenes Cargo-Workspace, damit Bibliothek, CLI und MCP-Server nicht von Tauri abhängen (Lizenzen siehe `deny.toml` und [docs/05-licensing.md](../../docs/05-licensing.md)).
+
+## Aufbau
+- `src-tauri/src/backend.rs`: alles, was die App mit einem Archiv tut (öffnen, suchen, blättern, Vorschau, extrahieren, prüfen), ohne Tauri-Typen, mit Tests.
+- `src-tauri/src/lib.rs`: dünne Tauri-Befehle darum; schwere Arbeit läuft auf einem Arbeits-Thread, das Fenster bleibt bedienbar.
+- `ui/`: reines HTML/CSS/JS (kein Build-Werkzeug). Die Liste ist virtualisiert (nur sichtbare Zeilen, Seiten vom Backend), Dark/Light per `prefers-color-scheme`. `ui/mock.js` ersetzt das Backend nur im normalen Browser, in der App ist es inaktiv.
+- Einziges npm-Paket: `@tauri-apps/cli` (Entwicklungsabhängigkeit).
+
+## Starten und Bauen
+```
+cd apps/gui
+npm install                  # holt nur die Tauri-CLI
+npx tauri dev                # Fenster mit der App
+npx tauri build              # Installer/Bundle für das eigene System
+cargo test                   # Backend-Tests (Tests mit echten Archiven brauchen RGRF_TESTDATA)
+```
+Das Bauverzeichnis steht lokal in `.cargo/config.toml` (nicht im Git).
+Layout ohne App ausprobieren: `python3 -m http.server -d ui 8765`, dann `http://127.0.0.1:8765` öffnen (Mock-Daten).
+
+## Stand
+Gemessen und geprüft siehe [docs/03-roadmap.md](../../docs/03-roadmap.md), Abschnitt M8. Noch nicht in der App: Bauen, Zusammenführen, Bearbeiten, Fortschritt/Abbruch, Einstellungen. Das Icon ist ein Platzhalter (`src-tauri/icons`, erzeugt aus einem 1024-px-PNG mit `npx tauri icon`).

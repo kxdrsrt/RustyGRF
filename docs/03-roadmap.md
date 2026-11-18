@@ -136,6 +136,7 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 - **Abnahme je Format:** Vergleich mit Ausgaben von GRF Editor/ActEditor an festen Beispieldateien.
 
 ## M8 – App (GUI) mit Icon und Installern
+**Stand 2026-11-18: erster lauffähiger Wurf in `apps/gui` (Tauri 2), siehe [apps/gui/README.md](../apps/gui/README.md).** Archiv öffnen (Dialog oder Drag-and-drop), Liste mit Suche über 202.358 Einträge, Vorschau (Bilder, Sprites, Animationen als GIF mit Aktionswahl, Karten, Modelle/Welten als Info, Text mit Kodierungserkennung, Audio, Hex), Extrahieren und Prüfen; Dark/Light folgt dem System. **Gemessen:** Öffnen von `data.grf` 64 ms, Suche `*.spr` (44.526 Treffer) 102 ms, Animation rendern 9 ms; Layout und Bedienung im Browser mit Mock-Backend geprüft, Backend-Tests auf echten Daten grün. **Nicht geprüft:** das native Fenster (kein Bildschirmzugriff in dieser Sitzung), Windows und Linux, Bauen/Zusammenführen/Bearbeiten in der GUI, Installer, Signierung. Das Icon ist ein **Platzhalter**.
 Nach M7, auf `rgrf-core` aufgesetzt (Entscheidung D15: Tauri 2, siehe [07-ui-ux.md](07-ui-ux.md)).
 - Fenster mit Archivliste, Suche, Vorschau, Bauen/Zusammenführen mit Fortschritt und Abbruch; Dark/Light folgt dem System.
 - **App-Icon und Marke:** eigenes Icon (Vektor, alle Größen), Name „RustyGRF“; die Gestaltung stimmen wir ab, bevor ich sie baue (Icon-Entwurf kann ich erzeugen).

@@ -2,7 +2,7 @@
 
 Die Oberfläche kommt ab M7 (nach Kern, CLI und MCP). Dieses Dokument legt die Richtung fest, damit Kern und Schnittstellen schon jetzt dazu passen.
 
-## Technologie (Entscheidung zu bestätigen vor M7)
+## Technologie (Entscheidung D15: Tauri 2, umgesetzt in `apps/gui`)
 | Option | Vorteile | Nachteile |
 |---|---|---|
 | **Tauri 2 + Web-Frontend** (TypeScript, z. B. Svelte oder React) | größte Gestaltungsfreiheit, Dark/Light per CSS (`prefers-color-scheme`), gute Listen-/Baumkomponenten, einfache Vorschau (Canvas/WebGL), Rust-Kern direkt nutzbar | nutzt die Web-Engine des Systems (WebView2/WebKit), Node im Build |

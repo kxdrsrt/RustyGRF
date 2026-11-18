@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>RustyGRF</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <button id="btn-open" class="primary">Open…</button>
+    <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" disabled autocomplete="off" spellcheck="false">
+    <span id="count" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="btn-extract" disabled>Extract…</button>
+    <button id="btn-verify" disabled>Verify</button>
+  </header>
+
+  <main>
+    <section id="list-pane" aria-label="Entries">
+      <div id="empty" class="empty">
+        <h1>RustyGRF</h1>
+        <p>Open a GRF archive, or drop it on this window.</p>
+        <button id="btn-open-2" class="primary">Open archive…</button>
+      </div>
+      <div id="viewport" hidden tabindex="0">
+        <div id="spacer"><div id="rows"></div></div>
+      </div>
+    </section>
+    <section id="preview-pane" aria-label="Preview">
+      <div id="preview-head"></div>
+      <div id="preview-body"></div>
+    </section>
+  </main>
+
+  <footer id="status">Ready</footer>
+
+  <dialog id="dlg">
+    <h2 id="dlg-title"></h2>
+    <div id="dlg-body"></div>
+    <form method="dialog" class="dlg-actions" id="dlg-actions"></form>
+  </dialog>
+
+  <script src="mock.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

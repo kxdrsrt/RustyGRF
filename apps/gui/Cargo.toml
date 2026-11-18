@@ -1,0 +1,12 @@
+# The GUI is its own workspace: Tauri pulls in a large dependency tree (web view, windowing)
+# that the library, CLI and MCP server must not depend on.
+[workspace]
+resolver = "3"
+members = ["src-tauri"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.dev.package."*"]
+opt-level = 3

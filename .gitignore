@@ -17,3 +17,8 @@
 Thumbs.db
 desktop.ini
 .idea/
+
+# GUI: lokale Cargo-Konfiguration und Node-Pakete
+/apps/gui/.cargo/
+/apps/gui/node_modules/
+/apps/gui/src-tauri/gen/
