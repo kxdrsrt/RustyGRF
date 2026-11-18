@@ -113,6 +113,18 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?;
             to_json(s.pending())
         }),
+        "stage_spr_add" => with(state, |s| {
+            s.stage_spr_add(arg(a, "index")?, &PathBuf::from(arg::<String>(a, "png")?))?;
+            to_json(s.pending())
+        }),
+        "stage_spr_remove" => with(state, |s| {
+            s.stage_spr_remove(arg(a, "index")?, arg(a, "frame")?)?;
+            to_json(s.pending())
+        }),
+        "stage_spr_palette" => with(state, |s| {
+            s.stage_spr_palette(arg(a, "index")?, &PathBuf::from(arg::<String>(a, "pal")?))?;
+            to_json(s.pending())
+        }),
         "stage_act_interval" => with(state, |s| {
             s.stage_act_interval(arg(a, "index")?, arg(a, "action")?, arg(a, "ms")?)?;
             to_json(s.pending())

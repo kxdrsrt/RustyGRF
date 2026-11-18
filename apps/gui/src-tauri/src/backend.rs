@@ -16,10 +16,11 @@ use rgrf_core::verify::{Severity, VerifyOptions, verify};
 use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
 use rgrf_formats::act::Act;
-use rgrf_formats::edit::quantize;
+use rgrf_formats::edit::{Kind, quantize};
 use rgrf_formats::gat::{self, Gat};
 use rgrf_formats::gif_io::{delay_cs, encode_gif, upscale};
 use rgrf_formats::gnd::GndSummary;
+use rgrf_formats::pal::Pal;
 use rgrf_formats::png_io::{Frame as PngFrame, frame_from_png, rgba_to_png};
 use rgrf_formats::render::{bounds_of, render_frame};
 use rgrf_formats::rsm::Rsm;
@@ -241,9 +242,14 @@ pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, 
     })
 }
 
-/// `png` replaces image `frame` (palette images first, then true-colour ones, as in the preview).
-pub fn replace_spr_image(data: &[u8], frame: usize, png: &[u8]) -> Result<Vec<u8>, String> {
-    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+enum NewImage {
+    Indexed(IndexedImage),
+    Rgba(RgbaImage),
+}
+
+/// A PNG as an image for `spr`: for palette images its colours are mapped to the sprite's palette
+/// (transparency becomes index 0), otherwise it becomes a true-colour image.
+fn png_for(spr: &Spr, png: &[u8], indexed: bool) -> Result<NewImage, String> {
     let new = frame_from_png(png).map_err(|e| e.to_string())?;
     let to_rgba = |img: &IndexedImage, pal: &[u8; PALETTE_LEN]| RgbaImage {
         width: img.width,
@@ -262,28 +268,80 @@ pub fn replace_spr_image(data: &[u8], frame: usize, png: &[u8]) -> Result<Vec<u8
             })
             .collect(),
     };
-    let n_indexed = spr.indexed.len();
-    if frame < n_indexed {
-        let pal = spr.palette.clone().ok_or("the sprite has no palette")?;
-        let image = match new {
-            PngFrame::Indexed { image, palette }
-                if (0..256).all(|i| palette[4 * i..4 * i + 3] == pal[4 * i..4 * i + 3]) =>
-            {
-                image
-            }
-            PngFrame::Indexed { image, palette } => quantize(&to_rgba(&image, &palette), &pal),
-            PngFrame::Rgba(img) => quantize(&img, &pal),
-        };
-        spr.replace_indexed(frame, image)
-            .map_err(|e| e.to_string())?;
-    } else {
-        let img = match new {
+    if !indexed {
+        return Ok(NewImage::Rgba(match new {
             PngFrame::Rgba(img) => img,
             PngFrame::Indexed { image, palette } => to_rgba(&image, &palette),
-        };
-        spr.replace_rgba(frame - n_indexed, img)
-            .map_err(|e| e.to_string())?;
+        }));
     }
+    let pal = spr.palette.clone().ok_or("the sprite has no palette")?;
+    Ok(NewImage::Indexed(match new {
+        PngFrame::Indexed { image, palette }
+            if (0..256).all(|i| palette[4 * i..4 * i + 3] == pal[4 * i..4 * i + 3]) =>
+        {
+            image
+        }
+        PngFrame::Indexed { image, palette } => quantize(&to_rgba(&image, &palette), &pal),
+        PngFrame::Rgba(img) => quantize(&img, &pal),
+    }))
+}
+
+/// `png` replaces image `frame` (palette images first, then true-colour ones, as in the preview).
+pub fn replace_spr_image(data: &[u8], frame: usize, png: &[u8]) -> Result<Vec<u8>, String> {
+    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+    let n_indexed = spr.indexed.len();
+    match png_for(&spr, png, frame < n_indexed)? {
+        NewImage::Indexed(i) => spr.replace_indexed(frame, i),
+        NewImage::Rgba(i) => spr.replace_rgba(frame.wrapping_sub(n_indexed), i),
+    }
+    .map_err(|e| e.to_string())?;
+    spr.to_bytes(spr.version).map_err(|e| e.to_string())
+}
+
+/// Appends a PNG as a new image: a palette image if the sprite uses a palette.
+pub fn add_spr_image(data: &[u8], png: &[u8]) -> Result<Vec<u8>, String> {
+    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+    let indexed = spr.palette.is_some() && !(spr.indexed.is_empty() && !spr.rgba.is_empty());
+    match png_for(&spr, png, indexed)? {
+        NewImage::Indexed(i) => {
+            spr.push_indexed(i).map_err(|e| e.to_string())?;
+        }
+        NewImage::Rgba(i) => {
+            spr.push_rgba(i);
+        }
+    }
+    spr.to_bytes(spr.version).map_err(|e| e.to_string())
+}
+
+/// Removes image `frame`; the animation (when given) is changed so its layers follow.
+pub fn remove_spr_image(
+    data: &[u8],
+    frame: usize,
+    act: Option<&[u8]>,
+) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+    let mut act = act
+        .map(|a| Act::parse(a).map_err(|e| e.to_string()))
+        .transpose()?;
+    let n = spr.indexed.len();
+    let (kind, i) = if frame < n {
+        (Kind::Indexed, frame)
+    } else {
+        (Kind::Rgba, frame - n)
+    };
+    spr.remove_image(kind, i, act.as_mut())
+        .map_err(|e| e.to_string())?;
+    let spr_out = spr.to_bytes(spr.version).map_err(|e| e.to_string())?;
+    let act_out = act
+        .map(|a| a.to_bytes(a.version).map_err(|e| e.to_string()))
+        .transpose()?;
+    Ok((spr_out, act_out))
+}
+
+/// Gives the sprite another palette (the images keep their indices, so the colours change).
+pub fn set_spr_palette(data: &[u8], pal: &[u8]) -> Result<Vec<u8>, String> {
+    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+    spr.set_palette(&Pal::parse(pal).map_err(|e| e.to_string())?);
     spr.to_bytes(spr.version).map_err(|e| e.to_string())
 }
 
@@ -296,6 +354,11 @@ pub fn set_act_interval(data: &[u8], action: usize, ms: f32) -> Result<Vec<u8>, 
     act.set_interval(action, ms / 25.0)
         .map_err(|e| e.to_string())?;
     act.to_bytes(act.version).map_err(|e| e.to_string())
+}
+
+fn file_name_of(p: &Path) -> String {
+    p.file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
 }
 
 fn check_file(file: &Path) -> Result<(), String> {
@@ -606,6 +669,58 @@ impl Session {
             png.file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
         ));
+        self.stage(Change::PutBytes {
+            name,
+            data: out,
+            what,
+        });
+        Ok(())
+    }
+
+    /// Appends a PNG to a sprite as a new image.
+    pub fn stage_spr_add(&mut self, index: usize, png: &Path) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let png_bytes = std::fs::read(png).map_err(|e| format!("{}: {e}", png.display()))?;
+        what.push(format!("image added from {}", file_name_of(png)));
+        let out = add_spr_image(&data, &png_bytes)?;
+        self.stage(Change::PutBytes {
+            name,
+            data: out,
+            what,
+        });
+        Ok(())
+    }
+
+    /// Removes image `frame` of a sprite; the animation next to it follows when it exists.
+    pub fn stage_spr_remove(&mut self, index: usize, frame: usize) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let act_index = self.sibling(index, "act");
+        let act = act_index.map(|i| self.working_bytes(i)).transpose()?;
+        let (spr_out, act_out) =
+            remove_spr_image(&data, frame, act.as_ref().map(|a| a.1.as_slice()))?;
+        what.push(format!("image {frame} removed"));
+        self.stage(Change::PutBytes {
+            name,
+            data: spr_out,
+            what,
+        });
+        if let (Some((aname, _, mut awhat)), Some(bytes)) = (act, act_out) {
+            awhat.push(format!("layers follow the removal of sprite image {frame}"));
+            self.stage(Change::PutBytes {
+                name: aname,
+                data: bytes,
+                what: awhat,
+            });
+        }
+        Ok(())
+    }
+
+    /// Gives a sprite the palette of a `.pal` file.
+    pub fn stage_spr_palette(&mut self, index: usize, pal: &Path) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let pal_bytes = std::fs::read(pal).map_err(|e| format!("{}: {e}", pal.display()))?;
+        what.push(format!("palette from {}", file_name_of(pal)));
+        let out = set_spr_palette(&data, &pal_bytes)?;
         self.stage(Change::PutBytes {
             name,
             data: out,
@@ -1432,6 +1547,62 @@ mod tests {
             (act.actions[0].interval, act.actions[1].interval),
             (2.0, 4.0)
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn adds_and_removes_sprite_images_and_sets_the_palette() {
+        let (dir, grf) = sample("sprite-ops");
+        let mut s = Session::open(&grf).unwrap();
+        let find = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+        let (spr_i, act_i) = (find(&mut s, "a.spr"), find(&mut s, "a.act"));
+        let red = RgbaImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 0, 0, 255, 0, 0, 0, 0],
+        };
+        let png = dir.join("red.png");
+        fs::write(&png, rgba_to_png(&red).unwrap()).unwrap();
+
+        s.stage_spr_add(spr_i, &png).unwrap();
+        let frames = |s: &Session| match s.preview(spr_i, None).unwrap() {
+            Preview::Frames { frames, .. } => frames.len(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(frames(&s), 2);
+
+        // removing image 0 also changes the animation next to it, and both are staged
+        s.stage_spr_remove(spr_i, 0).unwrap();
+        assert_eq!(frames(&s), 1);
+        let rows = s.pending();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.iter().any(|r| r.name.ends_with("a.act")));
+        let act = Act::parse(&s.read_working(act_i).unwrap()).unwrap();
+        assert!(
+            act.layers().all(|(_, _, _, l)| l.sprite_index == -1),
+            "layers lost their image"
+        );
+        assert!(s.stage_spr_remove(spr_i, 9).is_err(), "no such image");
+
+        // a palette file: 256 entries of R, G, B, 0
+        let mut pal = vec![0u8; 1024];
+        pal[4..8].copy_from_slice(&[0, 0, 255, 0]);
+        let pal_path = dir.join("blue.pal");
+        fs::write(&pal_path, &pal).unwrap();
+        s.stage_spr_palette(spr_i, &pal_path).unwrap();
+        let spr = Spr::parse(&s.read_working(spr_i).unwrap()).unwrap();
+        assert_eq!(&spr.palette.unwrap()[4..8], &[0, 0, 255, 0]);
+        assert!(s.stage_spr_palette(spr_i, &png).is_err(), "not a palette");
+
+        let out = dir.join("out.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let mut r = Session::open(&out).unwrap();
+        let i = find(&mut r, "a.spr");
+        let spr = Spr::parse(&r.read(i).unwrap()).unwrap();
+        assert_eq!((spr.indexed.len(), spr.palette.unwrap()[5]), (1, 0));
         let _ = fs::remove_dir_all(dir);
     }
 

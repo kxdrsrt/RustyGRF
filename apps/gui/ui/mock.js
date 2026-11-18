@@ -104,6 +104,11 @@ if (!window.__TAURI__) {
           case "stage_spr_image":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `image ${a.frame} from x.png` });
             return pendingRows;
+          case "stage_spr_add":
+          case "stage_spr_remove":
+          case "stage_spr_palette":
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: cmd });
+            return pendingRows;
           case "stage_act_interval":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action}: ${a.ms} ms per frame` });
             return pendingRows;

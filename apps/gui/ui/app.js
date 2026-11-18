@@ -274,6 +274,14 @@ function renderPreview(p, row, meta) {
     }
     case "frames":
       return [
+        row.name.toLowerCase().endsWith(".spr")
+          ? el(
+              "div",
+              { class: "controls" },
+              el("button", { type: "button", class: "small", text: "Add image…", title: "Append a PNG as a new image (staged)", onclick: () => addImage(row) }),
+              el("button", { type: "button", class: "small", text: "Set palette…", title: "Use the colours of a .pal file (staged)", onclick: () => setPalette(row) }),
+            )
+          : null,
         el(
           "div",
           { class: "frames" },
@@ -283,7 +291,14 @@ function renderPreview(p, row, meta) {
               {},
               el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", f.png), alt: f.label })),
               el("figcaption", { text: f.label }),
-              el("button", { type: "button", class: "small", text: "Replace…", title: "Replace this image with a PNG (staged, saved with Changes…)", onclick: () => replaceImage(row, i) }),
+              row.name.toLowerCase().endsWith(".spr")
+                ? el(
+                    "div",
+                    { class: "figactions" },
+                    el("button", { type: "button", class: "small", text: "Replace…", title: "Replace this image with a PNG (staged, saved with Changes…)", onclick: () => replaceImage(row, i) }),
+                    el("button", { type: "button", class: "small", text: "Remove", title: "Remove this image; the animation next to it follows (staged)", onclick: () => removeImage(row, i) }),
+                  )
+                : null,
             ),
           ),
         ),
@@ -380,6 +395,42 @@ async function replaceImage(row, frame) {
     refreshPreview();
   } catch (e) {
     await note("Could not replace the image", errText(e), true);
+  }
+}
+
+async function addImage(row) {
+  const png = await T.dialog.open({ multiple: false, directory: false, title: `PNG to add to ${row.name}`, filters: [{ name: "PNG image", extensions: ["png"] }] });
+  if (!png) return;
+  try {
+    setPending(await invoke("stage_spr_add", { index: row.index, png }));
+    setStatus(`Image added to ${row.name} (staged); save with Changes….`);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not add the image", errText(e), true);
+  }
+}
+
+async function removeImage(row, frame) {
+  const go = await ask(`Remove image ${frame}?`, el("p", { text: "Later images move down by one. Layers of the animation next to this sprite that use the image become empty, and later ones follow." }), [{ label: "Remove", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  try {
+    setPending(await invoke("stage_spr_remove", { index: row.index, frame }));
+    setStatus(`Image ${frame} of ${row.name} removed (staged); save with Changes….`);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not remove the image", errText(e), true);
+  }
+}
+
+async function setPalette(row) {
+  const pal = await T.dialog.open({ multiple: false, directory: false, title: `Palette for ${row.name}`, filters: [{ name: "Palette", extensions: ["pal"] }] });
+  if (!pal) return;
+  try {
+    setPending(await invoke("stage_spr_palette", { index: row.index, pal }));
+    setStatus(`Palette of ${row.name} changed (staged); save with Changes….`);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not set the palette", errText(e), true);
   }
 }
 

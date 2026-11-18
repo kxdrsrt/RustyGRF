@@ -220,6 +220,48 @@ async fn stage_spr_image(
     .await
 }
 
+/// Appends a PNG file to the sprite `index` as a new image.
+#[tauri::command]
+async fn stage_spr_add(
+    state: State<'_, AppState>,
+    index: usize,
+    png: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_spr_add(index, &PathBuf::from(png))?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Removes image `frame` of the sprite `index`; the animation next to it follows.
+#[tauri::command]
+async fn stage_spr_remove(
+    state: State<'_, AppState>,
+    index: usize,
+    frame: usize,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_spr_remove(index, frame)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Gives the sprite `index` the palette of a `.pal` file.
+#[tauri::command]
+async fn stage_spr_palette(
+    state: State<'_, AppState>,
+    index: usize,
+    pal: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_spr_palette(index, &PathBuf::from(pal))?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Sets the frame interval (milliseconds) of an action of the animation `index`.
 #[tauri::command]
 async fn stage_act_interval(
@@ -335,6 +377,9 @@ pub fn run() {
             stage_add,
             stage_remove,
             stage_spr_image,
+            stage_spr_add,
+            stage_spr_remove,
+            stage_spr_palette,
             stage_act_interval,
             pending,
             discard_pending,

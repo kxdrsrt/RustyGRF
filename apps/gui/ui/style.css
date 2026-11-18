@@ -213,3 +213,5 @@ dialog progress { width: min(420px, 80vw); height: 10px; accent-color: var(--acc
   main { grid-template-columns: 1fr; grid-template-rows: 45% 1fr; }
   #list-pane { border-right: none; border-bottom: 1px solid var(--line); }
 }
+
+.figactions { display: flex; gap: 4px; }
