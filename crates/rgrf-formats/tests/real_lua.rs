@@ -167,7 +167,7 @@ fn every_compiled_lub_is_read_and_decompiled() {
                 if s.iter().any(|&b| b < 0x20 || b == b'"' || b == b'\\') {
                     continue;
                 }
-                if !text.contains(&names(&s)) {
+                if !text.contains(&rgrf_formats::luadec::string_text(&s, &names)) {
                     missing += 1;
                 }
             }

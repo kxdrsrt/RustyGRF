@@ -94,8 +94,20 @@ fn is_ident(s: &str) -> bool {
         && !KEYWORDS.contains(&s)
 }
 
+/// The text of a string constant. Some scripts hold UTF-8 text between the usual CP949 ones: bytes
+/// that are valid UTF-8 and whose non-ASCII characters are all Hangul or CJK (U+0800 and up) are
+/// shown as UTF-8; short CP949 strings can be valid UTF-8 by accident, but not with such characters.
+pub fn string_text(s: &[u8], names: &dyn Fn(&[u8]) -> String) -> String {
+    match std::str::from_utf8(s) {
+        Ok(t) if !t.is_ascii() && t.chars().all(|c| c.is_ascii() || c as u32 >= 0x800) => {
+            t.to_string()
+        }
+        _ => names(s),
+    }
+}
+
 fn quote(ctx: &Ctx<'_>, s: &[u8]) -> String {
-    let text = (ctx.names)(s);
+    let text = string_text(s, ctx.names);
     let mut out = String::from("\"");
     for ch in text.chars() {
         match ch {
@@ -259,7 +271,9 @@ impl Ctx<'_> {
 
     fn statements(&self, f: &Function, indent: usize) -> Result<String, Unsupported> {
         let slots = usize::from(f.max_stack).max(1) + 2;
-        let mut reg: Vec<Option<Expr>> = vec![None; slots];
+        // the frame starts out nil, and the compiler leaves out a LOADNIL at the very start of a
+        // function (`x = nil` is then a SETGLOBAL of an untouched register)
+        let mut reg: Vec<Option<Expr>> = vec![Some(Expr::Nil); slots];
         for (i, r) in reg.iter_mut().enumerate().take(usize::from(f.params)) {
             *r = Some(Expr::Param(param_name(f, i as u8)));
         }
@@ -296,9 +310,8 @@ impl Ctx<'_> {
                 continue;
             }
             let name = (self.names)(&f.locals[li].name);
-            // locals that exist from the first instruction on (the implicit `arg` table of a
-            // vararg function) are not declared in the source
-            if pc == 0 {
+            // the implicit `arg` table of a vararg function is not declared in the source
+            if pc == 0 && name == "arg" && f.is_vararg != 0 {
                 reg[r] = Some(Expr::Param(name));
                 continue;
             }
@@ -990,6 +1003,25 @@ impl Ctx<'_> {
                 "CLOSE" => {}
                 other => return Err(Unsupported(format!("{other} (control flow)"))),
             }
+            // operands that were temporaries are used up by the instruction that reads them
+            let operands: Vec<usize> = match i.name() {
+                "CONCAT" => (b..=c).collect(),
+                "ADD" | "SUB" | "MUL" | "DIV" | "MOD" | "POW" | "GETTABLE" => [i.b, i.c]
+                    .into_iter()
+                    .filter(|&r| r < 256)
+                    .map(|r| r as usize)
+                    .collect(),
+                "UNM" | "NOT" | "LEN" => vec![b],
+                _ => Vec::new(),
+            };
+            if !operands.is_empty() {
+                let live = active_at(f, at).len();
+                for r in operands {
+                    if r != a && r >= live && r < reg.len() {
+                        reg[r] = None;
+                    }
+                }
+            }
             if a < reg.len() && reg[a].as_ref().is_some_and(too_deep) {
                 return Err(Unsupported("an expression nested too deeply".into()));
             }
@@ -1374,6 +1406,23 @@ mod tests {
         let expected =
             "local n = 0\nwhile n < 10 do\n\tn = n + 1\n\tif n == 5 then\n\t\tbreak\n\tend\nend\n";
         assert!(out.ends_with(expected), "{out}");
+    }
+
+    #[test]
+    fn a_local_without_a_value_stays_a_local_and_a_function_start_is_nil() {
+        // `local w; w = 1`: the compiler leaves out LOADNIL at the start of a function, so the
+        // local starts at instruction 0 and must still be declared (else `w = 1` would be a global)
+        let out = decompiled(
+            vec![insx(1, 0, 0), ins(30, 0, 1, 0)],
+            vec![Constant::Number(1.0)],
+            vec![("w", 0, 2)],
+        );
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("local w = nil\nw = 1"), "{out}");
+        // `x = nil` as the first statement: SETGLOBAL of an untouched register
+        let out = decompiled(vec![insx(7, 0, 0), ins(30, 0, 1, 0)], vec![s("x")], vec![]);
+        assert!(is_complete(&out), "{out}");
+        assert!(out.contains("x = nil"), "{out}");
     }
 
     #[test]
