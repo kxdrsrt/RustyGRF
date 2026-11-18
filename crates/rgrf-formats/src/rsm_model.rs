@@ -6,8 +6,9 @@
 //! (GPL-3.0, behaviour only, no code copied): a node's matrix is its parent's matrix, moved by the
 //! node position, turned by its rotation (axis and angle, or the first rotation key) and scaled;
 //! the vertices then go through the node's offset and its 3 x 3 matrix. Versions 2.2 and 2.3 store
-//! no position, angle or scale in the node; their first key frames are used instead (to be checked
-//! against real models).
+//! no position, angle or scale in the node: the offset and 3 x 3 matrix are the node's own position
+//! and rotation, replaced by the key frames when there are any (measured on real models, see
+//! `docs/09-formats.md`). Up is negative y before 2.2 and positive y from 2.2 on.
 
 use crate::rsm::{Reader, RsmError, V1_2, V1_4, V1_6, V2_2, V2_3};
 use crate::version::Version;
@@ -399,50 +400,9 @@ pub struct StaticModel {
     pub triangles: usize,
 }
 
-fn node_matrices(m: &Model) -> Vec<Mat4> {
-    // a node's matrix needs its parent's; nodes can come in any order and parents can be missing
-    let by_name: HashMap<&[u8], usize> = m
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.name.as_slice(), i))
-        .collect();
-    let mut done: Vec<Option<Mat4>> = vec![None; m.nodes.len()];
-    fn go(
-        i: usize,
-        m: &Model,
-        by_name: &HashMap<&[u8], usize>,
-        done: &mut Vec<Option<Mat4>>,
-        depth: usize,
-    ) -> Mat4 {
-        if let Some(d) = done[i] {
-            return d;
-        }
-        let n = &m.nodes[i];
-        let parent = by_name
-            .get(n.parent.as_slice())
-            .copied()
-            .filter(|&p| p != i && depth < 64);
-        let base = parent.map_or(IDENTITY, |p| go(p, m, by_name, done, depth + 1));
-        let pos = n.pos_keys.first().map_or(n.pos, |k| k.1);
-        let rot = n
-            .rot_keys
-            .first()
-            .map_or_else(|| axis_angle(n.rot_angle, n.rot_axis), |k| from_quat(k.1));
-        let scale = n.scale_keys.first().map_or(n.scale, |k| k.1);
-        let mat = mul(&mul(&mul(&base, &translation(pos)), &rot), &scaling(scale));
-        done[i] = Some(mat);
-        mat
-    }
-    (0..m.nodes.len())
-        .map(|i| go(i, m, &by_name, &mut done, 0))
-        .collect()
-}
-
 /// The model's static pose as triangles grouped by texture.
 pub fn static_pose(m: &Model) -> StaticModel {
-    let mats = node_matrices(m);
-    let only = m.nodes.len() == 1;
+    let mats = node_matrices_at(m, 0.0);
     struct Raw {
         texture: Vec<u8>,
         pos: [[f32; 3]; 3],
@@ -451,11 +411,7 @@ pub fn static_pose(m: &Model) -> StaticModel {
     }
     let mut raw: Vec<Raw> = Vec::new();
     for (ni, n) in m.nodes.iter().enumerate() {
-        let mut vm = mats[ni];
-        if !only {
-            vm = mul(&vm, &translation(n.offset));
-        }
-        vm = mul(&vm, &from_mat3(&n.mat3));
+        let vm = mul(&mats[ni], &local_matrix(m, ni));
         let world: Vec<[f32; 3]> = n.vertices.iter().map(|&v| apply(&vm, v)).collect();
         // face normals in the transformed space
         let face_normal: Vec<[f32; 3]> = n
@@ -545,8 +501,15 @@ pub fn static_pose(m: &Model) -> StaticModel {
         min = [0.0; 3];
         max = [0.0; 3];
     }
-    let (cx, cz, bottom) = ((min[0] + max[0]) / 2.0, (min[2] + max[2]) / 2.0, max[1]);
-    let to_view = |p: [f32; 3]| [p[0] - cx, bottom - p[1], p[2] - cz];
+    // up is negative y before version 2.2 and positive y from 2.2 on
+    let down = m.version < V2_2;
+    let (cx, cz) = ((min[0] + max[0]) / 2.0, (min[2] + max[2]) / 2.0);
+    let bottom = if down { max[1] } else { min[1] };
+    let to_view = |p: [f32; 3]| {
+        let y = if down { bottom - p[1] } else { p[1] - bottom };
+        [p[0] - cx, y, p[2] - cz]
+    };
+    let up = if down { -1.0 } else { 1.0 };
     let mut parts: Vec<Part> = Vec::new();
     let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
     for r in &raw {
@@ -563,15 +526,20 @@ pub fn static_pose(m: &Model) -> StaticModel {
         for k in 0..3 {
             part.positions.extend(to_view(r.pos[k]));
             part.normals
-                .extend([r.normal[k][0], -r.normal[k][1], r.normal[k][2]]);
+                .extend([r.normal[k][0], up * r.normal[k][1], r.normal[k][2]]);
             part.uvs.extend(r.uv[k]);
         }
     }
+    let (lo, hi) = if down {
+        (bottom - max[1], bottom - min[1])
+    } else {
+        (0.0, max[1] - bottom)
+    };
     StaticModel {
         triangles: raw.len(),
         parts,
-        min: [min[0] - cx, bottom - max[1], min[2] - cz],
-        max: [max[0] - cx, bottom - min[1], max[2] - cz],
+        min: [min[0] - cx, lo, min[2] - cz],
+        max: [max[0] - cx, hi, max[2] - cz],
         alpha: m.alpha,
     }
 }
@@ -680,9 +648,25 @@ pub fn node_matrices_at(m: &Model, t: f32) -> Vec<[f32; 16]> {
             .copied()
             .filter(|&p| p != i && depth < 64);
         let base = parent.map_or(IDENTITY, |p| go(p, m, t, by_name, done, depth + 1));
-        let pos = bracket(m, &n.pos_keys, t).map_or(n.pos, |(a, b, f)| lerp3(a, b, f));
+        // from 2.2 on, the offset and the 3 x 3 matrix are the node's own position and rotation
+        // (the key frames replace them); before, they are applied to the vertices on top
+        let rsm2 = m.version >= V2_2;
+        let rest_pos = if !rsm2 {
+            n.pos
+        } else if m.nodes.len() == 1 {
+            [0.0; 3]
+        } else {
+            n.offset
+        };
+        let pos = bracket(m, &n.pos_keys, t).map_or(rest_pos, |(a, b, f)| lerp3(a, b, f));
         let rot = bracket(m, &n.rot_keys, t).map_or_else(
-            || axis_angle(n.rot_angle, n.rot_axis),
+            || {
+                if rsm2 {
+                    from_mat3(&n.mat3)
+                } else {
+                    axis_angle(n.rot_angle, n.rot_axis)
+                }
+            },
             |(a, b, f)| from_quat(slerp(a, b, f)),
         );
         let scale = bracket(m, &n.scale_keys, t).map_or(n.scale, |(a, b, f)| lerp3(a, b, f));
@@ -695,9 +679,13 @@ pub fn node_matrices_at(m: &Model, t: f32) -> Vec<[f32; 16]> {
         .collect()
 }
 
-/// The part of a node's vertex transform that does not move: offset and the 3 x 3 matrix.
+/// The part of a node's vertex transform that does not move: offset and the 3 x 3 matrix
+/// (before version 2.2; from 2.2 on they are the node's own position and rotation instead).
 pub fn local_matrix(m: &Model, node: usize) -> [f32; 16] {
     let n = &m.nodes[node];
+    if m.version >= V2_2 {
+        return IDENTITY;
+    }
     let mut vm = IDENTITY;
     if m.nodes.len() != 1 {
         vm = mul(&vm, &translation(n.offset));
@@ -806,10 +794,13 @@ pub fn view_matrix(m: &Model) -> [f32; 16] {
     if lo[0] > hi[0] {
         return IDENTITY;
     }
-    let (cx, cz, bottom) = ((lo[0] + hi[0]) / 2.0, (lo[2] + hi[2]) / 2.0, hi[1]);
-    // y' = bottom - y, x' = x - cx, z' = z - cz
-    let shift = translation([-cx, -bottom, -cz]);
-    mul(&scaling([1.0, -1.0, 1.0]), &shift)
+    let (cx, cz) = ((lo[0] + hi[0]) / 2.0, (lo[2] + hi[2]) / 2.0);
+    if m.version < V2_2 {
+        // y' = bottom - y, x' = x - cx, z' = z - cz
+        mul(&scaling([1.0, -1.0, 1.0]), &translation([-cx, -hi[1], -cz]))
+    } else {
+        translation([-cx, -lo[1], -cz])
+    }
 }
 
 #[cfg(test)]
@@ -991,6 +982,53 @@ mod tests {
                 st.max
             );
         }
+    }
+
+    #[test]
+    fn from_2_2_up_is_positive_y() {
+        let tri = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]];
+        let mut m = parse(&model(&[("root", "", [0.0; 3], tri)])).unwrap();
+        m.version = V2_2;
+        let s = static_pose(&m);
+        assert_eq!((s.min[1], s.max[1]), (0.0, 10.0));
+        let v = view_matrix(&m);
+        assert_eq!(apply(&v, [0.0, 10.0, 0.0])[1], 10.0);
+        assert_eq!(apply(&v, [0.0, 0.0, 0.0])[1], 0.0);
+        // the pieces in node space land where the static pose has them
+        let top = s.parts[0]
+            .positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|p| p[1])
+            .fold(0.0, f32::max);
+        assert_eq!(top, 10.0);
+    }
+
+    #[test]
+    fn from_2_2_the_offset_and_matrix_are_the_nodes_own_pose_not_added_to_its_keys() {
+        let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut m = parse(&model(&[
+            ("root", "", [0.0; 3], tri),
+            ("head", "root", [0.0; 3], tri),
+        ]))
+        .unwrap();
+        m.nodes[1].offset = [0.0, 10.0, 0.0];
+        m.version = V2_2;
+        m.frame_rate = 30.0;
+        let at = |m: &Model| {
+            apply(
+                &node_matrices_at(m, 0.0)[1],
+                apply(&local_matrix(m, 1), [0.0; 3]),
+            )
+        };
+        // without keys the offset places the node once
+        assert_eq!(at(&m), [0.0, 10.0, 0.0]);
+        // a position key with the same value must not double it
+        m.nodes[1].pos_keys = vec![(0, [0.0, 10.0, 0.0]), (30, [0.0, 12.0, 0.0])];
+        assert_eq!(at(&m), [0.0, 10.0, 0.0]);
+        let end = apply(&node_matrices_at(&m, 1000.0)[1], [0.0; 3]);
+        assert_eq!(end, [0.0, 12.0, 0.0]);
     }
 
     #[test]

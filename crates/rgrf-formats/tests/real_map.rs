@@ -459,6 +459,9 @@ fn every_rsm_has_geometry_and_a_finite_pose() {
             let d = duration_ms(&m);
             if d > 0.0 {
                 animated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if d < 6000.0 && std::env::var_os("RGRF_LIST_ANIMATED").is_some() {
+                    eprintln!("  animated {d:.0} ms: {name}");
+                }
             }
             for t in [0.0, d / 3.0, d / 2.0, d] {
                 if node_matrices_at(&m, t)
