@@ -122,3 +122,44 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
     // exit code 3: the check found errors (same as `verify`)
     Ok(if failed.is_empty() { 0 } else { 3 })
 }
+
+/// `rgrf lua decompile`: source (or the bytecode listing) of a compiled Lua 5.1 file.
+pub fn decompile(
+    input: &Path,
+    entry: Option<&str>,
+    output: Option<&Path>,
+    listing: bool,
+    names: NameMode,
+) -> Result<i32> {
+    use rgrf_core::GrfPath;
+    use rgrf_formats::{luac, luadec};
+    let (data, what) = crate::spr_cmd::load(input, entry, names)?;
+    if !data.starts_with(b"\x1bLua") {
+        bail!("{what} is not compiled Lua (it is plain text already)");
+    }
+    let chunk = luac::parse(&data).with_context(|| format!("{what} cannot be read"))?;
+    // names and strings in the client's scripts are Korean text (CP949)
+    let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+    let (text, complete) = if listing {
+        (luac::disassemble(&chunk, &show), true)
+    } else {
+        let t = luadec::decompile(&chunk, &show);
+        let c = luadec::is_complete(&t);
+        (t, c)
+    };
+    match output {
+        Some(p) => {
+            if p.exists() {
+                bail!("{} exists already; remove it first", p.display());
+            }
+            fs::write(p, &text).with_context(|| format!("cannot write {}", p.display()))?;
+            eprintln!(
+                "wrote {}{}",
+                p.display(),
+                if complete { "" } else { " (partly decompiled)" }
+            );
+        }
+        None => print!("{text}"),
+    }
+    Ok(if complete { 0 } else { 2 })
+}

@@ -1304,8 +1304,28 @@ impl Session {
             "rsm" | "rsm2" => self.preview_model(&data)?,
             "txt" | "xml" | "lua" | "lub" | "ini" | "csv" | "json" | "log" => {
                 if data.starts_with(b"\x1bLua") {
-                    Preview::Message {
-                        text: "Compiled Lua (bytecode), no text to show".into(),
+                    match rgrf_formats::luac::parse(&data) {
+                        Ok(chunk) => {
+                            let names = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+                            let mut text = rgrf_formats::luadec::decompile(&chunk, &names);
+                            let complete = rgrf_formats::luadec::is_complete(&text);
+                            let truncated = text.chars().count() > MAX_TEXT_CHARS;
+                            if truncated {
+                                text = text.chars().take(MAX_TEXT_CHARS).collect();
+                            }
+                            Preview::Text {
+                                text,
+                                encoding: if complete {
+                                    "decompiled from Lua 5.1 bytecode".into()
+                                } else {
+                                    "partly decompiled (functions with loops or complex conditions stay as a listing)".into()
+                                },
+                                truncated,
+                            }
+                        }
+                        Err(e) => Preview::Message {
+                            text: format!("Compiled Lua (bytecode) that cannot be shown yet: {e}"),
+                        },
                     }
                 } else {
                     let (mut text, encoding) = decode_text(&data);

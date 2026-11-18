@@ -8,6 +8,8 @@ pub mod gif_io;
 pub mod gnd;
 pub mod gnd_map;
 pub mod lua;
+pub mod luac;
+pub mod luadec;
 pub mod pal;
 pub mod png_io;
 pub mod render;

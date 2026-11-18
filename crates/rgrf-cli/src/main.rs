@@ -290,6 +290,21 @@ enum LuaCmd {
         /// For a GRF: only entries matching this pattern (glob or substring)
         pattern: Option<String>,
     },
+    /// Decompile a compiled Lua 5.1 file (.lub) to source; loops and complex conditions stay as a
+    /// bytecode listing in comments, so the output may be partial (exit code 2 then)
+    Decompile {
+        /// A .lub file, or a .grf archive together with --entry
+        input: PathBuf,
+        /// The entry inside the GRF (e.g. data\\luafiles514\\lua files\\deletefiles.lub)
+        #[arg(long)]
+        entry: Option<String>,
+        /// Write the source here instead of printing it
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Print the bytecode listing (like luac -l) instead of source
+        #[arg(long)]
+        listing: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -769,6 +784,18 @@ fn run(cli: &Cli) -> Result<i32> {
             LuaCmd::Check { input, pattern } => {
                 lua_cmd::check(input, pattern.as_deref(), cli.names, cli.json)
             }
+            LuaCmd::Decompile {
+                input,
+                entry,
+                output,
+                listing,
+            } => lua_cmd::decompile(
+                input,
+                entry.as_deref(),
+                output.as_deref(),
+                *listing,
+                cli.names,
+            ),
         },
         Cmd::Act { action } => match action {
             ActCmd::Info { input, entry } => {

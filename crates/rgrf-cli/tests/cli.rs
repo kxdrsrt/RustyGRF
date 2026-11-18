@@ -1534,3 +1534,72 @@ fn map_check_on_the_real_full_client() {
     assert_eq!(v["maps_checked"], 3);
     assert!(v["files_looked_up"].as_u64().unwrap() > 500);
 }
+
+/// `x = 1` as Lua 5.1 bytecode (LOADK, SETGLOBAL, RETURN), written by hand.
+fn tiny_lub() -> Vec<u8> {
+    let mut b = b"\x1bLuaQ\x00\x01\x04\x04\x04\x08\x00".to_vec();
+    let s = |v: &mut Vec<u8>, t: &str| {
+        v.extend(((t.len() + 1) as u32).to_le_bytes());
+        v.extend(t.as_bytes());
+        v.push(0);
+    };
+    s(&mut b, "@t.lua");
+    b.extend([0u8; 8]); // line defined, last line
+    b.extend([0, 0, 2, 2]); // upvalues, params, vararg, stack
+    b.extend(3u32.to_le_bytes());
+    for i in [1u32, 7 | (1 << 14), 30 | (1 << 23)] {
+        b.extend(i.to_le_bytes());
+    }
+    b.extend(2u32.to_le_bytes());
+    b.push(3);
+    b.extend(1.0f64.to_le_bytes());
+    b.push(4);
+    s(&mut b, "x");
+    b.extend([0u8; 16]); // protos, lines, locals, upvalue names
+    b
+}
+
+#[test]
+fn lua_decompile_prints_source_and_refuses_text() {
+    let dir = tmpdir("decompile");
+    std::fs::create_dir_all(&dir).unwrap();
+    let lub = dir.join("t.lub");
+    std::fs::write(&lub, tiny_lub()).unwrap();
+    let o = rgrf(&["lua", "decompile", lub.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("x = 1"), "{out}");
+    let o = rgrf(&["lua", "decompile", "--listing", lub.to_str().unwrap()]);
+    assert!(String::from_utf8_lossy(&o.stdout).contains("SETGLOBAL"));
+    // to a file, which is never overwritten
+    let target = dir.join("t.lua");
+    let o = rgrf(&[
+        "lua",
+        "decompile",
+        lub.to_str().unwrap(),
+        "-o",
+        target.to_str().unwrap(),
+    ]);
+    assert!(o.status.success());
+    assert!(std::fs::read_to_string(&target).unwrap().contains("x = 1"));
+    assert!(
+        !rgrf(&[
+            "lua",
+            "decompile",
+            lub.to_str().unwrap(),
+            "-o",
+            target.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    // plain text is refused
+    let txt = dir.join("p.lub");
+    std::fs::write(&txt, "x = 1").unwrap();
+    assert!(
+        !rgrf(&["lua", "decompile", txt.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
