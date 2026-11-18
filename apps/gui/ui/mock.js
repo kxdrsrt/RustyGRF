@@ -100,6 +100,12 @@ if (!window.__TAURI__) {
           case "stage_remove":
             for (const i of a.indices) pendingRows.push({ kind: "remove", name: all[i].name, file: null });
             return pendingRows;
+          case "stage_spr_image":
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: `image ${a.frame} from x.png` });
+            return pendingRows;
+          case "stage_act_interval":
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action}: ${a.ms} ms per frame` });
+            return pendingRows;
           case "pending":
             return pendingRows;
           case "discard_pending":

@@ -51,7 +51,7 @@ function ask(title, body, buttons) {
     const dlg = $("dlg");
     $("dlg-title").textContent = title;
     const b = $("dlg-body");
-    b.replaceChildren(...(Array.isArray(body) ? body : [body]));
+    b.replaceChildren(...(Array.isArray(body) ? body : [body]).filter(Boolean));
     const actions = $("dlg-actions");
     actions.replaceChildren(
       ...buttons.map((x) =>
@@ -241,7 +241,7 @@ async function showPreview(row, action) {
   const meta = el("div", { class: "meta" });
   meta.textContent = `${fmtBytes(details.size)} unpacked, ${fmtBytes(details.stored)} stored (${details.codec}), offset ${fmtNum(details.offset)}`;
   head.replaceChildren(el("div", { class: "title", text: details.name }), meta);
-  body.replaceChildren(...renderPreview(preview, row, meta));
+  body.replaceChildren(...renderPreview(preview, row, meta).filter(Boolean));
 }
 
 const dataUrl = (mime, data) => `data:${mime};base64,${data}`;
@@ -269,8 +269,14 @@ function renderPreview(p, row, meta) {
         el(
           "div",
           { class: "frames" },
-          p.frames.map((f) =>
-            el("figure", {}, el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", f.png), alt: f.label })), el("figcaption", { text: f.label })),
+          p.frames.map((f, i) =>
+            el(
+              "figure",
+              {},
+              el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", f.png), alt: f.label })),
+              el("figcaption", { text: f.label }),
+              el("button", { type: "button", class: "small", text: "Replace…", title: "Replace this image with a PNG (staged, saved with Changes…)", onclick: () => replaceImage(row, i) }),
+            ),
           ),
         ),
         infoBlock(p.info),
@@ -285,6 +291,7 @@ function renderPreview(p, row, meta) {
         { class: "controls" },
         el("label", { text: "Action " }, sel),
         el("span", { class: "muted", text: `${p.frames} frame(s), ${p.interval_ms} ms each` }),
+        el("button", { type: "button", class: "small", text: "Set interval…", title: "Change the frame time of this action (staged, saved with Changes…)", onclick: () => setInterval_(row, p.action, p.interval_ms) }),
       );
       return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: `warning: ${p.note}` }) : null];
     }
@@ -344,6 +351,29 @@ function updateEditBar() {
 function setPending(rows) {
   S.pending = rows;
   updateEditBar();
+}
+
+async function replaceImage(row, frame) {
+  const png = await T.dialog.open({ multiple: false, directory: false, title: `PNG for image ${frame} of ${row.name}`, filters: [{ name: "PNG image", extensions: ["png"] }] });
+  if (!png) return;
+  try {
+    setPending(await invoke("stage_spr_image", { index: row.index, frame, png }));
+    setStatus(`Image ${frame} of ${row.name} staged (colours are mapped to the sprite's palette). The preview shows the saved archive; save with Changes….`);
+  } catch (e) {
+    await note("Could not replace the image", errText(e), true);
+  }
+}
+
+async function setInterval_(row, action, current) {
+  const input = el("input", { type: "number", class: "field", min: "1", step: "1", value: String(current) });
+  const go = await ask(`Interval of action ${action}`, [el("p", { text: "Time per frame in milliseconds (the file stores multiples of 25 ms):" }), input], [{ label: "Set", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  try {
+    setPending(await invoke("stage_act_interval", { index: row.index, action, ms: Number(input.value) }));
+    setStatus(`Interval of action ${action} staged; save with Changes….`);
+  } catch (e) {
+    await note("Could not set the interval", errText(e), true);
+  }
 }
 
 async function doReplace() {

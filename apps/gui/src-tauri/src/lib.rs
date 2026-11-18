@@ -203,6 +203,36 @@ async fn stage_add(state: State<'_, AppState>, path: String, file: String) -> Re
     .await
 }
 
+/// Replaces image `frame` of the sprite `index` with a PNG file.
+#[tauri::command]
+async fn stage_spr_image(
+    state: State<'_, AppState>,
+    index: usize,
+    frame: usize,
+    png: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_spr_image(index, frame, &PathBuf::from(png))?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Sets the frame interval (milliseconds) of an action of the animation `index`.
+#[tauri::command]
+async fn stage_act_interval(
+    state: State<'_, AppState>,
+    index: usize,
+    action: usize,
+    ms: f32,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_act_interval(index, action, ms)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Removes the given entries, or everything in the current search when `indices` is empty.
 #[tauri::command]
 async fn stage_remove(state: State<'_, AppState>, indices: Vec<usize>) -> Res<Vec<PendingRow>> {
@@ -278,6 +308,8 @@ pub fn run() {
             stage_replace,
             stage_add,
             stage_remove,
+            stage_spr_image,
+            stage_act_interval,
             pending,
             discard_pending,
             save_edited,

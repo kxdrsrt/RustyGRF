@@ -16,14 +16,15 @@ use rgrf_core::verify::{Severity, VerifyOptions, verify};
 use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
 use rgrf_formats::act::Act;
+use rgrf_formats::edit::quantize;
 use rgrf_formats::gat::{self, Gat};
 use rgrf_formats::gif_io::{delay_cs, encode_gif, upscale};
 use rgrf_formats::gnd::GndSummary;
-use rgrf_formats::png_io::rgba_to_png;
+use rgrf_formats::png_io::{Frame as PngFrame, frame_from_png, rgba_to_png};
 use rgrf_formats::render::{bounds_of, render_frame};
 use rgrf_formats::rsm::Rsm;
 use rgrf_formats::rsw::{self, Rsw};
-use rgrf_formats::spr::{RgbaImage, Spr};
+use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr};
 use serde::{Deserialize, Serialize};
 
 /// Largest entry the preview reads (bigger ones show only their details).
@@ -48,6 +49,12 @@ enum Change {
         name: GrfPath,
         file: PathBuf,
     },
+    /// Edited content of a sprite or animation, with what was changed in it.
+    PutBytes {
+        name: GrfPath,
+        data: Vec<u8>,
+        what: Vec<String>,
+    },
     Remove {
         name: GrfPath,
     },
@@ -56,7 +63,7 @@ enum Change {
 impl Change {
     fn name(&self) -> &GrfPath {
         match self {
-            Self::Put { name, .. } | Self::Remove { name } => name,
+            Self::Put { name, .. } | Self::PutBytes { name, .. } | Self::Remove { name } => name,
         }
     }
 }
@@ -234,6 +241,63 @@ pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, 
     })
 }
 
+/// `png` replaces image `frame` (palette images first, then true-colour ones, as in the preview).
+pub fn replace_spr_image(data: &[u8], frame: usize, png: &[u8]) -> Result<Vec<u8>, String> {
+    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+    let new = frame_from_png(png).map_err(|e| e.to_string())?;
+    let to_rgba = |img: &IndexedImage, pal: &[u8; PALETTE_LEN]| RgbaImage {
+        width: img.width,
+        height: img.height,
+        pixels: img
+            .pixels
+            .iter()
+            .flat_map(|&i| {
+                let i = usize::from(i);
+                [
+                    pal[4 * i],
+                    pal[4 * i + 1],
+                    pal[4 * i + 2],
+                    if i == 0 { 0 } else { 255 },
+                ]
+            })
+            .collect(),
+    };
+    let n_indexed = spr.indexed.len();
+    if frame < n_indexed {
+        let pal = spr.palette.clone().ok_or("the sprite has no palette")?;
+        let image = match new {
+            PngFrame::Indexed { image, palette }
+                if (0..256).all(|i| palette[4 * i..4 * i + 3] == pal[4 * i..4 * i + 3]) =>
+            {
+                image
+            }
+            PngFrame::Indexed { image, palette } => quantize(&to_rgba(&image, &palette), &pal),
+            PngFrame::Rgba(img) => quantize(&img, &pal),
+        };
+        spr.replace_indexed(frame, image)
+            .map_err(|e| e.to_string())?;
+    } else {
+        let img = match new {
+            PngFrame::Rgba(img) => img,
+            PngFrame::Indexed { image, palette } => to_rgba(&image, &palette),
+        };
+        spr.replace_rgba(frame - n_indexed, img)
+            .map_err(|e| e.to_string())?;
+    }
+    spr.to_bytes(spr.version).map_err(|e| e.to_string())
+}
+
+/// The ACT stores the interval in units of 25 ms.
+pub fn set_act_interval(data: &[u8], action: usize, ms: f32) -> Result<Vec<u8>, String> {
+    if !(ms.is_finite() && ms > 0.0) {
+        return Err("the interval must be a positive number of milliseconds".into());
+    }
+    let mut act = Act::parse(data).map_err(|e| e.to_string())?;
+    act.set_interval(action, ms / 25.0)
+        .map_err(|e| e.to_string())?;
+    act.to_bytes(act.version).map_err(|e| e.to_string())
+}
+
 fn check_file(file: &Path) -> Result<(), String> {
     let meta = std::fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
     if !meta.is_file() {
@@ -259,6 +323,10 @@ pub fn save_edited(
             Change::Put { name, file } => Edit::Put {
                 name: name.clone(),
                 data: std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
+            },
+            Change::PutBytes { name, data, .. } => Edit::Put {
+                name: name.clone(),
+                data: data.clone(),
             },
             Change::Remove { name } => Edit::Remove { name: name.clone() },
         });
@@ -503,6 +571,62 @@ impl Session {
         Ok(())
     }
 
+    /// The content the next edit of entry `index` starts from: an earlier staged edit, else the archive.
+    fn working_bytes(&self, index: usize) -> Result<(GrfPath, Vec<u8>, Vec<String>), String> {
+        let name = self.entry_name(index)?;
+        let key = name.key();
+        match self.pending.iter().find(|c| c.name().key() == key) {
+            Some(Change::PutBytes { data, what, .. }) => Ok((name, data.clone(), what.clone())),
+            Some(Change::Put { file, .. }) => {
+                let data = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+                Ok((name, data, vec![format!("replaced by {}", file.display())]))
+            }
+            Some(Change::Remove { .. }) => Err("the entry is marked for removal".into()),
+            None => Ok((name, self.read(index)?, Vec::new())),
+        }
+    }
+
+    /// Replaces image `frame` of a sprite with a PNG (palette sprites map its colours to the palette).
+    pub fn stage_spr_image(
+        &mut self,
+        index: usize,
+        frame: usize,
+        png: &Path,
+    ) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let png_bytes = std::fs::read(png).map_err(|e| format!("{}: {e}", png.display()))?;
+        let out = replace_spr_image(&data, frame, &png_bytes)?;
+        what.push(format!(
+            "image {frame} from {}",
+            png.file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+        ));
+        self.stage(Change::PutBytes {
+            name,
+            data: out,
+            what,
+        });
+        Ok(())
+    }
+
+    /// Sets the frame interval of an action of an animation, in milliseconds.
+    pub fn stage_act_interval(
+        &mut self,
+        index: usize,
+        action: usize,
+        ms: f32,
+    ) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let out = set_act_interval(&data, action, ms)?;
+        what.push(format!("action {action}: {ms} ms per frame"));
+        self.stage(Change::PutBytes {
+            name,
+            data: out,
+            what,
+        });
+        Ok(())
+    }
+
     pub fn stage_remove(&mut self, indices: &[usize]) -> Result<usize, String> {
         let names = indices
             .iter()
@@ -530,6 +654,11 @@ impl Session {
                     },
                     name: name.display(self.mode),
                     file: Some(file.display().to_string()),
+                },
+                Change::PutBytes { name, what, .. } => PendingRow {
+                    kind: "replace",
+                    name: name.display(self.mode),
+                    file: Some(what.join(", ")),
                 },
                 Change::Remove { name } => PendingRow {
                     kind: "remove",
@@ -1206,6 +1335,56 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn edits_inside_a_sprite_and_an_animation() {
+        let (dir, grf) = sample("inner");
+        let mut s = Session::open(&grf).unwrap();
+        let find = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+        let (spr_i, act_i) = (find(&mut s, "a.spr"), find(&mut s, "a.act"));
+        let red = RgbaImage {
+            width: 3,
+            height: 1,
+            pixels: vec![255, 0, 0, 255, 250, 5, 5, 255, 0, 0, 0, 0],
+        };
+        let png = dir.join("red.png");
+        fs::write(&png, rgba_to_png(&red).unwrap()).unwrap();
+        s.stage_spr_image(spr_i, 0, &png).unwrap();
+        assert!(s.stage_spr_image(spr_i, 5, &png).is_err(), "no such image");
+        s.stage_act_interval(act_i, 1, 100.0).unwrap();
+        assert!(s.stage_act_interval(act_i, 9, 100.0).is_err());
+        assert!(s.stage_act_interval(act_i, 0, 0.0).is_err());
+        // a second edit of the same entry builds on the first
+        s.stage_act_interval(act_i, 0, 50.0).unwrap();
+        let rows = s.pending();
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows[1].file.as_deref().unwrap().contains("action 1"),
+            "{rows:?}"
+        );
+        assert!(
+            rows[1].file.as_deref().unwrap().contains("action 0"),
+            "{rows:?}"
+        );
+
+        let out = dir.join("out.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let mut r = Session::open(&out).unwrap();
+        let (spr_i, act_i) = (find(&mut r, "a.spr"), find(&mut r, "a.act"));
+        let spr = Spr::parse(&r.read(spr_i).unwrap()).unwrap();
+        // the PNG's colours are mapped to the sprite's palette: red is the sprite's colour 1, transparent becomes 0
+        assert_eq!(spr.indexed[0].width, 3);
+        assert_eq!(spr.indexed[0].pixels, vec![1, 1, 0]);
+        let act = Act::parse(&r.read(act_i).unwrap()).unwrap();
+        assert_eq!(
+            (act.actions[0].interval, act.actions[1].interval),
+            (2.0, 4.0)
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
