@@ -280,21 +280,38 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
 /// client's files are 32-bit (size_t 4), which a 64-bit Lua refuses to load. Used to run the
 /// original code in a real Lua for comparisons.
 pub fn dump(chunk: &Chunk) -> Vec<u8> {
+    dump_layout(chunk, 8)
+}
+
+/// Writes a Lua 5.1 chunk in the layout of the client's own files (int 4, size_t 4), the form a
+/// 32-bit Lua, and so the Ragnarok Online client, loads.
+pub fn dump32(chunk: &Chunk) -> Vec<u8> {
+    dump_layout(chunk, 4)
+}
+
+fn dump_layout(chunk: &Chunk, size_t: u8) -> Vec<u8> {
     fn int(out: &mut Vec<u8>, v: usize) {
         out.extend((v as u32).to_le_bytes());
     }
-    fn string(out: &mut Vec<u8>, s: &[u8]) {
+    fn size(out: &mut Vec<u8>, n: usize, size_t: u8) {
+        if size_t == 8 {
+            out.extend((n as u64).to_le_bytes());
+        } else {
+            out.extend((n as u32).to_le_bytes());
+        }
+    }
+    fn string(out: &mut Vec<u8>, s: &[u8], size_t: u8) {
         // Size 0 would load as a NULL string, which Lua's GC dereferences for local names.
-        out.extend(((s.len() + 1) as u64).to_le_bytes());
+        size(out, s.len() + 1, size_t);
         out.extend(s);
         out.push(0);
     }
-    fn function(out: &mut Vec<u8>, f: &Function) {
+    fn function(out: &mut Vec<u8>, f: &Function, size_t: u8) {
         if f.source.is_empty() {
             // NULL source: Lua takes the parent's name
-            out.extend(0u64.to_le_bytes());
+            size(out, 0, size_t);
         } else {
-            string(out, &f.source);
+            string(out, &f.source, size_t);
         }
         int(out, f.line_defined as usize);
         int(out, f.last_line as usize);
@@ -314,13 +331,13 @@ pub fn dump(chunk: &Chunk) -> Vec<u8> {
                 }
                 Constant::Str(s) => {
                     out.push(4);
-                    string(out, s);
+                    string(out, s, size_t);
                 }
             }
         }
         int(out, f.protos.len());
         for p in &f.protos {
-            function(out, p);
+            function(out, p, size_t);
         }
         int(out, f.lines.len());
         for l in &f.lines {
@@ -328,18 +345,20 @@ pub fn dump(chunk: &Chunk) -> Vec<u8> {
         }
         int(out, f.locals.len());
         for l in &f.locals {
-            string(out, &l.name);
+            string(out, &l.name, size_t);
             int(out, l.start as usize);
             int(out, l.end as usize);
         }
         int(out, f.upvalue_names.len());
         for n in &f.upvalue_names {
-            string(out, n);
+            string(out, n, size_t);
         }
     }
-    // ESC Lua, 5.1, official format, little-endian, int 4, size_t 8, instruction 4, number 8, not integral
+    // ESC Lua, 5.1, official format, little-endian, int 4, size_t 4 or 8, instruction 4, number 8,
+    // not integral
     let mut out = b"\x1bLua\x51\x00\x01\x04\x08\x04\x08\x00".to_vec();
-    function(&mut out, &chunk.main);
+    out[8] = size_t;
+    function(&mut out, &chunk.main, size_t);
     out
 }
 

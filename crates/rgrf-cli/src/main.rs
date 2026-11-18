@@ -364,6 +364,35 @@ enum LuaCmd {
         #[arg(long)]
         listing: bool,
     },
+    /// Compile Lua 5.1 source (.lua, e.g. an edited decompiled file) to a client-ready .lub: the
+    /// same bytes as the real `luac` 5.1 makes, in the 32-bit layout the Ragnarok Online client loads
+    Compile {
+        /// The source file
+        input: PathBuf,
+        /// The .lub to write
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Drop line numbers and local names (luac -s); smaller, but error messages lose their lines
+        #[arg(long)]
+        strip: bool,
+        /// How non-ASCII characters become bytes: auto (UTF-8 if the first line says
+        /// `strings: UTF-8`, else CP949), cp949 or utf8
+        #[arg(long, value_enum, default_value = "auto")]
+        encoding: EncodingArg,
+        /// Name stored in the file for error messages (default: `@` and the file name)
+        #[arg(long)]
+        name: Option<String>,
+        /// Replace an existing output file
+        #[arg(long)]
+        overwrite: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum EncodingArg {
+    Auto,
+    Cp949,
+    Utf8,
 }
 
 #[derive(Subcommand)]
@@ -880,6 +909,26 @@ fn run(cli: &Cli) -> Result<i32> {
             }
         },
         Cmd::Lua { action } => match action {
+            LuaCmd::Compile {
+                input,
+                output,
+                strip,
+                encoding,
+                name,
+                overwrite,
+            } => lua_cmd::compile(
+                input,
+                output,
+                *strip,
+                match encoding {
+                    EncodingArg::Auto => rgrf_formats::luacomp::TextEncoding::Auto,
+                    EncodingArg::Cp949 => rgrf_formats::luacomp::TextEncoding::Cp949,
+                    EncodingArg::Utf8 => rgrf_formats::luacomp::TextEncoding::Utf8,
+                },
+                name.as_deref(),
+                *overwrite,
+                cli.json,
+            ),
             LuaCmd::Check { input, pattern } => {
                 lua_cmd::check(input, pattern.as_deref(), cli.names, cli.json)
             }

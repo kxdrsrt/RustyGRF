@@ -21,7 +21,7 @@ use mlua::Lua;
 use mlua::chunk::ChunkMode;
 use rayon::prelude::*;
 use rgrf_core::{Archive, NameMode};
-use rgrf_formats::{luac, luac50, luadec};
+use rgrf_formats::{luac, luac50, luacomp, luadec};
 
 /// The sandbox, valid Lua 5.0 and 5.1 (no `#`, no string methods, no `...` in expressions:
 /// `PACK` is filled in per version).
@@ -547,6 +547,7 @@ fn compile_real(source: &[u8]) -> Result<Vec<u8>, String> {
     let lua = unsafe { Lua::unsafe_new() };
     let f = lua
         .load(source)
+        .set_name("=t")
         .set_mode(ChunkMode::Text)
         .into_function()
         .map_err(|e| e.to_string())?;
@@ -582,7 +583,18 @@ fn compare_functions(a: &luac::Function, b: &luac::Function, path: &str) -> Opti
         ));
     }
     if a.constants != b.constants {
-        return Some(format!("{path}: constants differ"));
+        let i = a
+            .constants
+            .iter()
+            .zip(&b.constants)
+            .position(|(x, y)| x != y);
+        return Some(format!(
+            "{path}: constants differ at {i:?}: {:?} / {:?} ({} / {} constants)",
+            i.map(|i| &a.constants[i]),
+            i.map(|i| &b.constants[i]),
+            a.constants.len(),
+            b.constants.len()
+        ));
     }
     let names = |f: &luac::Function| f.locals.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
     if names(a) != names(b) {
@@ -614,9 +626,18 @@ fn recompile_check(files: &[Entry]) -> usize {
                 let original = luac::parse(&f.data).map_err(|e| e.to_string())?;
                 let text = decompile(&f.data).ok_or("cannot decompile")?;
                 let source = encode_text(&text)?;
-                let bytes = if let Some(luac_bin) = &luac_bin {
-                    let (src, out) =
-                        (dir.join(format!("{n}.lua")), dir.join(format!("{n}.out")));
+                let bytes = if std::env::var_os("LV_OURS").is_some() {
+                    // our compiler, fed with the Unicode text as a user would
+                    let cp949 = |run: &str| {
+                        rgrf_core::GrfPath::from_display(run, NameMode::Cp949)
+                            .map(|p| p.as_bytes().to_vec())
+                    };
+                    let c =
+                        luacomp::compile_text(&text, b"=t", luacomp::TextEncoding::Auto, &cp949)
+                            .map_err(|e| e.to_string())?;
+                    luac::dump32(&c)
+                } else if let Some(luac_bin) = &luac_bin {
+                    let (src, out) = (dir.join(format!("{n}.lua")), dir.join(format!("{n}.out")));
                     std::fs::write(&src, &source).map_err(|e| e.to_string())?;
                     let st = std::process::Command::new(luac_bin)
                         .arg("-o")
@@ -659,14 +680,507 @@ fn recompile_check(files: &[Entry]) -> usize {
     bad
 }
 
+/// Our compiler against the real Lua 5.1.5: the decompiled text of every 5.1 file compiles to
+/// exactly the same bytes (code, constants, line numbers, local and upvalue names).
+fn compile_equal_check(files: &[Entry]) -> usize {
+    let results: Vec<(String, Result<(), String>)> = files
+        .par_iter()
+        .filter(|f| f.data[4] == 0x51)
+        .filter(|f| std::env::var("LV_ONLY").map_or(true, |o| f.name.contains(&o)))
+        .map(|f| {
+            let verdict = (|| {
+                let text = decompile(&f.data).ok_or("cannot decompile")?;
+                let source = encode_text(&text)?;
+                let real = compile_real(&source)?;
+                let ours = luacomp::compile(&source, b"=t").map_err(|e| e.to_string())?;
+                let ours = luac::dump(&ours);
+                if real == ours {
+                    return Ok(());
+                }
+                let at = real.iter().zip(&ours).position(|(a, b)| a != b);
+                // find where the two chunks first differ structurally for a readable message
+                let detail = match (luac::parse(&real), luac::parse(&ours)) {
+                    (Ok(a), Ok(b)) => compare_functions(&a.main, &b.main, "main")
+                        .unwrap_or_else(|| "same code, differs in debug info".into()),
+                    _ => "cannot parse".into(),
+                };
+                Err(format!(
+                    "bytes differ at {at:?} ({} / {} bytes): {detail}",
+                    real.len(),
+                    ours.len()
+                ))
+            })();
+            (f.name.clone(), verdict)
+        })
+        .collect();
+    let bad = results.iter().filter(|(_, r)| r.is_err()).count();
+    println!(
+        "compile check: {} 5.1 files, {} compile to exactly the bytes of real Lua 5.1.5, {bad} differ",
+        results.len(),
+        results.len() - bad
+    );
+    for (n, r) in results.iter().filter(|(_, r)| r.is_err()).take(40) {
+        println!("DIFF {n}: {}", r.as_ref().unwrap_err());
+    }
+    bad
+}
+
+/// A small random generator of valid Lua 5.1 programs for the differential test of the compiler.
+struct Gen {
+    rng: u64,
+    /// Local variable names visible, per function level (innermost last).
+    scopes: Vec<Vec<String>>,
+    vararg: Vec<bool>,
+    loops: Vec<u32>,
+    out: String,
+    next_name: u32,
+}
+
+impl Gen {
+    fn new(seed: u64) -> Self {
+        Self {
+            rng: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03,
+            scopes: vec![Vec::new()],
+            vararg: vec![true],
+            loops: vec![0],
+            out: String::new(),
+            next_name: 0,
+        }
+    }
+    fn r(&mut self, n: u32) -> u32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        ((self.rng >> 11) % u64::from(n)) as u32
+    }
+    fn fresh(&mut self) -> String {
+        self.next_name += 1;
+        format!("v{}", self.next_name)
+    }
+    fn any_var(&mut self) -> String {
+        let visible: Vec<String> = self.scopes.iter().flatten().cloned().collect();
+        if !visible.is_empty() && self.r(3) != 0 {
+            let i = self.r(visible.len() as u32) as usize;
+            visible[i].clone()
+        } else {
+            format!("g{}", self.r(5))
+        }
+    }
+    fn number(&mut self) -> String {
+        match self.r(8) {
+            0 if self.r(4) == 0 => self.unique(),
+            0 => "0".into(),
+            1 => "1".into(),
+            2 => format!("{}", self.r(300)),
+            3 => format!("{}.{}", self.r(20), self.r(100)),
+            4 => format!("{}e{}", self.r(9) + 1, self.r(5)),
+            5 => format!("0x{:x}", self.r(5000)),
+            6 => format!("{}", 7),
+            _ => format!(".{}", self.r(9) + 1),
+        }
+    }
+    fn unique(&mut self) -> String {
+        format!("{}.5", 1000 + self.r(100_000))
+    }
+    fn string(&mut self) -> String {
+        match self.r(5) {
+            0 => "\"a\"".into(),
+            1 => "'b\\n'".into(),
+            2 => "[[long]]".into(),
+            3 => format!("\"k{}\"", self.r(6)),
+            _ => "\"\\65\\066\"".into(),
+        }
+    }
+    fn expr(&mut self, d: u32) -> String {
+        if d == 0 {
+            return match self.r(6) {
+                0 => self.number(),
+                1 => self.string(),
+                2 => ["nil", "true", "false"][self.r(3) as usize].into(),
+                _ => self.any_var(),
+            };
+        }
+        match self.r(18) {
+            0 => self.number(),
+            1 => self.string(),
+            2 => ["nil", "true", "false"][self.r(3) as usize].into(),
+            3 | 4 => self.any_var(),
+            5..=7 => {
+                // no `%`: Apple's compiler fuses the folded `a - floor(a/b)*b` of the reference Lua
+                // into an FMA, so its constants differ from the x86 `luac` the client used
+                let ops = [
+                    "+", "-", "*", "/", "^", "..", "==", "~=", "<", "<=", ">", ">=", "and", "or",
+                ];
+                let o = ops[self.r(ops.len() as u32) as usize];
+                format!("({} {o} {})", self.expr(d - 1), self.expr(d - 1))
+            }
+            8 => {
+                let o = ["-", "not ", "#"][self.r(3) as usize];
+                format!("({o}{})", self.expr(d - 1))
+            }
+            9 => self.table(d - 1),
+            10 => format!("{}({})", self.any_var(), self.args(d - 1)),
+            11 => format!("{}:m{}({})", self.any_var(), self.r(3), self.args(d - 1)),
+            12 => format!("{}.f{}", self.any_var(), self.r(4)),
+            13 => format!("{}[{}]", self.any_var(), self.expr(d - 1)),
+            14 => self.function(d - 1, false),
+            15 if *self.vararg.last().unwrap() => "...".into(),
+            16 => format!("({})", self.expr(d - 1)),
+            _ => self.any_var(),
+        }
+    }
+    fn args(&mut self, d: u32) -> String {
+        let n = self.r(4);
+        let mut v: Vec<String> = (0..n).map(|_| self.expr(d)).collect();
+        if self.r(6) == 0 && *self.vararg.last().unwrap() {
+            v.push("...".into());
+        }
+        v.join(", ")
+    }
+    fn table(&mut self, d: u32) -> String {
+        let n = self.r(6);
+        let mut v = Vec::new();
+        for _ in 0..n {
+            v.push(match self.r(4) {
+                0 => format!("k{} = {}", self.r(5), self.expr(d)),
+                1 => format!("[{}] = {}", self.expr(d), self.expr(d)),
+                _ => self.expr(d),
+            });
+        }
+        let sep = if self.r(2) == 0 { ", " } else { "; " };
+        let tail = if self.r(5) == 0 { sep } else { "" };
+        format!("{{{}{tail}}}", v.join(sep))
+    }
+    fn function(&mut self, d: u32, method: bool) -> String {
+        let mut params: Vec<String> = (0..self.r(3)).map(|_| self.fresh()).collect();
+        let vararg = self.r(3) == 0;
+        let mut scope = params.clone();
+        if method {
+            scope.insert(0, "self".into());
+        }
+        if vararg {
+            params.push("...".into());
+        }
+        let saved_out = std::mem::take(&mut self.out);
+        self.scopes.push(scope);
+        self.vararg.push(vararg);
+        self.loops.push(0);
+        let n = self.r(5);
+        for _ in 0..n {
+            self.stat(d);
+        }
+        if self.r(2) == 0 {
+            let e = self.expr(d.min(1));
+            self.out.push_str(&format!("return {e}\n"));
+        }
+        self.loops.pop();
+        self.vararg.pop();
+        self.scopes.pop();
+        let body = std::mem::replace(&mut self.out, saved_out);
+        format!("function({})\n{body}end", params.join(", "))
+    }
+    fn block(&mut self, d: u32) {
+        let n = self.r(3);
+        let mark = self.scopes.last().unwrap().len();
+        for _ in 0..n {
+            self.stat(d);
+        }
+        self.scopes.last_mut().unwrap().truncate(mark);
+    }
+    fn stat(&mut self, d: u32) {
+        let d = d.max(1);
+        match self.r(16) {
+            0 | 1 => {
+                let n = self.r(3) + 1;
+                let names: Vec<String> = (0..n).map(|_| self.fresh()).collect();
+                let m = self.r(4);
+                let exprs: Vec<String> = (0..m).map(|_| self.expr(d - 1)).collect();
+                let rhs = if exprs.is_empty() {
+                    String::new()
+                } else {
+                    format!(" = {}", exprs.join(", "))
+                };
+                self.out
+                    .push_str(&format!("local {}{rhs}\n", names.join(", ")));
+                self.scopes.last_mut().unwrap().extend(names);
+            }
+            2 | 3 => {
+                let n = self.r(3) + 1;
+                let targets: Vec<String> = (0..n)
+                    .map(|_| match self.r(4) {
+                        0 => format!("{}.f{}", self.any_var(), self.r(3)),
+                        1 => format!("{}[{}]", self.any_var(), self.expr(0)),
+                        _ => self.any_var(),
+                    })
+                    .collect();
+                let m = self.r(4) + 1;
+                let exprs: Vec<String> = (0..m).map(|_| self.expr(d - 1)).collect();
+                self.out
+                    .push_str(&format!("{} = {}\n", targets.join(", "), exprs.join(", ")));
+            }
+            4 => {
+                let c = format!("{}({})", self.any_var(), self.args(d - 1));
+                self.out.push_str(&format!("{c}\n"));
+            }
+            5 => {
+                let c = self.expr(d - 1);
+                self.out.push_str(&format!("if {c} then\n"));
+                self.block(d - 1);
+                if self.r(2) == 0 {
+                    let c = self.expr(d - 1);
+                    self.out.push_str(&format!("elseif {c} then\n"));
+                    self.block(d - 1);
+                }
+                if self.r(2) == 0 {
+                    self.out.push_str("else\n");
+                    self.block(d - 1);
+                }
+                self.out.push_str("end\n");
+            }
+            6 => {
+                let c = self.expr(d - 1);
+                self.out.push_str(&format!("while {c} do\n"));
+                *self.loops.last_mut().unwrap() += 1;
+                self.block(d - 1);
+                *self.loops.last_mut().unwrap() -= 1;
+                self.out.push_str("end\n");
+            }
+            7 => {
+                self.out.push_str("repeat\n");
+                *self.loops.last_mut().unwrap() += 1;
+                let mark = self.scopes.last().unwrap().len();
+                for _ in 0..self.r(3) {
+                    self.stat(d - 1);
+                }
+                let c = self.expr(d - 1);
+                self.scopes.last_mut().unwrap().truncate(mark);
+                *self.loops.last_mut().unwrap() -= 1;
+                self.out.push_str(&format!("until {c}\n"));
+            }
+            8 => {
+                let v = self.fresh();
+                let (a, b) = (self.expr(0), self.expr(0));
+                let step = if self.r(2) == 0 {
+                    format!(", {}", self.expr(0))
+                } else {
+                    String::new()
+                };
+                self.out.push_str(&format!("for {v} = {a}, {b}{step} do\n"));
+                self.scopes.last_mut().unwrap().push(v);
+                *self.loops.last_mut().unwrap() += 1;
+                self.block(d - 1);
+                *self.loops.last_mut().unwrap() -= 1;
+                self.scopes.last_mut().unwrap().pop();
+                self.out.push_str("end\n");
+            }
+            9 => {
+                let (k, v) = (self.fresh(), self.fresh());
+                let e = self.expr(d - 1);
+                self.out
+                    .push_str(&format!("for {k}, {v} in pairs({e}) do\n"));
+                self.scopes.last_mut().unwrap().extend([k, v]);
+                *self.loops.last_mut().unwrap() += 1;
+                self.block(d - 1);
+                *self.loops.last_mut().unwrap() -= 1;
+                let n = self.scopes.last().unwrap().len();
+                self.scopes.last_mut().unwrap().truncate(n - 2);
+                self.out.push_str("end\n");
+            }
+            10 => {
+                self.out.push_str("do\n");
+                self.block(d - 1);
+                self.out.push_str("end\n");
+            }
+            11 => {
+                let f = self.function(d - 1, false);
+                let g = self.r(4);
+                self.out.push_str(&format!("function g{g}{}\n", &f[8..]));
+            }
+            12 => {
+                let name = self.fresh();
+                let f = self.function(d - 1, false);
+                self.scopes.last_mut().unwrap().push(name.clone());
+                self.out
+                    .push_str(&format!("local function {name}{}\n", &f[8..]));
+            }
+            13 => {
+                let f = self.function(d - 1, true);
+                let (a, b) = (self.r(3), self.r(3));
+                self.out
+                    .push_str(&format!("function g{a}.m{b}:meth{}\n", &f[8..]));
+            }
+            14 if *self.loops.last().unwrap() > 0 => {
+                let c = self.expr(d - 1);
+                self.out.push_str(&format!("if {c} then break end\n"));
+            }
+            _ => {
+                let v = self.any_var();
+                let e = self.expr(d - 1);
+                self.out.push_str(&format!("{v} = {e}\n"));
+            }
+        }
+    }
+    fn program(&mut self) -> String {
+        // one in eight programs is large and made of constants only: past the 255 constants that
+        // fit an operand, tables beyond one SETLIST flush, long argument lists
+        if self.r(8) == 0 {
+            for _ in 0..100 + self.r(300) {
+                let (x, y) = (self.r(5), self.r(5));
+                let line = match self.r(5) {
+                    0 => {
+                        let (a, b) = (self.unique(), self.unique());
+                        format!("g{x} = {a} + g{y} * {b}\n")
+                    }
+                    1 => {
+                        let (k, f) = (self.r(100_000), self.r(4));
+                        format!("g{x}.f{f} = \"s{k}\" .. g1\n")
+                    }
+                    2 => {
+                        let n = self.r(130);
+                        let items: Vec<String> = (0..n).map(|_| self.unique()).collect();
+                        format!("g{x} = {{{}}}\n", items.join(", "))
+                    }
+                    3 => {
+                        let n = self.r(40);
+                        let args: Vec<String> = (0..n).map(|_| self.unique()).collect();
+                        format!("g{x}({})\n", args.join(", "))
+                    }
+                    _ => {
+                        let (k, u) = (self.r(100_000), self.unique());
+                        format!("if g{x} == \"c{k}\" then g1 = {u} end\n")
+                    }
+                };
+                self.out.push_str(&line);
+            }
+            return std::mem::take(&mut self.out);
+        }
+        let n = self.r(10) + 2;
+        for _ in 0..n {
+            self.stat(3);
+        }
+        if self.r(3) == 0 {
+            let e = self.expr(2);
+            self.out.push_str(&format!("return {e}\n"));
+        }
+        std::mem::take(&mut self.out)
+    }
+}
+
+/// Differential test: random programs compile to the same bytes with our compiler and the real one.
+fn fuzz_compile(count: u64, seed: u64) -> usize {
+    let compiled = std::sync::atomic::AtomicU64::new(0);
+    let bytes = std::sync::atomic::AtomicU64::new(0);
+    let bad: Vec<(u64, String)> = (seed..seed + count)
+        .into_par_iter()
+        .filter_map(|i| {
+            let src = Gen::new(i).program();
+            let real = compile_real(src.as_bytes());
+            let ours = luacomp::compile(src.as_bytes(), b"=t").map(|c| luac::dump(&c));
+            match (real, ours) {
+                (Ok(a), Ok(b)) if a == b => {
+                    compiled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    bytes.fetch_add(a.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    None
+                }
+                (Ok(a), Ok(b)) => {
+                    let at = a.iter().zip(&b).position(|(x, y)| x != y);
+                    let detail = match (luac::parse(&a), luac::parse(&b)) {
+                        (Ok(x), Ok(y)) => compare_functions(&x.main, &y.main, "main")
+                            .unwrap_or_else(|| "same code, differs in debug info".into()),
+                        _ => "cannot parse".into(),
+                    };
+                    Some((i, format!("bytes differ at {at:?}: {detail}\n{src}")))
+                }
+                (Err(_), Err(_)) => None,
+                (a, b) => Some((
+                    i,
+                    format!(
+                        "real {} / ours {}\n{src}",
+                        a.map_or_else(|e| format!("error {e}"), |v| format!("{} bytes", v.len())),
+                        b.map_or_else(|e| format!("error {e}"), |v| format!("{} bytes", v.len())),
+                    ),
+                )),
+            }
+        })
+        .collect();
+    let n = compiled.load(std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "compile fuzz: {count} random programs (seeds {seed}..{}): {n} compiled to identical bytes (average {} bytes), {} differ",
+        seed + count,
+        bytes.load(std::sync::atomic::Ordering::Relaxed) / n.max(1),
+        bad.len()
+    );
+    for (i, m) in bad.iter().take(3) {
+        println!("--- seed {i}: {m}");
+    }
+    bad.len()
+}
+
+/// Which text encodings the string constants of every compiled file use (for the decompiler's
+/// round trip): UTF-8 with Hangul/CJK, other non-ASCII, or ASCII only.
+fn encodings(files: &[Entry]) {
+    fn walk(f: &luac::Function, utf8: &mut usize, other: &mut usize) {
+        for k in &f.constants {
+            if let luac::Constant::Str(s) = k {
+                if s.is_ascii() {
+                    continue;
+                }
+                match std::str::from_utf8(s) {
+                    Ok(t) if t.chars().all(|c| c.is_ascii() || c as u32 >= 0x800) => *utf8 += 1,
+                    _ => *other += 1,
+                }
+            }
+        }
+        for p in &f.protos {
+            walk(p, utf8, other);
+        }
+    }
+    let (mut only_utf8, mut mixed, mut only_other, mut ascii) = (0, 0, 0, 0);
+    for f in files {
+        let Ok(c) = luac::parse_any(&f.data) else {
+            continue;
+        };
+        let (mut u, mut o) = (0, 0);
+        walk(&c.main, &mut u, &mut o);
+        match (u > 0, o > 0) {
+            (true, false) => only_utf8 += 1,
+            (true, true) => {
+                mixed += 1;
+                println!("MIXED {}: {u} UTF-8 strings, {o} other", f.name);
+            }
+            (false, true) => only_other += 1,
+            _ => ascii += 1,
+        }
+    }
+    println!(
+        "encodings: {} files: {ascii} ASCII only, {only_other} only CP949/Latin-1, {only_utf8} only UTF-8, {mixed} both",
+        files.len()
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(pos) = args.iter().position(|a| a == "--fuzz") {
+        let count = args
+            .get(pos + 1)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(1000);
+        let seed = args.get(pos + 2).and_then(|n| n.parse().ok()).unwrap_or(0);
+        std::process::exit(i32::from(fuzz_compile(count, seed) > 0));
+    }
     let Some(grf) = args.iter().find(|a| !a.starts_with("--")) else {
         eprintln!("usage: rgrf-lua-verify <data.grf> [--parse-only | --dump-only]");
         std::process::exit(2);
     };
     let files = compiled_files(grf);
     let mut bad = parse_check(&files);
+    if args.iter().any(|a| a == "--encodings") {
+        encodings(&files);
+        return;
+    }
+    if args.iter().any(|a| a == "--compile-equal") {
+        std::process::exit(i32::from(compile_equal_check(&files) > 0));
+    }
     if args.iter().any(|a| a == "--recompile") {
         std::process::exit(i32::from(recompile_check(&files) > 0));
     }

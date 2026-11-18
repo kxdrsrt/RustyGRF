@@ -3,10 +3,18 @@ Lizenz: MIT OR Apache-2.0 (siehe LICENSE-MIT, LICENSE-APACHE).
 
 Inspiration und Dank
   RustyGRF ist von GRF Editor und ActEditor von Tokeiburu inspiriert
-  (https://github.com/Tokeiburu). Es ist kein Fork und enthaelt (Stand M0)
-  keinen daraus uebernommenen Code. Tokeiburu hat die Portierung/Nutzung
-  der Formatkenntnisse erlaubt (siehe docs/05-licensing.md).
-  Wird spaeter Code abgeleitet, steht die Herkunft im Dateikopf.
+  (https://github.com/Tokeiburu). Es ist kein Fork. Tokeiburu hat die
+  Portierung/Nutzung der Formatkenntnisse erlaubt (siehe docs/05-licensing.md).
+  Einige Teile sind nach GRF Editors Quelltext in Rust neu geschrieben
+  (Tabellen und Ablauf des alten DES, Thor, RGZ, die 0x102/0x103-Eintragsform);
+  die Herkunft steht im Kopf der jeweiligen Datei.
+
+Lua
+  crates/rgrf-formats/src/luacomp.rs ist ein Port von Lexer, Parser und
+  Codegenerator von Lua 5.1.5 (Copyright (C) 1994-2012 Lua.org, PUC-Rio,
+  MIT-Lizenz, Text in THIRD-PARTY.md). Das Pruefwerkzeug tools/lua-verify
+  baut Lua 5.0.3 und 5.1 aus den Quelltexten von lua.org und wird nicht
+  ausgeliefert.
 
 Weitere Inspiration
   - LessGRF / cps.dll-LZMA-Erweiterung von Curiosity (curio-r/rag-cps-dll):

@@ -21,3 +21,17 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 | `gif` | 0.14.2 | MIT OR Apache-2.0 | animiertes GIF aus gerenderten Frames (`act render --gif`); bringt `color_quant` (MIT) und `weezl` (MIT OR Apache-2.0) mit | M7b |
 
 Stand 2026-11-16: `cargo deny check` (Lizenzen, Verbote, Quellen, Advisories) ohne Befund. Transitive Abhängigkeiten stehen in `Cargo.lock`; erlaubte Lizenzen in `deny.toml`.
+
+## Lua 5.1.5 (Quelltext portiert in `crates/rgrf-formats/src/luacomp.rs`)
+Lexer, Parser und Codegenerator sind aus `llex.c`, `lparser.c` und `lcode.c` von Lua 5.1.5 nach Rust übertragen. Lua ist unter der MIT-Lizenz veröffentlicht:
+
+> Copyright (C) 1994-2012 Lua.org, PUC-Rio.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Das Prüfwerkzeug `tools/lua-verify` (nicht ausgeliefert) nutzt außerdem `mlua` (MIT) mit mitgebautem Lua 5.1 und lädt Lua 5.0.3 von lua.org.
+

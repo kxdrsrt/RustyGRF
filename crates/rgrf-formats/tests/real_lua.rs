@@ -366,3 +366,90 @@ fn damaged_text_never_panics() {
     eprintln!("{runs} damaged text copies, {panics} panics");
     assert_eq!(panics, 0);
 }
+
+/// The compiled Lua 5.1 files of the kRO `data.grf`.
+fn kro_lub_51() -> Option<Vec<(String, Vec<u8>)>> {
+    let base = base()?;
+    let arc = Archive::open(base.join("0 OTHER CLIENTS/client-kro/data.grf")).unwrap();
+    let idx = arc.select(Some("*.lub"), NameMode::Cp1252);
+    Some(
+        idx.into_iter()
+            .filter_map(|i| {
+                let d = arc.read(i).ok()?.data;
+                (d.starts_with(b"\x1bLua\x51"))
+                    .then(|| (arc.entries()[i].name.display(NameMode::Cp949), d))
+            })
+            .collect(),
+    )
+}
+
+/// Our 32-bit writer reproduces the client's own files exactly (all bytes, including debug info).
+#[test]
+fn dump32_reproduces_every_compiled_file_byte_for_byte() {
+    let Some(files) = kro_lub_51() else { return };
+    assert!(files.len() > 400, "{} files", files.len());
+    let bad: Vec<&str> = files
+        .par_iter()
+        .filter(|(_, d)| rgrf_formats::luac::dump32(&rgrf_formats::luac::parse(d).unwrap()) != *d)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "{} files differ, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
+    );
+}
+
+/// Decompiled text compiles back to the original instructions (see tools/lua-verify, which also
+/// compares our compiler with the real Lua 5.1.5 byte for byte). Three files differ in equivalent
+/// but not identical code: constants in another order (`5 < f(3)` for `f(3) > 5`), a dead
+/// `LOADK`, and `if c then ... else break end`.
+#[test]
+fn decompiled_text_compiles_back_to_the_original_code() {
+    use rgrf_formats::luac::{self, Function};
+    use rgrf_formats::{luacomp, luadec};
+    fn same(a: &Function, b: &Function) -> bool {
+        (a.upvalue_count, a.params, a.is_vararg, a.max_stack)
+            == (b.upvalue_count, b.params, b.is_vararg, b.max_stack)
+            && a.code == b.code
+            && a.constants == b.constants
+            && a.locals
+                .iter()
+                .map(|l| &l.name)
+                .eq(b.locals.iter().map(|l| &l.name))
+            && a.upvalue_names == b.upvalue_names
+            && a.protos.len() == b.protos.len()
+            && a.protos.iter().zip(&b.protos).all(|(x, y)| same(x, y))
+    }
+    let Some(files) = kro_lub_51() else { return };
+    let show = |b: &[u8]| rgrf_core::GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+    let cp949 = |run: &str| {
+        rgrf_core::GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec())
+    };
+    let known = [
+        "skillinfolist.lub",
+        "equipmentproperties.lub",
+        "chatwndinfo_f.lub",
+    ];
+    let different: Vec<&str> = files
+        .par_iter()
+        .filter(|(_, d)| {
+            let chunk = luac::parse(d).unwrap();
+            let text = luadec::decompile(&chunk, &show);
+            let back = luacomp::compile_text(&text, b"=t", luacomp::TextEncoding::Auto, &cp949)
+                .unwrap_or_else(|e| panic!("does not compile: {e}"));
+            !same(&chunk.main, &back.main)
+        })
+        .map(|(n, _)| n.as_str())
+        .collect();
+    let unexpected: Vec<&&str> = different
+        .iter()
+        .filter(|n| !known.iter().any(|k| n.to_ascii_lowercase().ends_with(k)))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "unexpected differences: {unexpected:?}"
+    );
+    assert!(different.len() <= 3, "{different:?}");
+}

@@ -193,3 +193,81 @@ pub fn decompile(
     }
     Ok(if complete { 0 } else { 2 })
 }
+
+/// `rgrf lua compile`: Lua 5.1 source to a `.lub` in the layout of the client's own files.
+pub fn compile(
+    input: &Path,
+    output: &Path,
+    strip: bool,
+    encoding: rgrf_formats::luacomp::TextEncoding,
+    name: Option<&str>,
+    overwrite: bool,
+    json: bool,
+) -> Result<i32> {
+    use rgrf_core::GrfPath;
+    use rgrf_formats::{luac, luacomp};
+    let bytes = fs::read(input).with_context(|| format!("cannot read {}", input.display()))?;
+    if bytes.starts_with(b"\x1bLua") {
+        bail!(
+            "{} is compiled Lua already; use `lua decompile` first",
+            input.display()
+        );
+    }
+    if output.exists() && !overwrite {
+        bail!("{} exists already (use --overwrite)", output.display());
+    }
+    let source = match name {
+        Some(n) => n.as_bytes().to_vec(),
+        None => format!(
+            "@{}",
+            input
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+        )
+        .into_bytes(),
+    };
+    // the source file is read as UTF-8; a Latin-1 or CP949 file would fail here with a clear error
+    let text = String::from_utf8(bytes)
+        .map_err(|_| anyhow::anyhow!("{} is not valid UTF-8 text", input.display()))?;
+    let cp949 =
+        |run: &str| GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec());
+    let mut chunk = luacomp::compile_text(&text, &source, encoding, &cp949)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if strip {
+        luacomp::strip(&mut chunk);
+    }
+    let lub = luac::dump32(&chunk);
+    luac::check_bytecode(&lub)
+        .map_err(|e| anyhow::anyhow!("internal error, the result is invalid: {e}"))?;
+    let tmp = output.with_extension("lub.tmp");
+    fs::write(&tmp, &lub).with_context(|| format!("cannot write {}", tmp.display()))?;
+    if overwrite && output.exists() {
+        fs::remove_file(output)?;
+    }
+    fs::rename(&tmp, output)?;
+    fn count(f: &luac::Function) -> usize {
+        1 + f.protos.iter().map(count).sum::<usize>()
+    }
+    let (functions, instructions) = (count(&chunk.main), chunk.main.code.len());
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "output": output.display().to_string(),
+                "bytes": lub.len(),
+                "functions": functions,
+                "main_instructions": instructions,
+                "stripped": strip,
+            }))?
+        );
+    } else {
+        println!(
+            "Wrote {} ({} bytes, {functions} functions{})",
+            output.display(),
+            lub.len(),
+            if strip { ", stripped" } else { "" }
+        );
+    }
+    Ok(0)
+}

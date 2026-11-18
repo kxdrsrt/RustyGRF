@@ -1452,9 +1452,24 @@ pub fn decompile(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
     } else {
         "5.1"
     };
-    let mut out = format!("-- decompiled by RustyGRF from Lua {version} bytecode\n");
+    // The compiler (`luacomp::compile_text`) reads this mark to write the strings back as UTF-8;
+    // every other file is written back as CP949 (measured: no file of the real archives mixes both).
+    let utf8 = if has_utf8_strings(&chunk.main) {
+        "; strings: UTF-8"
+    } else {
+        ""
+    };
+    let mut out = format!("-- decompiled by RustyGRF from Lua {version} bytecode{utf8}\n");
     out.push_str(&ctx.body(&chunk.main, 0));
     out
+}
+
+/// Whether some string constant is shown as UTF-8 (see [`string_text`]).
+fn has_utf8_strings(f: &Function) -> bool {
+    f.constants.iter().any(|k| {
+        matches!(k, Constant::Str(s) if !s.is_ascii() && std::str::from_utf8(s)
+            .is_ok_and(|t| t.chars().all(|c| c.is_ascii() || c as u32 >= 0x800)))
+    }) || f.protos.iter().any(has_utf8_strings)
 }
 
 /// True when every function of the chunk was decompiled (no "not decompiled" comment).

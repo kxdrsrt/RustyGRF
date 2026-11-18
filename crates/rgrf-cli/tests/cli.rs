@@ -1711,3 +1711,50 @@ fn the_old_event_grf_0x102_opens_verifies_and_converts() {
     assert_eq!(json(&rgrf(&["info", &out, "--json"]))["version"], "0x200");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn lua_compile_makes_client_ready_bytecode_and_round_trips_korean_text() {
+    let dir = tmpdir("luacompile");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("t.lua");
+    std::fs::write(
+        &src,
+        "T = { name = \"유저인터페이스\", n = 3 + 4 }\nfunction f(a)\n\treturn a .. T.name\nend\n",
+    )
+    .unwrap();
+    let out = dir.join("t.lub");
+    let (s, o) = (
+        src.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+    );
+    let r = rgrf(&["lua", "compile", &s, "-o", &o, "--json"]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(json(&r)["functions"], 2);
+    let bytes = std::fs::read(&out).unwrap();
+    // header of the client's files: Lua 5.1, little endian, int 4, size_t 4, instruction 4, double
+    assert_eq!(&bytes[..12], b"\x1bLuaQ\x00\x01\x04\x04\x04\x08\x00");
+    // the Korean text is CP949 in the file, and shows as Korean again when decompiled
+    assert!(bytes.windows(2).any(|w| w == [0xc0, 0xaf]));
+    let r = rgrf(&["lua", "decompile", &o]);
+    let text = String::from_utf8_lossy(&r.stdout);
+    assert!(
+        text.contains("유저인터페이스") && text.contains("n = 7"),
+        "{text}"
+    );
+    assert_eq!(rgrf(&["lua", "check", &o]).status.code(), Some(0));
+    // never over an existing file; syntax errors name file, line and token
+    assert!(!rgrf(&["lua", "compile", &s, "-o", &o]).status.success());
+    std::fs::write(&src, "x = 1\ny = = 2\n").unwrap();
+    let r = rgrf(&[
+        "lua",
+        "compile",
+        &s,
+        "-o",
+        &dir.join("bad.lub").to_string_lossy(),
+        "--overwrite",
+    ]);
+    assert_eq!(r.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("t.lua:2: unexpected symbol near '='"));
+    assert!(!dir.join("bad.lub").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
