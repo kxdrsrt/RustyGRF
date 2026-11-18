@@ -496,7 +496,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
         gl.enableVertexAttribArray(l);
         gl.vertexAttribPointer(l, size, gl.FLOAT, false, 20, off * 4);
       });
-      water = { vao, tex: makeTexture(gl, sc.water.texture, draw, "image/jpeg") };
+      water = { vao, frameMs: sc.water.frame_ms || 50, frames: sc.water.frames.map((f) => makeTexture(gl, f, draw, "image/jpeg")) };
     }
 
     const lon = (sc.light.longitude * Math.PI) / 180, lat = (sc.light.latitude * Math.PI) / 180;
@@ -505,7 +505,17 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     const size = Math.max(ground.width, ground.depth);
     const home = { yaw: 0, pitch: 0.95, dist: size * 0.9, target: [ground.width / 2, 0, -ground.depth / 2] };
     const cam = { ...home, target: [...home.target] };
-    const opts = { lit: true, lightmap: true, models: true, water: true };
+    const opts = { lit: true, lightmap: true, models: true, water: true, animate: true };
+    const waterFrame = () => (water && opts.animate && water.frames.length > 1 ? Math.floor((performance.now() - clock) / water.frameMs) % water.frames.length : 0);
+    const clock = performance.now();
+    let timer = null;
+    function loop() {
+      render();
+      timer = opts.animate && water && opts.water && water.frames.length > 1 ? requestAnimationFrame(loop) : null;
+    }
+    function startLoop() {
+      if (timer === null && opts.animate && water && opts.water && water.frames.length > 1) timer = requestAnimationFrame(loop);
+    }
     orbit(canvas, cam, home, size, draw);
 
     function render() {
@@ -543,10 +553,11 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
       if (water && opts.water) {
         gl.useProgram(wp);
         gl.uniformMatrix4fv(u(wp, "uVp"), false, vp);
-        gl.uniform1i(u(wp, "uTex"), 0); gl.uniform1i(u(wp, "uHasTex"), water.tex ? 1 : 0);
+        const wtex = water.frames[waterFrame()];
+        gl.uniform1i(u(wp, "uTex"), 0); gl.uniform1i(u(wp, "uHasTex"), wtex ? 1 : 0);
         gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
         gl.bindVertexArray(water.vao);
-        if (water.tex) gl.bindTexture(gl.TEXTURE_2D, water.tex);
+        if (wtex) gl.bindTexture(gl.TEXTURE_2D, wtex);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
         gl.depthMask(true); gl.disable(gl.BLEND);
       }
@@ -555,10 +566,13 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     const ro = new ResizeObserver(draw);
     ro.observe(canvas);
     draw();
+    startLoop();
     return {
       canvas,
-      set(name, value) { opts[name] = value; draw(); },
-      destroy() { ro.disconnect(); gl.getExtension("WEBGL_lose_context")?.loseContext(); canvas.remove(); },
+      set(name, value) { opts[name] = value; startLoop(); draw(); },
+      /** Index of the water picture shown right now (for tests). */
+      waterFrame,
+      destroy() { opts.animate = false; if (timer !== null) cancelAnimationFrame(timer); ro.disconnect(); gl.getExtension("WEBGL_lose_context")?.loseContext(); canvas.remove(); },
     };
   }
 

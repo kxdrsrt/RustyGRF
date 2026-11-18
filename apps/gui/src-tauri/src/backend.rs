@@ -222,8 +222,10 @@ pub struct LightOut {
 #[derive(Serialize, Debug)]
 pub struct WaterOut {
     pub level: f32,
-    /// The water picture (a JPEG) as base64, when the archive has it.
-    pub texture: Option<String>,
+    /// The pictures of the water cycle (JPEG, base64), in order; empty when the archive has none.
+    pub frames: Vec<String>,
+    /// Time one picture stays, in milliseconds.
+    pub frame_ms: f32,
 }
 
 /// Triangles of one texture; the arrays are base64 of little-endian `f32`.
@@ -1491,20 +1493,34 @@ impl Session {
                 };
             }
             if let Some(w) = &r.water {
-                let mut path = encoding_rs::EUC_KR
-                    .encode("data\\texture\\\u{c6cc}\u{d130}\\water000.jpg")
+                // data\texture\워터\water<kind><00..31>.jpg; the cycle ends at the first missing picture
+                let dir = encoding_rs::EUC_KR
+                    .encode("data\\texture\\\u{c6cc}\u{d130}\\")
                     .0
                     .into_owned();
-                if path.is_empty() {
-                    path = b"water000.jpg".to_vec();
+                let kind = w.kind.clamp(0, 9);
+                let mut frames = Vec::new();
+                for n in 0..32 {
+                    let path =
+                        [dir.clone(), format!("water{kind}{n:02}.jpg").into_bytes()].concat();
+                    let Some(d) = keys
+                        .get(&GrfPath::new(path).key())
+                        .and_then(|&i| self.arc.read(i).ok())
+                    else {
+                        break;
+                    };
+                    frames.push(b64(&d.data));
                 }
-                let texture = keys
-                    .get(&GrfPath::new(path).key())
-                    .and_then(|&i| self.arc.read(i).ok())
-                    .map(|d| b64(&d.data));
+                // assumption: a cycle step is `texture_cycling` ticks of 1/60 s (default 3), not measured
+                let ticks = if w.texture_cycling > 0 {
+                    w.texture_cycling
+                } else {
+                    3
+                };
                 water = Some(WaterOut {
                     level: w.level / 5.0,
-                    texture,
+                    frames,
+                    frame_ms: ticks as f32 * 1000.0 / 60.0,
                 });
             }
             let (m, l, s_, e) = r.object_counts();

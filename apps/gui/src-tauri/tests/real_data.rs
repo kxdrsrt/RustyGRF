@@ -96,7 +96,9 @@ fn previews_of_real_files() {
             assert_eq!((g.width, g.height), (156, 196));
             assert_eq!((models.len(), instances.len()), (63, 1304));
             assert!(textures.iter().filter(|t| t.png.is_some()).count() > 150);
-            assert!(water.is_some());
+            let water = water.unwrap();
+            assert_eq!(water.frames.len(), 32, "the whole water cycle is found");
+            assert!(water.frame_ms > 0.0);
             assert!(info[1].contains("RSW 2.1"), "{info:?}");
             assert!(
                 instances

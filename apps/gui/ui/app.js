@@ -344,7 +344,7 @@ function renderPreview(p, row, meta) {
         return el("label", {}, c, ` ${label}`);
       };
       return [
-        el("div", { class: "controls" }, el("span", { class: "muted", text: "drag = turn, right/shift-drag or arrows = move, wheel = zoom, double-click = reset" }), toggle("Lighting", "lit"), toggle("Lightmaps", "lightmap"), toggle("Models", "models"), toggle("Water", "water")),
+        el("div", { class: "controls" }, el("span", { class: "muted", text: "drag = turn, right/shift-drag or arrows = move, wheel = zoom, double-click = reset" }), toggle("Lighting", "lit"), toggle("Lightmaps", "lightmap"), toggle("Models", "models"), toggle("Water", "water"), p.water?.frames?.length > 1 ? toggle("Animate", "animate") : null),
         host,
         infoBlock(p.info),
       ];
