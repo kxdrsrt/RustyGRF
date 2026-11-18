@@ -86,7 +86,11 @@ async function chooseArchive() {
   if (path) await openPath(Array.isArray(path) ? path[0] : path);
 }
 
-async function openPath(path) {
+async function openPath(path, force = false) {
+  if (!force && S.changes.length) {
+    const go = await ask("Open another archive?", el("p", { text: `${fmtNum(S.changes.length)} pending change(s) in the open archive will be lost.` }), [{ label: "Open anyway", value: true }, { label: "Cancel", value: null, primary: true }]);
+    if (!go) return;
+  }
   setStatus(`Opening ${path} …`);
   try {
     S.info = await invoke("open_archive", { path });
@@ -469,7 +473,7 @@ async function saveEdited() {
     setStatus(`Saved ${dst}`);
     const body = [el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}: ${fmtNum(r.added)} added, ${fmtNum(r.replaced)} replaced, ${fmtNum(r.removed)} removed.` }), el("p", { class: "muted", text: "The original archive was not changed. The pending changes are kept until you discard them." })];
     const open = await ask("Archive saved", body, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
-    if (open) await openPath(dst);
+    if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
     const cancelled = /cancel/i.test(errText(e));
@@ -675,6 +679,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 if (T.event?.listen) {
+  T.event.listen("open-file", (e) => e.payload && openPath(e.payload));
   T.event.listen("job-progress", (e) => S.onJob?.(e.payload));
   T.event.listen("tauri://drag-drop", (e) => {
     const p = e.payload?.paths?.[0];

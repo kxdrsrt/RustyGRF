@@ -13,13 +13,15 @@ use backend::{
 };
 use rgrf_core::progress::{CancelToken, Control, Progress};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
 struct AppState {
     session: Arc<Mutex<Option<Session>>>,
     /// Token of the running long job (build), if any.
     job: Mutex<Option<CancelToken>>,
+    /// A file the system asked us to open (Finder "Open with" on macOS) before the page asked for it.
+    opened: Mutex<Option<String>>,
 }
 
 type Res<T> = Result<T, String>;
@@ -281,9 +283,15 @@ fn cancel_job(state: State<'_, AppState>) {
     }
 }
 
-/// A GRF path given on the command line (`rustygrf-gui file.grf`), opened by the page at start.
+/// The archive to open at start: one the system handed us ("Open with" on macOS), else a path given
+/// on the command line (`rustygrf-gui file.grf`; this is how Windows and Linux pass it).
 #[tauri::command]
-fn startup_path() -> Option<String> {
+fn startup_path(state: State<'_, AppState>) -> Option<String> {
+    if let Ok(mut opened) = state.opened.lock()
+        && let Some(p) = opened.take()
+    {
+        return Some(p);
+    }
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         if a == "--select" {
@@ -335,6 +343,21 @@ pub fn run() {
             startup_path,
             startup_select
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running RustyGRF");
+        .build(tauri::generate_context!())
+        .expect("error while building RustyGRF")
+        .run(|app, event| {
+            // macOS delivers "Open with" and double-clicks as an event, not as an argument
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event
+                && let Some(path) = urls.iter().find_map(|u| u.to_file_path().ok())
+            {
+                let path = path.display().to_string();
+                if let Ok(mut opened) = app.state::<AppState>().opened.lock() {
+                    *opened = Some(path.clone());
+                }
+                let _ = app.emit("open-file", path);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
