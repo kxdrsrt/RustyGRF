@@ -9,8 +9,6 @@
 //!
 //! Derived from GRF Editor (Tokeiburu), used with permission, see `docs/05-licensing.md`.
 
-use std::fmt;
-
 use crate::rle;
 
 /// Palette size in bytes (256 entries of R, G, B, unused).
@@ -44,12 +42,7 @@ pub enum SprError {
     TooManyImages(usize),
 }
 
-/// SPR version as stored in the file (major, minor).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Version {
-    pub major: u8,
-    pub minor: u8,
-}
+pub use crate::version::Version;
 
 impl Version {
     pub const V1_0: Self = Self::new(1, 0);
@@ -57,30 +50,8 @@ impl Version {
     pub const V2_0: Self = Self::new(2, 0);
     pub const V2_1: Self = Self::new(2, 1);
 
-    pub const fn new(major: u8, minor: u8) -> Self {
-        Self { major, minor }
-    }
-
     fn is_supported(self) -> bool {
         matches!(self, Self::V1_0 | Self::V1_1 | Self::V2_0 | Self::V2_1)
-    }
-}
-
-impl fmt::Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.major, self.minor)
-    }
-}
-
-impl std::str::FromStr for Version {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, String> {
-        let bad = || format!("version must look like 2.1, got {s:?}");
-        let (a, b) = s.split_once('.').ok_or_else(bad)?;
-        Ok(Self::new(
-            a.parse().map_err(|_| bad())?,
-            b.parse().map_err(|_| bad())?,
-        ))
     }
 }
 

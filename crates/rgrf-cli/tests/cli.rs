@@ -554,3 +554,139 @@ fn spr_from_a_real_grf_entry() {
     assert_eq!(v["indexed_images"], 0);
     assert_eq!(v["rgba_images"], 24);
 }
+
+#[test]
+fn act_info_and_render_round_trip() {
+    use rgrf_formats::act::{Act, Action, Frame, Layer, V2_5};
+    use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, Spr, Version};
+
+    let mut pal = Box::new([0u8; PALETTE_LEN]);
+    pal[4..8].copy_from_slice(&[255, 0, 0, 0]);
+    let spr = Spr {
+        version: Version::V2_1,
+        indexed: vec![IndexedImage {
+            width: 2,
+            height: 2,
+            pixels: vec![1; 4],
+        }],
+        rgba: vec![],
+        palette: Some(pal),
+        warnings: vec![],
+    };
+    let frame = |dx: f32| Frame {
+        layers: vec![Layer {
+            sprite_index: 0,
+            offset_x: dx,
+            ..Layer::default()
+        }],
+        ..Frame::default()
+    };
+    let act = Act {
+        version: V2_5,
+        reserved: [0; 10],
+        actions: vec![Action {
+            frames: vec![frame(0.0), frame(4.0)],
+            interval: 4.0,
+        }],
+        sounds: vec![],
+        trailing: vec![],
+        warnings: vec![],
+    };
+    let dir = tmpdir("act");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.spr"), spr.to_bytes(Version::V2_1).unwrap()).unwrap();
+    std::fs::write(dir.join("a.act"), act.to_bytes(V2_5).unwrap()).unwrap();
+    let a = dir.join("a.act");
+    let a = a.to_str().unwrap();
+
+    let o = rgrf(&["--json", "act", "info", a]);
+    assert!(o.status.success());
+    let v = json(&o);
+    assert_eq!(v["version"], "2.5");
+    assert_eq!(v["frames"], 2);
+    assert_eq!(v["layers"], 2);
+
+    // one frame to a file, then every frame of the action into a folder (same canvas)
+    let one = dir.join("one.png");
+    let o = rgrf(&[
+        "act",
+        "render",
+        a,
+        "--frame",
+        "1",
+        "-o",
+        one.to_str().unwrap(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(one.exists());
+    assert_eq!(
+        rgrf(&[
+            "act",
+            "render",
+            a,
+            "--frame",
+            "1",
+            "-o",
+            one.to_str().unwrap()
+        ])
+        .status
+        .code(),
+        Some(1),
+        "refuses to overwrite"
+    );
+    let all = dir.join("all");
+    let o = rgrf(&["--json", "act", "render", a, "-o", all.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(v["width"], 6, "frames share one canvas: 2 px + 4 px travel");
+    assert_eq!(std::fs::read_dir(&all).unwrap().count(), 2);
+
+    // errors: missing action, missing sprite, not an ACT
+    assert_eq!(
+        rgrf(&["act", "render", a, "--action", "9", "-o", "/tmp/x"])
+            .status
+            .code(),
+        Some(1)
+    );
+    std::fs::remove_file(dir.join("a.spr")).unwrap();
+    assert_eq!(
+        rgrf(&["act", "render", a, "-o", dir.join("z").to_str().unwrap()])
+            .status
+            .code(),
+        Some(1)
+    );
+    std::fs::write(dir.join("x.act"), b"hello").unwrap();
+    assert_eq!(
+        rgrf(&["act", "info", dir.join("x.act").to_str().unwrap()])
+            .status
+            .code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn act_from_a_real_grf_entry() {
+    let Some(data) = testdata("0 OTHER CLIENTS/client-kro/data.grf") else {
+        return;
+    };
+    let act = r"data\sprite\npc\poring.act";
+    let o = rgrf(&["--json", "act", "info", &data, act]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(json(&o)["frames"].as_u64().unwrap() > 0);
+    let dir = tmpdir("actreal");
+    std::fs::create_dir_all(&dir).unwrap();
+    let o = rgrf(&[
+        "act",
+        "render",
+        &data,
+        act,
+        "--frame",
+        "0",
+        "-o",
+        dir.join("p.png").to_str().unwrap(),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(dir.join("p.png").metadata().unwrap().len() > 100);
+    let _ = std::fs::remove_dir_all(&dir);
+}

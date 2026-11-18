@@ -18,8 +18,8 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Dateinamen-Kodierung ansehen (`ViewEncoding`) | `--names cp1252|cp949|utf8|raw` | ✅ |
 | Vorschau Bild/BMP/TGA/JPG (`PreviewImage`, `ImageConverter`) | – | 🔨 M7d |
 | Vorschau und Bearbeiten **SPR** (`PreviewSpr`, `SpriteEditor`, `SpriteConverter`) | `spr info|export|build` | ✅ Lesen/Schreiben/PNG (M7a); Bearbeiten 🔨 M7b/M8 |
-| Vorschau **ACT** (`PreviewAct`) | – | 🔨 M7b |
-| Palette (`PreviewPalette`, `PaletteOperations`) | – | 🔨 M7b |
+| Vorschau **ACT** (`PreviewAct`) | `act info`, `act render` (PNG) | ✅ Lesen/Schreiben/Rendern (M7b); Anker, GIF 🔨 |
+| Palette (`PreviewPalette`, `PaletteOperations`) | PAL lesen/schreiben (Bibliothek) | ✅ Format; Operationen 🔨 M7b |
 | Lua/Lub dekompilieren, Text (`PreviewText`, `DecompilerSettings`) | – | 🔨 M7c |
 | Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | – | 🔨 M7e |
 | 3D: RSM, STR (`OpenGLViewport`) | – | 🔨 M7e |
@@ -32,7 +32,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 
 | Funktion (laut README, Changelog, Ordner) | RustyGRF | Stand |
 |---|---|---|
-| Aktionen, Frames, Layer, Anker bearbeiten | – | 🔨 M7b |
+| Aktionen, Frames, Layer, Anker lesen/schreiben | Bibliothek `rgrf-formats` | ✅ (Bearbeiten-Funktionen 🔨 M7b) |
 | Referenz-Sprite wählen (auch aus GRF) | – | 🔨 M7b |
 | Interpolation (auch „erweitert“), Skripte (C#-Skript-Engine, `doc/ScriptGuide`) | – | ❓ Skripte: andere Sprache nötig (Frage) |
 | GIF-Export, Hintergrund wählen | – | 🔨 M7b |

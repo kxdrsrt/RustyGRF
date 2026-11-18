@@ -1,5 +1,11 @@
 //! RustyGRF formats: files inside the GRF archives (milestone M7).
 
+pub mod act;
+pub mod pal;
 pub mod png_io;
+pub mod render;
 pub mod rle;
 pub mod spr;
+pub mod version;
+
+pub use version::Version;

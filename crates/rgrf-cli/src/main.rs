@@ -24,6 +24,7 @@ use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, Entry, GrfPath, NameMode};
 use serde_json::{Value, json};
 
+mod act_cmd;
 mod spr_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -213,6 +214,38 @@ enum Cmd {
     Spr {
         #[command(subcommand)]
         action: SprCmd,
+    },
+    /// Animations (.act): show, render frames as PNG
+    Act {
+        #[command(subcommand)]
+        action: ActCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ActCmd {
+    /// Version, actions, frames, layers, sounds (a loose .act file, or a GRF and the entry path)
+    Info {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// Draw frames with the sprite next to the .act (or the same path with .spr inside the GRF)
+    Render {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Sprite to use instead of the one with the same name
+        #[arg(long)]
+        spr: Option<PathBuf>,
+        /// Action (direction/animation) number
+        #[arg(long, default_value_t = 0)]
+        action: usize,
+        /// One frame (then -o is a file); without it every frame of the action (then -o is a folder)
+        #[arg(long)]
+        frame: Option<usize>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
     },
 }
 
@@ -505,6 +538,30 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Act { action } => match action {
+            ActCmd::Info { input, entry } => {
+                act_cmd::info(input, entry.as_deref(), cli.names, cli.json)
+            }
+            ActCmd::Render {
+                input,
+                entry,
+                spr,
+                action,
+                frame,
+                output,
+                overwrite,
+            } => act_cmd::render(
+                input,
+                entry.as_deref(),
+                spr.as_deref(),
+                *action,
+                *frame,
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+        },
         Cmd::Spr { action } => match action {
             SprCmd::Info { input, entry } => {
                 spr_cmd::info(input, entry.as_deref(), cli.names, cli.json)

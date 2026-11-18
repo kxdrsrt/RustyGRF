@@ -23,3 +23,25 @@ Abgeleitet aus GRF Editor (Tokeiburu, mit Erlaubnis, siehe [05-licensing.md](05-
 **PNG:** Palettenbilder werden 8-Bit-indiziertes PNG (Palette in `PLTE`, Index 0 per `tRNS` transparent), True-Color als RGBA. Beim Zurückbauen bleibt jedes Bild unverändert; das ungenutzte vierte Palettenbyte geht dabei verloren (Pixel und Farben bleiben gleich).
 
 **CLI:** `rgrf spr info|export|build`, siehe [04-cli-and-mcp.md](04-cli-and-mcp.md).
+
+## PAL (Paletten) – M7b, umgesetzt
+1024 Bytes: 256 × R, G, B, ungenutzt (Index 0 gilt als transparent). Gemessen (2026-11-18, kRO-`data.grf`): **alle 4.338 PAL-Dateien** sind genau 1024 Bytes und kommen byteidentisch zurück.
+
+## ACT (Animationen) – M7b, Lesen/Schreiben/Rendern umgesetzt
+**Aufbau (aus `ActConverter.cs`, an echten Dateien geprüft):**
+- `"AC"`, Minor, Major, `u16` Anzahl Aktionen, 10 reservierte Bytes. Je Aktion `i32` Frames; je Frame 32 Bytes (zwei RECTs, Angriffsbereich, bleiben unverändert), `i32` Layer, die Layer, ab 2.0 `i32` Sound-Nr., ab 2.3 `i32` Anker zu je 16 Bytes.
+- Layer: Versatz x, y (`i32`, ab 2.6 `f32`), Sprite-Nr., Spiegeln; ab 2.0 Farbe (R, G, B, A), Skalierung x (ab 2.4 auch y), Drehung in Grad, Sprite-Typ (0 Palette, 1 True-Color); ab 2.5 Breite und Höhe.
+- Nach den Aktionen: ab 2.1 `i32` Sounds zu je 40 Bytes, ab 2.2 je Aktion ein `f32`-Intervall (Einheit 25 ms: 6 = 150 ms). Unbekannte Bytes am Ende bleiben erhalten.
+- Unterstützt: 2.0 bis 2.6. Versionen unter 2.0 gibt es in den Dateien nicht; 2.6 (Versatz als Kommazahl) nur synthetisch getestet, kommt in `data.grf` nicht vor.
+
+**Gemessen (2026-11-18, kRO-`data.grf` 2024, `crates/rgrf-formats/tests/real_act.rs`):**
+- **71.647 ACT-Dateien**: Versionen 2.5 (68.386), 2.4 (2.643), 2.3 (373), 2.1 (242), 2.0 (3). **Alle lesen sich fehlerfrei und kommen byteidentisch zurück** (71.647 von 71.647).
+- 5 Dateien (`NIGHT_WATCH_*`, `rebellion_*`) haben 1.280 ungenutzte Bytes am Ende (bleiben erhalten).
+- Gegenprüfung mit dem SPR im selben Pfad: 44.252 ACT haben eins (27.395 nicht im selben Pfad). Von 18.252.639 Layern zeigen **226 auf ein Bild, das im SPR fehlt** (z. B. `frog_kagerou_¿©`: Aktion 100, Index 3 von 3); der Client ignoriert so etwas offenbar, wir zeichnen die Ebene nicht. Bei 380.761 Layern weicht die gespeicherte Breite/Höhe vom Bild ab; GRF Editor überschreibt sie beim Laden ebenfalls aus dem Bild, wir ignorieren sie beim Zeichnen.
+
+**Rendern (`render.rs`):** Kette wie in `LayerDraw.cs` des ACT Editors: Spiegeln, Bild um `-(Breite+1)/2` bzw. `-(Höhe+1)/2` verschieben (ganzzahlig, Richtung 0), Skalieren, Drehen (Grad, im Uhrzeigersinn, Mittelpunkt bei ungeraden Größen um eine halbe Skalierung versetzt), Versatz; Nearest-Neighbour wie die Vorschau des ACT Editors; die Farbe multipliziert die Pixel (`ColorMultiply.hlsl`, aus dem Namen und dem Code gelesen, Shader nicht geprüft). Alle Frames einer Aktion teilen eine Leinwand.
+- Sichtprüfung: Poporing, Aktion 0 (4 Frames), Körper und Auge korrekt zusammengesetzt, Squash-Animation sichtbar.
+- Stichprobe: jede 40. ACT (1.111 Dateien), **346.419 Frames gerendert, kein Fehler, keine übergroße Leinwand**; 15.768 Aktionen enthalten kein Bild.
+- **Noch nicht:** Anker-Bindung an eine andere ACT (Kopfbedeckung am Körper), Überlagerung mehrerer ACT/SPR, GIF-Export, Vergleich pixelgenau mit ACT Editor (nur in der Windows-VM; ob der Ursprung auf einer Pixelgrenze oder -mitte liegt, ist dort zu prüfen).
+
+**CLI:** `rgrf act info|render`, siehe [04-cli-and-mcp.md](04-cli-and-mcp.md).

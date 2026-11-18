@@ -10,7 +10,11 @@ use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};
 use serde_json::json;
 
 /// Reads the SPR bytes from a loose file, or from `entry` inside the GRF `input`.
-fn load(input: &Path, entry: Option<&str>, names: NameMode) -> Result<(Vec<u8>, String)> {
+pub(crate) fn load(
+    input: &Path,
+    entry: Option<&str>,
+    names: NameMode,
+) -> Result<(Vec<u8>, String)> {
     let Some(entry) = entry else {
         let data = fs::read(input).with_context(|| format!("cannot read {}", input.display()))?;
         return Ok((data, input.display().to_string()));
