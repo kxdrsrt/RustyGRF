@@ -1,0 +1,409 @@
+//! Lua 5.0 bytecode (62 `.lub` of the kRO `data.grf` are in this older format): reading the chunk,
+//! checking its structure and a `luac -l` style listing. There is no decompiler for it (the opcodes
+//! and the jump shapes differ from 5.1); the listing is what the tools show.
+//!
+//! Layout (checked against all 62 real files, each read to its last byte): header `ESC Lua`, `0x50`,
+//! endianness, sizes of int / size_t / instruction, bit widths of OP / A / B / C (6 / 8 / 9 / 9),
+//! size of a number and a test number; a function is: source, line defined, upvalues, parameters,
+//! vararg, stack size, then line info, locals, upvalue names, constants, nested functions, code.
+//! Instruction: OP in bits 0-5, C in 6-14, B in 15-23, A in 24-31 (A on top, unlike 5.1).
+
+use crate::luac::{Constant, Local, LuacError};
+
+/// The test number of the header, 31415926.535897933 as a double.
+const TEST_NUMBER_BITS: u64 = 0x417d_f5e7_6893_09b6;
+
+pub const OPS: [&str; 35] = [
+    "MOVE",
+    "LOADK",
+    "LOADBOOL",
+    "LOADNIL",
+    "GETUPVAL",
+    "GETGLOBAL",
+    "GETTABLE",
+    "SETGLOBAL",
+    "SETUPVAL",
+    "SETTABLE",
+    "NEWTABLE",
+    "SELF",
+    "ADD",
+    "SUB",
+    "MUL",
+    "DIV",
+    "POW",
+    "UNM",
+    "NOT",
+    "CONCAT",
+    "JMP",
+    "EQ",
+    "LT",
+    "LE",
+    "TEST",
+    "CALL",
+    "TAILCALL",
+    "RETURN",
+    "FORLOOP",
+    "TFORLOOP",
+    "TFORPREP",
+    "SETLIST",
+    "SETLISTO",
+    "CLOSE",
+    "CLOSURE",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Function {
+    pub source: Vec<u8>,
+    pub line_defined: u32,
+    pub upvalue_count: u8,
+    pub params: u8,
+    pub is_vararg: u8,
+    pub max_stack: u8,
+    pub lines: Vec<u32>,
+    pub locals: Vec<Local>,
+    pub upvalue_names: Vec<Vec<u8>>,
+    pub constants: Vec<Constant>,
+    pub protos: Vec<Function>,
+    pub code: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Chunk {
+    pub main: Function,
+}
+
+/// A decoded instruction: opcode, A, B, C (and Bx / sBx for the wide forms).
+#[derive(Debug, Clone, Copy)]
+pub struct Instr {
+    pub op: u8,
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+}
+
+impl Instr {
+    pub fn decode(raw: u32) -> Self {
+        Self {
+            op: (raw & 0x3f) as u8,
+            c: (raw >> 6) & 0x1ff,
+            b: (raw >> 15) & 0x1ff,
+            a: raw >> 24,
+        }
+    }
+    pub fn bx(&self) -> u32 {
+        (self.b << 9) | self.c
+    }
+    pub fn sbx(&self) -> i64 {
+        i64::from(self.bx()) - 131_071
+    }
+    pub fn name(&self) -> &'static str {
+        OPS.get(usize::from(self.op)).copied().unwrap_or("?")
+    }
+}
+
+struct Reader<'a> {
+    d: &'a [u8],
+    at: usize,
+}
+
+impl Reader<'_> {
+    fn take(&mut self, n: usize) -> Result<&[u8], LuacError> {
+        let end = self.at.checked_add(n).ok_or(LuacError::Truncated)?;
+        let s = self.d.get(self.at..end).ok_or(LuacError::Truncated)?;
+        self.at = end;
+        Ok(s)
+    }
+    fn byte(&mut self) -> Result<u8, LuacError> {
+        Ok(self.take(1)?[0])
+    }
+    fn u32(&mut self) -> Result<u32, LuacError> {
+        let b = self.take(4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    fn count(&mut self, unit: usize) -> Result<usize, LuacError> {
+        let n = self.u32()? as usize;
+        if n.saturating_mul(unit.max(1)) > self.d.len() - self.at {
+            return Err(LuacError::Truncated);
+        }
+        Ok(n)
+    }
+    fn string(&mut self) -> Result<Vec<u8>, LuacError> {
+        let len = self.u32()? as usize;
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let s = self.take(len)?;
+        Ok(s[..len - 1].to_vec())
+    }
+}
+
+fn read_function(r: &mut Reader<'_>, depth: usize) -> Result<Function, LuacError> {
+    if depth > 200 {
+        return Err(LuacError::Truncated);
+    }
+    let source = r.string()?;
+    let line_defined = r.u32()?;
+    let upvalue_count = r.byte()?;
+    let params = r.byte()?;
+    let is_vararg = r.byte()?;
+    let max_stack = r.byte()?;
+    let n = r.count(4)?;
+    let mut lines = Vec::with_capacity(n);
+    for _ in 0..n {
+        lines.push(r.u32()?);
+    }
+    let n = r.count(4)?;
+    let mut locals = Vec::with_capacity(n);
+    for _ in 0..n {
+        locals.push(Local {
+            name: r.string()?,
+            start: r.u32()?,
+            end: r.u32()?,
+        });
+    }
+    let n = r.count(4)?;
+    let mut upvalue_names = Vec::with_capacity(n);
+    for _ in 0..n {
+        upvalue_names.push(r.string()?);
+    }
+    let n = r.count(1)?;
+    let mut constants = Vec::with_capacity(n);
+    for _ in 0..n {
+        constants.push(match r.byte()? {
+            0 => Constant::Nil,
+            3 => {
+                let b = r.take(8)?;
+                Constant::Number(f64::from_le_bytes(
+                    b.try_into().map_err(|_| LuacError::Truncated)?,
+                ))
+            }
+            4 => Constant::Str(r.string()?),
+            t => return Err(LuacError::Unsupported(format!("constant type {t}"))),
+        });
+    }
+    let n = r.count(1)?;
+    let mut protos = Vec::with_capacity(n);
+    for _ in 0..n {
+        protos.push(read_function(r, depth + 1)?);
+    }
+    let n = r.count(4)?;
+    let mut code = Vec::with_capacity(n);
+    for _ in 0..n {
+        code.push(r.u32()?);
+    }
+    Ok(Function {
+        source,
+        line_defined,
+        upvalue_count,
+        params,
+        is_vararg,
+        max_stack,
+        lines,
+        locals,
+        upvalue_names,
+        constants,
+        protos,
+        code,
+    })
+}
+
+/// Reads a Lua 5.0 chunk; the whole file must be used (trailing bytes are an error).
+pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
+    if bytes.len() < 4 || &bytes[..4] != b"\x1bLua" {
+        return Err(LuacError::NotBytecode);
+    }
+    if bytes.get(4) != Some(&0x50) {
+        return Err(LuacError::Unsupported(format!(
+            "Lua version {:#x}",
+            bytes.get(4).copied().unwrap_or(0)
+        )));
+    }
+    // endianness 1, int 4, size_t 4, instruction 4, OP/A/B/C 6/8/9/9, number 8, then the test number
+    const HEADER: [u8; 10] = [1, 4, 4, 4, 6, 8, 9, 9, 8, 0];
+    let head = bytes.get(5..14).ok_or(LuacError::Truncated)?;
+    if head != &HEADER[..9] {
+        return Err(LuacError::Unsupported(
+            "sizes other than little-endian, int/size_t/instruction 4, OP/A/B/C 6/8/9/9, double"
+                .into(),
+        ));
+    }
+    let test = bytes.get(14..22).ok_or(LuacError::Truncated)?;
+    if u64::from_le_bytes(test.try_into().map_err(|_| LuacError::Truncated)?) != TEST_NUMBER_BITS {
+        return Err(LuacError::Unsupported(
+            "number format is not a double".into(),
+        ));
+    }
+    let mut r = Reader { d: bytes, at: 22 };
+    let main = read_function(&mut r, 0)?;
+    if r.at != bytes.len() {
+        return Err(LuacError::Unsupported(format!(
+            "{} bytes after the chunk",
+            bytes.len() - r.at
+        )));
+    }
+    Ok(Chunk { main })
+}
+
+/// Structural check of every function: known opcodes, constant and function indices in range,
+/// jumps inside the code, the code ends in RETURN. Returns the first problem found.
+pub fn validate(chunk: &Chunk) -> Result<(), String> {
+    fn go(f: &Function, path: &str) -> Result<(), String> {
+        let n = f.code.len() as i64;
+        if f.code.is_empty() {
+            return Err(format!("{path}: no code"));
+        }
+        for (pc, &raw) in f.code.iter().enumerate() {
+            let i = Instr::decode(raw);
+            let bad = |what: &str| format!("{path} at {pc}: {what}");
+            if usize::from(i.op) >= OPS.len() {
+                return Err(bad(&format!("unknown opcode {}", i.op)));
+            }
+            match i.name() {
+                "LOADK" if i.bx() as usize >= f.constants.len() => {
+                    return Err(bad("constant out of range"));
+                }
+                "GETGLOBAL" | "SETGLOBAL"
+                    if !matches!(f.constants.get(i.bx() as usize), Some(Constant::Str(_))) =>
+                {
+                    return Err(bad("global name is not a string constant"));
+                }
+                "CLOSURE" if i.bx() as usize >= f.protos.len() => {
+                    return Err(bad("function index out of range"));
+                }
+                "JMP" | "FORLOOP" | "TFORPREP" => {
+                    let t = pc as i64 + 1 + i.sbx();
+                    if t < 0 || t > n {
+                        return Err(bad("jump out of range"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if Instr::decode(*f.code.last().unwrap_or(&0)).name() != "RETURN" {
+            return Err(format!("{path}: does not end in RETURN"));
+        }
+        for (k, p) in f.protos.iter().enumerate() {
+            go(p, &format!("{path}/{k}"))?;
+        }
+        Ok(())
+    }
+    go(&chunk.main, "main")
+}
+
+fn quote(s: &[u8], names: &dyn Fn(&[u8]) -> String) -> String {
+    let t: String = names(s).chars().take(60).collect();
+    format!("{t:?}")
+}
+
+/// A listing in the style of `luac -l`.
+pub fn disassemble(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
+    let mut out = String::new();
+    list(&chunk.main, "main", names, &mut out);
+    out
+}
+
+fn list(f: &Function, label: &str, names: &dyn Fn(&[u8]) -> String, out: &mut String) {
+    out.push_str(&format!(
+        "\n{label} <{}:{}> ({} instructions, {} params, {} slots, {} upvalues, {} constants, {} functions)\n",
+        names(&f.source),
+        f.line_defined,
+        f.code.len(),
+        f.params,
+        f.max_stack,
+        f.upvalue_count,
+        f.constants.len(),
+        f.protos.len()
+    ));
+    let k = |idx: u32| match f.constants.get(idx as usize) {
+        Some(Constant::Str(s)) => quote(s, names),
+        Some(Constant::Number(v)) => format!("{v}"),
+        Some(Constant::Nil) => "nil".into(),
+        Some(Constant::Bool(b)) => b.to_string(),
+        None => "?".into(),
+    };
+    for (pc, &raw) in f.code.iter().enumerate() {
+        let i = Instr::decode(raw);
+        let line = f.lines.get(pc).copied().unwrap_or(0);
+        let args = match i.name() {
+            "LOADK" => format!("R{} K{} ; {}", i.a, i.bx(), k(i.bx())),
+            "GETGLOBAL" | "SETGLOBAL" => format!("R{} K{} ; {}", i.a, i.bx(), k(i.bx())),
+            "JMP" | "FORLOOP" | "TFORPREP" => {
+                format!("{} -> {}", i.a, pc as i64 + 1 + i.sbx())
+            }
+            "CLOSURE" => format!("R{} function {}", i.a, i.bx()),
+            _ => format!("{} {} {}", i.a, i.b, i.c),
+        };
+        out.push_str(&format!("{pc:>6} [{line:>4}] {:<9} {args}\n", i.name()));
+    }
+    for (n, p) in f.protos.iter().enumerate() {
+        list(p, &format!("function {n}"), names, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn le(v: u32) -> [u8; 4] {
+        v.to_le_bytes()
+    }
+
+    /// An instruction in the 5.0 layout: OP, A, C, B.
+    fn op(op: u32, a: u32, c: u32, b: u32) -> u32 {
+        op | (c << 6) | (b << 15) | (a << 24)
+    }
+
+    /// `x = "hi"` as Lua 5.0 bytecode.
+    fn sample() -> Vec<u8> {
+        let mut b = b"\x1bLua\x50\x01\x04\x04\x04\x06\x08\x09\x09\x08".to_vec();
+        b.extend(TEST_NUMBER_BITS.to_le_bytes());
+        b.extend(le(3)); // source "@t"
+        b.extend(b"@t\0");
+        b.extend(le(0)); // line defined
+        b.extend([0, 0, 0, 2]); // upvalues, params, vararg, stack
+        b.extend(le(2)); // line info
+        b.extend(le(1));
+        b.extend(le(1));
+        b.extend(le(0)); // locals
+        b.extend(le(0)); // upvalue names
+        b.extend(le(2)); // constants
+        b.push(4);
+        b.extend(le(3));
+        b.extend(b"hi\0");
+        b.push(4);
+        b.extend(le(2));
+        b.extend(b"x\0");
+        b.extend(le(0)); // functions
+        b.extend(le(3)); // code: LOADK R0 K0; SETGLOBAL R0 K1; RETURN R0 1
+        for raw in [op(1, 0, 0, 0), op(7, 0, 1, 0), op(27, 0, 0, 1)] {
+            b.extend(raw.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn reads_validates_and_lists_a_chunk() {
+        let c = parse(&sample()).unwrap();
+        assert_eq!(c.main.code.len(), 3);
+        assert_eq!(validate(&c), Ok(()));
+        let text = disassemble(&c, &|b| String::from_utf8_lossy(b).into_owned());
+        assert!(text.contains("LOADK"), "{text}");
+        assert!(text.contains("SETGLOBAL R0 K1 ; \"x\""), "{text}");
+    }
+
+    #[test]
+    fn damaged_chunks_are_errors_not_panics() {
+        let ok = sample();
+        for cut in 0..ok.len() {
+            assert!(parse(&ok[..cut]).is_err() || cut == ok.len());
+        }
+        let mut extra = ok.clone();
+        extra.push(0);
+        assert!(parse(&extra).is_err(), "trailing bytes");
+        let mut bad = ok;
+        let last = bad.len() - 4;
+        bad[last..].copy_from_slice(&0x3fu32.to_le_bytes());
+        let c = parse(&bad).unwrap();
+        assert!(validate(&c).is_err(), "unknown opcode");
+    }
+}

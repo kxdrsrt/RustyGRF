@@ -1117,7 +1117,7 @@ fn lua_check_on_files_folders_and_grfs() {
         String::from_utf8_lossy(&o.stdout)
     );
 
-    // a folder: the .txt is ignored, compiled files are counted but not failed
+    // a folder: the .txt is ignored; the cut-off compiled file is damaged, not "not checked"
     let o = rgrf(&["--json", "lua", "check", &p("src")]);
     assert_eq!(o.status.code(), Some(3));
     let v = json(&o);
@@ -1129,8 +1129,16 @@ fn lua_check_on_files_folders_and_grfs() {
         ),
         (Some(3), Some(1), Some(1))
     );
-    assert_eq!(v["failed"].as_array().unwrap().len(), 1);
-    assert_eq!(v["failed"][0]["line"], 4);
+    assert_eq!(v["bytecode_valid"], 0);
+    assert_eq!(v["encrypted"], 0);
+    let failed = v["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 2);
+    assert!(
+        failed
+            .iter()
+            .any(|f| f["line"] == 4 && f["compiled"] == false)
+    );
+    assert!(failed.iter().any(|f| f["compiled"] == true));
 
     // inside a GRF, with and without a pattern
     let grf = p("t.grf");

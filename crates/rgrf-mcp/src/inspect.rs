@@ -8,7 +8,7 @@ use rgrf_formats::gnd::GndSummary;
 use rgrf_formats::pal::Pal;
 use rgrf_formats::rsw::{self, Rsw};
 use rgrf_formats::spr::Spr;
-use rgrf_formats::{luac, luadec, rsm_model, str_effect};
+use rgrf_formats::{luac, luac50, luadec, rsm_model, str_effect};
 use serde_json::{Value, json};
 
 use crate::params::Args;
@@ -116,8 +116,12 @@ pub fn inspect(ctx: &Ctx, a: &Args) -> Out {
             })
         }
         "lub" | "lua" if data.starts_with(b"\x1bLua") => {
-            let c = luac::parse(&data).map_err(|e| bad("compiled Lua", &e))?;
-            json!({"kind": "lub", "compiled": true, "functions": count_functions(&c.main)})
+            let info = luac::check_bytecode(&data).map_err(|e| bad("compiled Lua", &e))?;
+            json!({
+                "kind": "lub", "compiled": true, "lua_version": info.version,
+                "functions": info.functions, "instructions": info.instructions,
+                "decompilable": info.version == "5.1",
+            })
         }
         _ => {
             return Err(format!(
@@ -130,10 +134,6 @@ pub fn inspect(ctx: &Ctx, a: &Args) -> Out {
     Ok(v)
 }
 
-fn count_functions(f: &luac::Function) -> usize {
-    1 + f.protos.iter().map(count_functions).sum::<usize>()
-}
-
 pub fn lua_decompile(ctx: &Ctx, a: &Args) -> Out {
     let (name, data) = entry_data(ctx, a)?;
     if !data.starts_with(b"\x1bLua") {
@@ -141,13 +141,20 @@ pub fn lua_decompile(ctx: &Ctx, a: &Args) -> Out {
             "{name} is not compiled Lua (it is plain text; use grf_read_text)"
         ));
     }
-    let chunk = luac::parse(&data).map_err(|e| format!("{name} cannot be read: {e}"))?;
     let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
-    let listing = a.flag("listing");
-    let text = if listing {
-        luac::disassemble(&chunk, &show)
+    let mut listing = a.flag("listing");
+    let text = if data.get(4) == Some(&0x50) {
+        // Lua 5.0: no decompiler, the structure is listed
+        listing = true;
+        let chunk = luac50::parse(&data).map_err(|e| format!("{name} cannot be read: {e}"))?;
+        luac50::disassemble(&chunk, &show)
     } else {
-        luadec::decompile(&chunk, &show)
+        let chunk = luac::parse(&data).map_err(|e| format!("{name} cannot be read: {e}"))?;
+        if listing {
+            luac::disassemble(&chunk, &show)
+        } else {
+            luadec::decompile(&chunk, &show)
+        }
     };
     let complete = listing || luadec::is_complete(&text);
     let max = a.opt_u64("max_bytes").unwrap_or(65_536).clamp(1, 1 << 20) as usize;

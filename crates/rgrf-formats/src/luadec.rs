@@ -44,6 +44,43 @@ struct Unsupported(String);
 
 struct Ctx<'a> {
     names: &'a dyn Fn(&[u8]) -> String,
+    /// How many functions deep the function being written is nested.
+    depth: std::cell::Cell<usize>,
+}
+
+/// Nested functions and expressions deeper than this are not decompiled: the output is built
+/// recursively, so a damaged or hostile file must not be able to exhaust the stack.
+const MAX_NESTING: usize = 40;
+const MAX_EXPR_DEPTH: usize = 100;
+
+/// True when `e` is nested deeper than [`MAX_EXPR_DEPTH`]. At most a few thousand nodes are looked
+/// at, so checking every instruction stays cheap even for huge data tables.
+fn too_deep(e: &Expr) -> bool {
+    fn go(e: &Expr, depth: usize, budget: &mut usize) -> bool {
+        if depth > MAX_EXPR_DEPTH {
+            return true;
+        }
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        match e {
+            Expr::Index(a, b) | Expr::Bin(_, a, b) => {
+                go(a, depth + 1, budget) || go(b, depth + 1, budget)
+            }
+            Expr::Method(o, _) | Expr::Un(_, o) => go(o, depth + 1, budget),
+            Expr::Call(g, args) => {
+                go(g, depth + 1, budget) || args.iter().any(|a| go(a, depth + 1, budget))
+            }
+            Expr::Table(entries) => entries.iter().any(|en| match en {
+                Entry::Item(v) => go(v, depth + 1, budget),
+                Entry::Keyed(k, v) => go(k, depth + 1, budget) || go(v, depth + 1, budget),
+            }),
+            Expr::Concat(parts) => parts.iter().any(|p| go(p, depth + 1, budget)),
+            _ => false,
+        }
+    }
+    go(e, 0, &mut 4000)
 }
 
 fn is_ident(s: &str) -> bool {
@@ -192,14 +229,21 @@ impl Ctx<'_> {
         if p.is_vararg != 0 {
             head.push("...".into());
         }
+        self.depth.set(self.depth.get() + 1);
         let body = self.body(p, indent + 1);
+        self.depth.set(self.depth.get() - 1);
         let pad = "\t".repeat(indent);
         format!("function({})\n{body}{pad}end", head.join(", "))
     }
 
     /// The statements of a function, each on its own lines, indented by `indent` tabs.
     fn body(&self, f: &Function, indent: usize) -> String {
-        match self.statements(f, indent) {
+        let result = if self.depth.get() > MAX_NESTING {
+            Err(Unsupported("functions nested too deeply".into()))
+        } else {
+            self.statements(f, indent)
+        };
+        match result {
             Ok(s) => s,
             Err(Unsupported(why)) => {
                 let pad = "\t".repeat(indent);
@@ -946,6 +990,9 @@ impl Ctx<'_> {
                 "CLOSE" => {}
                 other => return Err(Unsupported(format!("{other} (control flow)"))),
             }
+            if a < reg.len() && reg[a].as_ref().is_some_and(too_deep) {
+                return Err(Unsupported("an expression nested too deeply".into()));
+            }
             if let Some(name) = assigned {
                 self.assign_local(f, reg, a, name, indent, &mut out)?;
             }
@@ -1094,7 +1141,10 @@ fn konst(f: &Function, i: usize) -> Result<Expr, Unsupported> {
 
 /// Lua source for the chunk. `names` turns raw bytes (names, strings) into text.
 pub fn decompile(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
-    let ctx = Ctx { names };
+    let ctx = Ctx {
+        names,
+        depth: std::cell::Cell::new(0),
+    };
     let mut out = String::from("-- decompiled by RustyGRF from Lua 5.1 bytecode\n");
     out.push_str(&ctx.body(&chunk.main, 0));
     out
@@ -1340,6 +1390,65 @@ mod tests {
         ];
         let out = decompiled(code, consts, vec![("a", 2, 6), ("b", 2, 6)]);
         assert!(!is_complete(&out), "{out}");
+    }
+
+    #[test]
+    fn deeply_nested_functions_do_not_overflow_the_stack() {
+        // f = function() f = function() ... end end, 190 levels (the reader allows 200)
+        let mut inner = func(vec![ins(30, 0, 1, 0)], vec![], vec![]);
+        for _ in 0..190 {
+            inner = func(
+                vec![insx(36, 0, 0), insx(7, 0, 0), ins(30, 0, 1, 0)],
+                vec![s("f")],
+                vec![inner],
+            );
+        }
+        let out = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || decompile(&Chunk { main: inner }, &text))
+            .unwrap()
+            .join()
+            .expect("no stack overflow or panic");
+        assert!(
+            out.contains("f = function()"),
+            "{}",
+            &out[..200.min(out.len())]
+        );
+    }
+
+    #[test]
+    fn deeply_nested_expressions_fall_back_to_the_listing() {
+        let run = |chunk: Chunk| {
+            std::thread::Builder::new()
+                .stack_size(2 << 20)
+                .spawn(move || decompile(&chunk, &text))
+                .unwrap()
+                .join()
+                .expect("no stack overflow or panic")
+        };
+        // x = 1 + 1 + 1 ... (5000 additions on one register)
+        let mut code = vec![insx(1, 0, 0), insx(1, 1, 0)];
+        code.extend((0..5000).map(|_| ins(12, 0, 0, 1)));
+        code.extend([insx(7, 0, 1), ins(30, 0, 1, 0)]);
+        let out = run(Chunk {
+            main: func(code, vec![Constant::Number(1.0), s("x")], vec![]),
+        });
+        assert!(!is_complete(&out), "a chain this deep is not written");
+        // tables wrapped into each other through two registers, 3000 levels
+        let mut code = vec![ins(10, 0, 0, 0)];
+        for _ in 0..1500 {
+            code.extend([
+                ins(10, 1, 0, 0),
+                ins(9, 1, 256, 0),
+                ins(10, 0, 0, 0),
+                ins(9, 0, 256, 1),
+            ]);
+        }
+        code.extend([insx(7, 0, 1), ins(30, 0, 1, 0)]);
+        let out = run(Chunk {
+            main: func(code, vec![Constant::Number(1.0), s("t")], vec![]),
+        });
+        assert!(!is_complete(&out));
     }
 
     #[test]

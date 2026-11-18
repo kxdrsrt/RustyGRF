@@ -197,7 +197,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "grf_lua_decompile",
         title: "Decompile a compiled Lua file",
-        description: "Turns a compiled Lua 5.1 .lub entry back into source text. `complete` is false when some functions could only be shown as a commented bytecode listing (a few control-flow shapes are not understood yet); Lua 5.0 files are not supported. Set `listing` to get the plain bytecode listing instead.",
+        description: "Turns a compiled Lua 5.1 .lub entry back into source text. `complete` is false when some functions could only be shown as a commented bytecode listing (a few control-flow shapes are not understood yet); Lua 5.0 files (62 in the kRO client) have no decompiler: they come back as a bytecode listing. Set `listing` to get the plain bytecode listing for 5.1 too.",
         params: &[
             req("path", Ty::Str, "Path of the .grf file."),
             req(

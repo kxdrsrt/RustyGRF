@@ -109,6 +109,21 @@ fn previews_of_real_files() {
         other => panic!("{other:?}"),
     }
 
+    // compiled Lua: 5.1 is decompiled, 5.0 is shown as a bytecode listing
+    for (path, expect) in [
+        (r"data\lua files\emotionlist.lub", "Lua 5.0"),
+        (r"data\luafiles514\lua files\deletefiles.lub", "decompiled"),
+    ] {
+        let i = find(&mut s, path);
+        match s.preview(i, None).unwrap() {
+            Preview::Text { text, encoding, .. } => {
+                assert!(encoding.contains(expect), "{path}: {encoding}");
+                assert!(!text.is_empty());
+            }
+            other => panic!("{path}: {other:?}"),
+        }
+    }
+
     // a map with moving models: node matrices over the loop and a node number per vertex
     let i = find(&mut s, r"data\mjolnir_12.rsw");
     match s.preview(i, None).unwrap() {

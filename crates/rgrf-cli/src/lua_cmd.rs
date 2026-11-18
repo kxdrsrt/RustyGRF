@@ -9,9 +9,37 @@ use rgrf_core::{Archive, DecodeStatus, NameMode};
 use rgrf_formats::lua;
 use serde_json::json;
 
+#[derive(PartialEq, Clone, Copy)]
+enum Kind {
+    Text,
+    Compiled,
+    /// Encrypted in the archive: cannot be read, so it is counted and skipped.
+    Encrypted,
+}
+
 struct Outcome {
     name: String,
+    kind: Kind,
     result: std::result::Result<(), lua::LuaError>,
+}
+
+/// Text is checked against the Lua 5.1 grammar, compiled files (5.0 and 5.1) structurally.
+fn check_data(name: String, data: &[u8]) -> Outcome {
+    if data.starts_with(b"\x1bLua") {
+        let result = rgrf_formats::luac::check_bytecode(data)
+            .map(|_| ())
+            .map_err(|message| lua::LuaError { line: 0, message });
+        return Outcome {
+            name,
+            kind: Kind::Compiled,
+            result,
+        };
+    }
+    Outcome {
+        name,
+        kind: Kind::Text,
+        result: lua::check(data),
+    }
 }
 
 fn is_lua_name(n: &str) -> bool {
@@ -44,10 +72,7 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
             .map(|p| {
                 let name = p.display().to_string();
                 let data = fs::read(p).with_context(|| format!("cannot read {name}"))?;
-                Ok(Outcome {
-                    name,
-                    result: lua::check(&data),
-                })
+                Ok(check_data(name, &data))
             })
             .collect::<Result<_>>()?
     } else if input
@@ -65,35 +90,32 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
                 let name = a.entries()[i].name.display(names);
                 let d = a.read(i)?;
                 if d.status == DecodeStatus::Encrypted {
-                    bail!("{name} is encrypted; decryption is not supported yet");
+                    return Ok(Outcome {
+                        name,
+                        kind: Kind::Encrypted,
+                        result: Ok(()),
+                    });
                 }
-                Ok(Outcome {
-                    result: lua::check(&d.data),
-                    name,
-                })
+                Ok(check_data(name, &d.data))
             })
             .collect::<Result<_>>()?
     } else {
         let data = fs::read(input).with_context(|| format!("cannot read {}", input.display()))?;
-        vec![Outcome {
-            name: input.display().to_string(),
-            result: lua::check(&data),
-        }]
+        vec![check_data(input.display().to_string(), &data)]
     };
 
-    let is_bytecode = |o: &Outcome| {
-        o.result
-            .as_ref()
-            .err()
-            .is_some_and(|e| e.message.contains("bytecode"))
-    };
-    let bytecode = outcomes.iter().filter(|o| is_bytecode(o)).count();
-    let mut failed: Vec<&Outcome> = outcomes
-        .iter()
-        .filter(|o| o.result.is_err() && !is_bytecode(o))
-        .collect();
+    let count = |k: Kind| outcomes.iter().filter(|o| o.kind == k).count();
+    let (compiled, encrypted) = (count(Kind::Compiled), count(Kind::Encrypted));
+    let mut failed: Vec<&Outcome> = outcomes.iter().filter(|o| o.result.is_err()).collect();
     failed.sort_by(|a, b| a.name.cmp(&b.name));
-    let valid = outcomes.len() - bytecode - failed.len();
+    let compiled_ok = outcomes
+        .iter()
+        .filter(|o| o.kind == Kind::Compiled && o.result.is_ok())
+        .count();
+    let valid = outcomes
+        .iter()
+        .filter(|o| o.kind == Kind::Text && o.result.is_ok())
+        .count();
 
     if json {
         println!(
@@ -102,19 +124,26 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
                 "schema_version": crate::SCHEMA_VERSION,
                 "checked": outcomes.len(),
                 "valid": valid,
-                "bytecode": bytecode,
+                "bytecode": compiled,
+                "bytecode_valid": compiled_ok,
+                "encrypted": encrypted,
                 "failed": failed.iter().map(|o| {
                     let e = o.result.as_ref().unwrap_err();
-                    json!({"file": o.name, "line": e.line, "message": e.message})
+                    json!({"file": o.name, "line": e.line, "message": e.message, "compiled": o.kind == Kind::Compiled})
                 }).collect::<Vec<_>>(),
             })
         );
     } else {
         for o in &failed {
-            println!("{}: {}", o.name, o.result.as_ref().unwrap_err());
+            let e = o.result.as_ref().unwrap_err();
+            if o.kind == Kind::Compiled {
+                println!("{}: compiled Lua is damaged: {}", o.name, e.message);
+            } else {
+                println!("{}: {e}", o.name);
+            }
         }
         println!(
-            "{} Lua files: {valid} valid, {} with errors, {bytecode} compiled (not checked)",
+            "{} Lua files: {valid} valid text, {compiled_ok} of {compiled} compiled valid, {} with errors, {encrypted} encrypted (skipped)",
             outcomes.len(),
             failed.len()
         );
@@ -137,9 +166,27 @@ pub fn decompile(
     if !data.starts_with(b"\x1bLua") {
         bail!("{what} is not compiled Lua (it is plain text already)");
     }
-    let chunk = luac::parse(&data).with_context(|| format!("{what} cannot be read"))?;
     // names and strings in the client's scripts are Korean text (CP949)
     let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+    if data.get(4) == Some(&0x50) {
+        // Lua 5.0 has no decompiler; its structure is read and listed
+        let chunk =
+            rgrf_formats::luac50::parse(&data).with_context(|| format!("{what} cannot be read"))?;
+        let text = rgrf_formats::luac50::disassemble(&chunk, &show);
+        eprintln!("{what} is Lua 5.0: there is no decompiler for it, showing the bytecode listing");
+        match output {
+            Some(p) => {
+                if p.exists() {
+                    bail!("{} exists already; remove it first", p.display());
+                }
+                fs::write(p, &text).with_context(|| format!("cannot write {}", p.display()))?;
+                eprintln!("wrote {}", p.display());
+            }
+            None => print!("{text}"),
+        }
+        return Ok(2);
+    }
+    let chunk = luac::parse(&data).with_context(|| format!("{what} cannot be read"))?;
     let (text, complete) = if listing {
         (luac::disassemble(&chunk, &show), true)
     } else {

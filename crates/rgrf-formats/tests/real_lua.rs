@@ -211,3 +211,157 @@ fn every_compiled_lub_is_read_and_decompiled() {
         &bad_syntax[..bad_syntax.len().min(5)]
     );
 }
+
+/// Every compiled `.lub` of the kRO client, Lua 5.0 and 5.1, is read to its last byte and passes
+/// the structural check (known opcodes, indices and jumps in range).
+#[test]
+fn every_compiled_lub_is_structurally_valid() {
+    let Some(base) = base() else { return };
+    let arc = Archive::open(base.join("0 OTHER CLIENTS/client-kro/data.grf")).unwrap();
+    let idx = arc.select(Some("*.lub"), NameMode::Cp1252);
+    let counts = Mutex::new(std::collections::BTreeMap::<&'static str, usize>::new());
+    let bad: Vec<String> = idx
+        .par_iter()
+        .filter_map(|&i| {
+            let data = arc.read(i).unwrap().data;
+            if !data.starts_with(b"\x1bLua") {
+                return None;
+            }
+            match rgrf_formats::luac::check_bytecode(&data) {
+                Ok(info) => {
+                    *counts.lock().unwrap().entry(info.version).or_default() += 1;
+                    None
+                }
+                Err(e) => Some(format!(
+                    "{}: {e}",
+                    arc.entries()[i].name.display(NameMode::Cp949)
+                )),
+            }
+        })
+        .collect();
+    eprintln!("valid compiled files: {:?}", counts.lock().unwrap());
+    assert!(
+        bad.is_empty(),
+        "{} invalid, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
+    );
+    let c = counts.lock().unwrap();
+    assert_eq!(
+        (c.get("5.0").copied(), c.get("5.1").copied()),
+        (Some(62), Some(442))
+    );
+}
+
+/// Damaged compiled files must never make the readers, the checks, the listing or the decompiler
+/// panic: random byte changes and cut-off copies of real files (5.0 and 5.1).
+#[test]
+fn damaged_bytecode_never_panics() {
+    use rgrf_formats::{luac, luac50, luadec};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let Some(base) = base() else { return };
+    let arc = Archive::open(base.join("0 OTHER CLIENTS/client-kro/data.grf")).unwrap();
+    let names = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let (mut runs, mut panics) = (0usize, Vec::new());
+    for (n, &i) in arc
+        .select(Some("*.lub"), NameMode::Cp1252)
+        .iter()
+        .enumerate()
+    {
+        let data = arc.read(i).unwrap().data;
+        if !data.starts_with(b"\x1bLua") || data.len() > 300_000 {
+            continue;
+        }
+        for round in 0..12 {
+            let mut d = data.clone();
+            if round % 4 == 3 {
+                d.truncate((next() as usize) % d.len());
+            } else {
+                for _ in 0..=(round % 3) {
+                    let at = 5 + (next() as usize) % (d.len() - 5);
+                    d[at] = (next() & 0xff) as u8;
+                }
+            }
+            runs += 1;
+            let r = catch_unwind(AssertUnwindSafe(|| {
+                let _ = luac::check_bytecode(&d);
+                if let Ok(c) = luac::parse(&d) {
+                    let _ = luadec::decompile(&c, &names);
+                    let _ = luac::disassemble(&c, &names);
+                }
+                if let Ok(c) = luac50::parse(&d) {
+                    let _ = luac50::disassemble(&c, &names);
+                }
+            }));
+            if r.is_err() {
+                panics.push(format!("file #{n} round {round}"));
+            }
+        }
+    }
+    eprintln!("{runs} damaged copies, {} panics", panics.len());
+    assert!(runs > 3000);
+    assert!(
+        panics.is_empty(),
+        "panics: {:?}",
+        &panics[..panics.len().min(5)]
+    );
+}
+
+/// The syntax check must not panic or overflow the stack on damaged text or on absurd nesting.
+#[test]
+fn damaged_text_never_panics() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let deep = format!("x = {}1{}", "(".repeat(100_000), ")".repeat(100_000));
+    assert!(
+        lua::check(deep.as_bytes()).is_err(),
+        "deep nesting is an error, not a crash"
+    );
+    let deep_tables = format!("x = {}{}", "{".repeat(100_000), "}".repeat(100_000));
+    assert!(lua::check(deep_tables.as_bytes()).is_err());
+    let deep_fn = "function f() ".repeat(50_000);
+    assert!(lua::check(deep_fn.as_bytes()).is_err());
+
+    let Some(base) = base() else { return };
+    let arc = Archive::open(base.join("client-dev/full/core.grf")).unwrap();
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let (mut runs, mut panics) = (0usize, 0usize);
+    for &i in &arc.select(Some("*.lub"), NameMode::Cp1252) {
+        let data = arc.read(i).unwrap().data;
+        if data.is_empty() {
+            continue;
+        }
+        for round in 0..10 {
+            let mut d = data.clone();
+            if round % 5 == 4 {
+                d.truncate((next() as usize) % d.len());
+            } else {
+                for _ in 0..=(round % 3) {
+                    let at = (next() as usize) % d.len();
+                    d[at] = (next() & 0xff) as u8;
+                }
+            }
+            runs += 1;
+            panics += usize::from(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _ = lua::check(&d);
+                }))
+                .is_err(),
+            );
+        }
+    }
+    eprintln!("{runs} damaged text copies, {panics} panics");
+    assert_eq!(panics, 0);
+}

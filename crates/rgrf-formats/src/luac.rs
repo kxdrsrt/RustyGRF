@@ -272,6 +272,99 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
     Ok(Chunk { main })
 }
 
+/// Structural check of every function of a Lua 5.1 chunk: known opcodes, constant and function
+/// indices in range, jumps inside the code, the code ends in RETURN. Returns the first problem.
+pub fn validate(chunk: &Chunk) -> Result<(), String> {
+    fn go(f: &Function, path: &str) -> Result<(), String> {
+        let n = f.code.len() as i64;
+        if f.code.is_empty() {
+            return Err(format!("{path}: no code"));
+        }
+        for (pc, &raw) in f.code.iter().enumerate() {
+            let i = Instr::decode(raw);
+            let bad = |what: &str| format!("{path} at {pc}: {what}");
+            if usize::from(i.op) >= OPS.len() {
+                return Err(bad(&format!("unknown opcode {}", i.op)));
+            }
+            match i.name() {
+                "LOADK" if i.bx() as usize >= f.constants.len() => {
+                    return Err(bad("constant out of range"));
+                }
+                "GETGLOBAL" | "SETGLOBAL"
+                    if !matches!(f.constants.get(i.bx() as usize), Some(Constant::Str(_))) =>
+                {
+                    return Err(bad("global name is not a string constant"));
+                }
+                "CLOSURE" if i.bx() as usize >= f.protos.len() => {
+                    return Err(bad("function index out of range"));
+                }
+                "JMP" | "FORLOOP" | "FORPREP" => {
+                    let t = pc as i64 + 1 + i.sbx();
+                    if t < 0 || t > n {
+                        return Err(bad("jump out of range"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if Instr::decode(*f.code.last().unwrap_or(&0)).name() != "RETURN" {
+            return Err(format!("{path}: does not end in RETURN"));
+        }
+        for (k, p) in f.protos.iter().enumerate() {
+            go(p, &format!("{path}/{k}"))?;
+        }
+        Ok(())
+    }
+    go(&chunk.main, "main")
+}
+
+/// What a compiled `.lub` turned out to be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytecodeInfo {
+    /// `"5.0"` or `"5.1"`.
+    pub version: &'static str,
+    pub functions: usize,
+    pub instructions: usize,
+}
+
+/// Reads and structurally checks compiled Lua of either version the client uses.
+pub fn check_bytecode(bytes: &[u8]) -> Result<BytecodeInfo, String> {
+    fn count51(f: &Function) -> (usize, usize) {
+        f.protos.iter().fold((1, f.code.len()), |(a, b), p| {
+            let (x, y) = count51(p);
+            (a + x, b + y)
+        })
+    }
+    fn count50(f: &crate::luac50::Function) -> (usize, usize) {
+        f.protos.iter().fold((1, f.code.len()), |(a, b), p| {
+            let (x, y) = count50(p);
+            (a + x, b + y)
+        })
+    }
+    match bytes.get(4) {
+        Some(0x50) => {
+            let c = crate::luac50::parse(bytes).map_err(|e| e.to_string())?;
+            crate::luac50::validate(&c)?;
+            let (functions, instructions) = count50(&c.main);
+            Ok(BytecodeInfo {
+                version: "5.0",
+                functions,
+                instructions,
+            })
+        }
+        _ => {
+            let c = parse(bytes).map_err(|e| e.to_string())?;
+            validate(&c)?;
+            let (functions, instructions) = count51(&c.main);
+            Ok(BytecodeInfo {
+                version: "5.1",
+                functions,
+                instructions,
+            })
+        }
+    }
+}
+
 fn quote(s: &[u8]) -> String {
     let mut out = String::from("\"");
     for &b in s {
