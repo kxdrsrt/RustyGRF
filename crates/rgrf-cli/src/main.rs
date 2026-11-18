@@ -243,6 +243,19 @@ enum ActCmd {
         /// One frame (then -o is a file); without it every frame of the action (then -o is a folder)
         #[arg(long)]
         frame: Option<usize>,
+        /// More ACTs drawn on top, e.g. headgear (loose files with their .spr beside them, or
+        /// entries of the same GRF); repeatable
+        #[arg(long = "with")]
+        with: Vec<String>,
+        /// Do not bind the --with parts to the base by their anchors
+        #[arg(long)]
+        no_anchor: bool,
+        /// Write one animated GIF (-o is the file) instead of PNGs
+        #[arg(long)]
+        gif: bool,
+        /// Enlarge every pixel to scale x scale pixels
+        #[arg(long, default_value_t = 1)]
+        scale: u32,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long)]
@@ -743,19 +756,27 @@ fn run(cli: &Cli) -> Result<i32> {
                 spr,
                 action,
                 frame,
+                with,
+                no_anchor,
+                gif,
+                scale,
                 output,
                 overwrite,
-            } => act_cmd::render(
+            } => act_cmd::render(&act_cmd::RenderArgs {
                 input,
-                entry.as_deref(),
-                spr.as_deref(),
-                *action,
-                *frame,
+                entry: entry.as_deref(),
+                spr: spr.as_deref(),
+                with,
+                no_anchor: *no_anchor,
+                action: *action,
+                frame: *frame,
+                gif: *gif,
+                scale: *scale,
                 output,
-                *overwrite,
-                cli.names,
-                cli.json,
-            ),
+                overwrite: *overwrite,
+                names: cli.names,
+                json: cli.json,
+            }),
         },
         Cmd::Spr { action } => match action {
             SprCmd::Info { input, entry } => {

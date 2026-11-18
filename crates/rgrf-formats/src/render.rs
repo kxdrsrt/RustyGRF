@@ -2,8 +2,8 @@
 //!
 //! Ported from the transform chain of ACT Editor's `LayerDraw.cs` (mirror, move to the centre,
 //! scale, rotate, offset) with nearest-neighbour sampling like its preview. The colour mask
-//! multiplies the pixels. Not done yet: frames anchored to another ACT (`AnchoredTo`, used to put
-//! headgear on a body).
+//! multiplies the pixels. Several ACTs can be drawn together ([`Part`]), with the later ones bound
+//! to the base by their anchors (headgear on a body).
 //!
 //! Derived from ACT Editor (Tokeiburu), used with permission, see `docs/05-licensing.md`.
 
@@ -153,34 +153,80 @@ impl Prepared {
     }
 }
 
+/// One ACT with its SPR. In a composition the first part is the base (e.g. the body); the others
+/// are drawn on top of it, in order.
+#[derive(Clone, Copy)]
+pub struct Part<'a> {
+    pub act: &'a Act,
+    pub spr: &'a Spr,
+    /// Move the part so that its first anchor meets the base frame's first anchor (ACT Editor's
+    /// `AnchoredTo`: how headgear sits on a head). Ignored for the base and for frames without anchors.
+    pub anchored: bool,
+}
+
+impl<'a> Part<'a> {
+    pub fn new(act: &'a Act, spr: &'a Spr) -> Self {
+        Self {
+            act,
+            spr,
+            anchored: false,
+        }
+    }
+}
+
+/// All layers to draw for `frame` of `action`, parts in order. The base part must have the action
+/// and frame; the others are skipped when they lack them (a head has fewer actions than a body).
 fn frame_layers(
-    act: &Act,
-    spr: &Spr,
+    parts: &[Part<'_>],
     action: usize,
     frame: usize,
 ) -> Result<Vec<Prepared>, RenderError> {
-    let a = act
-        .actions
-        .get(action)
-        .ok_or(RenderError::NoAction(action))?;
-    let f = a
-        .frames
-        .get(frame)
-        .ok_or(RenderError::NoFrame { action, frame })?;
-    Ok(f.layers.iter().filter_map(|l| prepare(l, spr)).collect())
+    let mut out = Vec::new();
+    let mut base_anchor: Option<(i32, i32)> = None;
+    for (n, part) in parts.iter().enumerate() {
+        let f = part
+            .act
+            .actions
+            .get(action)
+            .and_then(|a| a.frames.get(frame));
+        let Some(f) = f else {
+            if n == 0 {
+                return if part.act.actions.get(action).is_some() {
+                    Err(RenderError::NoFrame { action, frame })
+                } else {
+                    Err(RenderError::NoAction(action))
+                };
+            }
+            continue;
+        };
+        if n == 0 {
+            base_anchor = f.anchors.first().map(|a| (a.x, a.y));
+        }
+        let (dx, dy) = match (part.anchored && n > 0, base_anchor, f.anchors.first()) {
+            (true, Some((bx, by)), Some(a)) => (f64::from(bx - a.x), f64::from(by - a.y)),
+            _ => (0.0, 0.0),
+        };
+        for l in &f.layers {
+            if let Some(mut p) = prepare(l, part.spr) {
+                p.ox += dx;
+                p.oy += dy;
+                out.push(p);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Smallest rectangle holding the layers of the given frames; `None` when nothing is drawn.
 /// With several frames (e.g. a whole action) every frame can be rendered on the same canvas.
-pub fn bounds_of(
-    act: &Act,
-    spr: &Spr,
+pub fn bounds_of_parts(
+    parts: &[Part<'_>],
     action: usize,
     frames: impl IntoIterator<Item = usize>,
 ) -> Result<Option<Bounds>, RenderError> {
     let mut all: Option<Bounds> = None;
     for frame in frames {
-        for p in frame_layers(act, spr, action, frame)? {
+        for p in frame_layers(parts, action, frame)? {
             let b = p.bounds();
             all = Some(all.map_or(b, |a| a.union(b)));
         }
@@ -188,15 +234,24 @@ pub fn bounds_of(
     Ok(all)
 }
 
-/// Renders one frame onto a canvas of `bounds` (use [`bounds_of`]).
-pub fn render_frame(
+/// [`bounds_of_parts`] for a single ACT.
+pub fn bounds_of(
     act: &Act,
     spr: &Spr,
+    action: usize,
+    frames: impl IntoIterator<Item = usize>,
+) -> Result<Option<Bounds>, RenderError> {
+    bounds_of_parts(&[Part::new(act, spr)], action, frames)
+}
+
+/// Renders one frame of a composition onto a canvas of `bounds` (use [`bounds_of_parts`]).
+pub fn render_parts(
+    parts: &[Part<'_>],
     action: usize,
     frame: usize,
     bounds: Bounds,
 ) -> Result<Canvas, RenderError> {
-    let layers = frame_layers(act, spr, action, frame)?;
+    let layers = frame_layers(parts, action, frame)?;
     if u64::from(bounds.width()) * u64::from(bounds.height()) > MAX_PIXELS {
         return Err(RenderError::TooLarge {
             width: bounds.width(),
@@ -242,10 +297,21 @@ pub fn render_frame(
     })
 }
 
+/// [`render_parts`] for a single ACT.
+pub fn render_frame(
+    act: &Act,
+    spr: &Spr,
+    action: usize,
+    frame: usize,
+    bounds: Bounds,
+) -> Result<Canvas, RenderError> {
+    render_parts(&[Part::new(act, spr)], action, frame, bounds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::act::{Action, Frame, Layer};
+    use crate::act::{Action, Anchor, Frame, Layer};
     use crate::spr::{IndexedImage, PALETTE_LEN, Version};
 
     fn spr(images: Vec<IndexedImage>) -> Spr {
@@ -384,6 +450,53 @@ mod tests {
         ]);
         let c = render(&act(vec![layer(0), layer(-1), layer(1), layer(7)]), &s);
         assert_eq!(px(&c, 0, 0), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn anchored_part_moves_so_that_its_anchor_meets_the_base_anchor() {
+        let s = spr(vec![IndexedImage {
+            width: 2,
+            height: 2,
+            pixels: vec![1; 4],
+        }]);
+        let anchor = |x, y| Anchor {
+            unknown: [0; 4],
+            x,
+            y,
+            other: 0,
+        };
+        let mut base = act(vec![layer(0)]);
+        base.actions[0].frames[0].anchors = vec![anchor(10, 4)];
+        let mut hat = act(vec![layer(0)]);
+        hat.actions[0].frames[0].anchors = vec![anchor(1, 1)];
+        let plain = [Part::new(&base, &s), Part::new(&hat, &s)];
+        let b = bounds_of_parts(&plain, 0, [0]).unwrap().unwrap();
+        assert_eq!(
+            (b.min_x, b.max_x),
+            (-1, 1),
+            "not anchored: on top of each other"
+        );
+        let parts = [
+            Part::new(&base, &s),
+            Part {
+                anchored: true,
+                ..Part::new(&hat, &s)
+            },
+        ];
+        let b = bounds_of_parts(&parts, 0, [0]).unwrap().unwrap();
+        // the hat moves by (10 - 1, 4 - 1) = (9, 3)
+        assert_eq!((b.min_x, b.max_x, b.min_y, b.max_y), (-1, 10, -1, 4));
+        let c = render_parts(&parts, 0, 0, b).unwrap();
+        assert_eq!(px(&c, 0, 0)[3], 255);
+        assert_eq!(px(&c, 10, 3)[3], 255);
+        // a part without the action is skipped, a base without it is an error
+        let short = act(vec![]);
+        let two = [Part::new(&base, &s), Part::new(&short, &s)];
+        assert!(bounds_of_parts(&two, 0, [0]).is_ok());
+        assert_eq!(
+            bounds_of_parts(&[Part::new(&base, &s)], 4, [0]),
+            Err(RenderError::NoAction(4))
+        );
     }
 
     #[test]

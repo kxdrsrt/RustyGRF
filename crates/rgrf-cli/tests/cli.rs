@@ -959,3 +959,134 @@ fn spr_and_act_edit_commands() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn act_gif_scale_and_with_parts() {
+    use rgrf_formats::act::{Act, Action, Anchor, Frame, Layer, V2_5};
+    use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, Spr, Version};
+
+    let mut pal = Box::new([0u8; PALETTE_LEN]);
+    pal[4..8].copy_from_slice(&[255, 0, 0, 0]);
+    let spr = Spr {
+        version: Version::V2_1,
+        indexed: vec![IndexedImage {
+            width: 2,
+            height: 2,
+            pixels: vec![1; 4],
+        }],
+        rgba: vec![],
+        palette: Some(pal),
+        warnings: vec![],
+    };
+    let act_with_anchor = |ax: i32, frames: usize| Act {
+        version: V2_5,
+        reserved: [0; 10],
+        actions: vec![Action {
+            frames: (0..frames)
+                .map(|_| Frame {
+                    layers: vec![Layer {
+                        sprite_index: 0,
+                        ..Layer::default()
+                    }],
+                    anchors: vec![Anchor {
+                        unknown: [0; 4],
+                        x: ax,
+                        y: 0,
+                        other: 0,
+                    }],
+                    ..Frame::default()
+                })
+                .collect(),
+            interval: 4.0,
+        }],
+        sounds: vec![],
+        trailing: vec![],
+        warnings: vec![],
+    };
+    let dir = tmpdir("gif");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    let bytes = spr.to_bytes(Version::V2_1).unwrap();
+    for n in ["body", "hat"] {
+        std::fs::write(p(&format!("{n}.spr")), &bytes).unwrap();
+    }
+    std::fs::write(
+        p("body.act"),
+        act_with_anchor(10, 3).to_bytes(V2_5).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(p("hat.act"), act_with_anchor(4, 3).to_bytes(V2_5).unwrap()).unwrap();
+
+    let o = rgrf(&[
+        "--json",
+        "act",
+        "render",
+        &p("body.act"),
+        "--gif",
+        "--scale",
+        "3",
+        "-o",
+        &p("a.gif"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(&std::fs::read(p("a.gif")).unwrap()[..6], b"GIF89a");
+    let v = json(&o);
+    assert_eq!(
+        (v["width"].as_u64(), v["height"].as_u64()),
+        (Some(6), Some(6))
+    );
+
+    // the hat is bound to the body by the anchors (10 - 4 = 6 px to the right), or not
+    let o = rgrf(&[
+        "--json",
+        "act",
+        "render",
+        &p("body.act"),
+        "--with",
+        &p("hat.act"),
+        "--frame",
+        "0",
+        "-o",
+        &p("w.png"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(json(&o)["width"], 8);
+    let o = rgrf(&[
+        "--json",
+        "act",
+        "render",
+        &p("body.act"),
+        "--with",
+        &p("hat.act"),
+        "--no-anchor",
+        "--frame",
+        "0",
+        "-o",
+        &p("n.png"),
+    ]);
+    assert_eq!(json(&o)["width"], 2);
+
+    // a GIF is a whole action, never a single frame; the output is never overwritten
+    assert_eq!(
+        rgrf(&[
+            "act",
+            "render",
+            &p("body.act"),
+            "--gif",
+            "--frame",
+            "0",
+            "-o",
+            &p("b.gif")
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+    assert_eq!(
+        rgrf(&["act", "render", &p("body.act"), "--gif", "-o", &p("a.gif")])
+            .status
+            .code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

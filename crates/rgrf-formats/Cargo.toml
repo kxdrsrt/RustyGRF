@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+gif = "0.14.2"
 png = "0.18.1"
 thiserror = "2.0.21"
 

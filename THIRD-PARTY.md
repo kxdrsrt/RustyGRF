@@ -18,5 +18,6 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 | `serde_json` | 1.0.154 | MIT OR Apache-2.0 | JSON-Ausgabe | M1 |
 | `anyhow` | 1.0.104 | MIT OR Apache-2.0 | Fehlerbehandlung in der CLI | M1 |
 | `png` | 0.18.1 | MIT OR Apache-2.0 | PNG lesen/schreiben (SPR-Frames exportieren/importieren) | M7a |
+| `gif` | 0.14.2 | MIT OR Apache-2.0 | animiertes GIF aus gerenderten Frames (`act render --gif`); bringt `color_quant` (MIT) und `weezl` (MIT OR Apache-2.0) mit | M7b |
 
 Stand 2026-11-16: `cargo deny check` (Lizenzen, Verbote, Quellen, Advisories) ohne Befund. Transitive Abhängigkeiten stehen in `Cargo.lock`; erlaubte Lizenzen in `deny.toml`.

@@ -1,4 +1,4 @@
-//! `rgrf act`: look at ACT animations and render their frames as PNG (M7b).
+//! `rgrf act`: look at ACT animations and render their frames as PNG or an animated GIF (M7b).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use rgrf_core::NameMode;
 use rgrf_formats::act::{Act, sound_name};
+use rgrf_formats::gif_io::{delay_cs, encode_gif, upscale};
 use rgrf_formats::png_io::rgba_to_png;
-use rgrf_formats::render::{bounds_of, render_frame};
+use rgrf_formats::render::{Part, bounds_of_parts, render_parts};
 use rgrf_formats::spr::{RgbaImage, Spr};
 use serde_json::json;
 
@@ -69,17 +70,26 @@ pub fn info(input: &Path, entry: Option<&str>, names: NameMode, json: bool) -> R
     Ok(if act.warnings.is_empty() { 0 } else { 2 })
 }
 
-/// The SPR belonging to an ACT: `spr` if given, else the same path with `.spr`.
-fn load_spr(input: &Path, entry: Option<&str>, spr: Option<&Path>, names: NameMode) -> Result<Spr> {
-    let (data, what) = match (spr, entry) {
+/// Name of the SPR that belongs to an ACT path (same path, `.spr`).
+fn spr_name(act_path: &str) -> Result<String> {
+    if !act_path.to_ascii_lowercase().ends_with(".act") {
+        bail!("'{act_path}' does not end in .act");
+    }
+    Ok(format!("{}spr", &act_path[..act_path.len() - 3]))
+}
+
+/// An ACT with its SPR, from a GRF entry or from loose files.
+fn load_pair(
+    input: &Path,
+    entry: Option<&str>,
+    spr_override: Option<&Path>,
+    names: NameMode,
+) -> Result<(Act, Spr, String)> {
+    let (data, what) = load(input, entry, names)?;
+    let act = parse_act(&data, &what)?;
+    let (sdata, swhat) = match (spr_override, entry) {
         (Some(p), _) => load(p, None, names)?,
-        (None, Some(e)) => {
-            let stem = e
-                .get(..e.len().saturating_sub(4))
-                .filter(|_| e.to_ascii_lowercase().ends_with(".act"))
-                .ok_or_else(|| anyhow!("'{e}' does not end in .act"))?;
-            load(input, Some(&format!("{stem}.spr")), names)?
-        }
+        (None, Some(e)) => load(input, Some(&spr_name(e)?), names)?,
         (None, None) => {
             let p = input.with_extension("spr");
             if !p.exists() {
@@ -88,107 +98,157 @@ fn load_spr(input: &Path, entry: Option<&str>, spr: Option<&Path>, names: NameMo
             load(&p, None, names)?
         }
     };
-    Spr::parse(&data).with_context(|| format!("{what} is not a readable SPR"))
+    let spr = Spr::parse(&sdata).with_context(|| format!("{swhat} is not a readable SPR"))?;
+    Ok((act, spr, what))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn render(
-    input: &Path,
-    entry: Option<&str>,
-    spr: Option<&Path>,
-    action: usize,
-    frame: Option<usize>,
-    output: &Path,
-    overwrite: bool,
-    names: NameMode,
-    json: bool,
-) -> Result<i32> {
-    let (data, what) = load(input, entry, names)?;
-    let act = parse_act(&data, &what)?;
-    let spr = load_spr(input, entry, spr, names)?;
-    let a = act.actions.get(action).ok_or_else(|| {
-        anyhow!(
-            "{what} has no action {action} ({} actions)",
-            act.actions.len()
-        )
-    })?;
-    let wanted: Vec<usize> = match frame {
+pub struct RenderArgs<'a> {
+    pub input: &'a Path,
+    pub entry: Option<&'a str>,
+    pub spr: Option<&'a Path>,
+    /// More ACTs drawn on top (loose files, or entries of the same GRF), each with its own SPR.
+    pub with: &'a [String],
+    pub no_anchor: bool,
+    pub action: usize,
+    pub frame: Option<usize>,
+    pub gif: bool,
+    pub scale: u32,
+    pub output: &'a Path,
+    pub overwrite: bool,
+    pub names: NameMode,
+    pub json: bool,
+}
+
+pub fn render(a: &RenderArgs<'_>) -> Result<i32> {
+    if a.gif && a.frame.is_some() {
+        bail!("--gif draws a whole action; leave out --frame");
+    }
+    let (base_act, base_spr, what) = load_pair(a.input, a.entry, a.spr, a.names)?;
+    let mut loaded = Vec::new();
+    for w in a.with {
+        let pair = if a.entry.is_some() {
+            load_pair(a.input, Some(w), None, a.names)?
+        } else {
+            load_pair(Path::new(w), None, None, a.names)?
+        };
+        loaded.push(pair);
+    }
+    let mut parts = vec![Part::new(&base_act, &base_spr)];
+    parts.extend(loaded.iter().map(|(act, spr, _)| Part {
+        act,
+        spr,
+        anchored: !a.no_anchor,
+    }));
+
+    let n_frames = base_act
+        .actions
+        .get(a.action)
+        .ok_or_else(|| {
+            anyhow!(
+                "{what} has no action {} ({} actions)",
+                a.action,
+                base_act.actions.len()
+            )
+        })?
+        .frames
+        .len();
+    let wanted: Vec<usize> = match a.frame {
         Some(f) => {
-            if f >= a.frames.len() {
-                bail!(
-                    "action {action} has no frame {f} ({} frames)",
-                    a.frames.len()
-                );
+            if f >= n_frames {
+                bail!("action {} has no frame {f} ({n_frames} frames)", a.action);
             }
             vec![f]
         }
-        None => (0..a.frames.len()).collect(),
+        None => (0..n_frames).collect(),
     };
     // One canvas for all frames of the action, so that an animation does not jump around.
-    let Some(bounds) = bounds_of(&act, &spr, action, 0..a.frames.len())? else {
-        bail!("action {action} draws nothing (no layer with an image)");
+    let Some(bounds) = bounds_of_parts(&parts, a.action, 0..n_frames)? else {
+        bail!("action {} draws nothing (no layer with an image)", a.action);
     };
-    let single = frame.is_some();
+    let single = a.frame.is_some();
     let target = |f: usize| -> PathBuf {
-        if single {
-            output.to_path_buf()
+        if a.gif || single {
+            a.output.to_path_buf()
         } else {
-            output.join(format!("{f:03}.png"))
+            a.output.join(format!("{f:03}.png"))
         }
     };
-    if !overwrite {
+    if !a.overwrite {
         for &f in &wanted {
             if target(f).exists() {
                 bail!("{} exists already (use --overwrite)", target(f).display());
             }
         }
     }
-    if !single {
-        fs::create_dir_all(output)
-            .with_context(|| format!("cannot create {}", output.display()))?;
-    }
+    let scale = a.scale.max(1);
+    let canvases = wanted
+        .iter()
+        .map(|&f| Ok(render_parts(&parts, a.action, f, bounds)?))
+        .collect::<Result<Vec<_>>>()?;
     let mut written = Vec::new();
-    for &f in &wanted {
-        let c = render_frame(&act, &spr, action, f, bounds)?;
-        let (Ok(width), Ok(height)) = (u16::try_from(c.width), u16::try_from(c.height)) else {
-            bail!(
-                "rendered frame is {} x {}, too large for a PNG here",
-                c.width,
-                c.height
-            );
-        };
-        let png = rgba_to_png(&RgbaImage {
-            width,
-            height,
-            pixels: c.pixels,
-        })?;
-        fs::write(target(f), png)
-            .with_context(|| format!("cannot write {}", target(f).display()))?;
-        written.push(target(f));
+    if a.gif {
+        let delay = delay_cs(base_act.actions[a.action].interval);
+        let bytes = encode_gif(&canvases, &vec![delay; canvases.len()], scale)?;
+        fs::write(a.output, bytes)
+            .with_context(|| format!("cannot write {}", a.output.display()))?;
+        written.push(a.output.to_path_buf());
+    } else {
+        if !single {
+            fs::create_dir_all(a.output)
+                .with_context(|| format!("cannot create {}", a.output.display()))?;
+        }
+        for (&f, c) in wanted.iter().zip(canvases) {
+            let s = scale as usize;
+            let (w, h) = (c.width as usize * s, c.height as usize * s);
+            let (Ok(width), Ok(height)) = (u16::try_from(w), u16::try_from(h)) else {
+                bail!("rendered frame is {w} x {h}, too large for a PNG here");
+            };
+            let pixels = if s == 1 {
+                c.pixels
+            } else {
+                upscale(&c.pixels, c.width as usize, c.height as usize, s)
+            };
+            let png = rgba_to_png(&RgbaImage {
+                width,
+                height,
+                pixels,
+            })?;
+            fs::write(target(f), png)
+                .with_context(|| format!("cannot write {}", target(f).display()))?;
+            written.push(target(f));
+        }
     }
-    if json {
+    let warned = !base_act.warnings.is_empty();
+    if a.json {
         println!(
             "{}",
             json!({
                 "schema_version": crate::SCHEMA_VERSION,
                 "source": what,
-                "action": action,
-                "origin": {"x": -bounds.min_x, "y": -bounds.min_y},
-                "width": bounds.width(),
-                "height": bounds.height(),
+                "action": a.action,
+                "parts": parts.len(),
+                "origin": {"x": -bounds.min_x * scale as i32, "y": -bounds.min_y * scale as i32},
+                "width": bounds.width() * scale,
+                "height": bounds.height() * scale,
                 "files": written.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             })
         );
     } else {
         println!(
-            "{what}: action {action}, {} frame(s), {} x {} px, origin at ({}, {}) -> {}",
-            written.len(),
-            bounds.width(),
-            bounds.height(),
-            -bounds.min_x,
-            -bounds.min_y,
-            output.display()
+            "{what}: action {}, {} frame(s){}, {} x {} px, origin at ({}, {}) -> {}",
+            a.action,
+            wanted.len(),
+            if parts.len() > 1 {
+                format!(", {} parts", parts.len())
+            } else {
+                String::new()
+            },
+            bounds.width() * scale,
+            bounds.height() * scale,
+            -bounds.min_x * scale as i32,
+            -bounds.min_y * scale as i32,
+            a.output.display()
         );
     }
-    Ok(if act.warnings.is_empty() { 0 } else { 2 })
+    Ok(if warned { 2 } else { 0 })
 }

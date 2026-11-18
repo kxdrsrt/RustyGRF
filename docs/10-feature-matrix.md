@@ -18,7 +18,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Dateinamen-Kodierung ansehen (`ViewEncoding`) | `--names cp1252|cp949|utf8|raw` | ✅ |
 | Vorschau Bild/BMP/TGA/JPG (`PreviewImage`, `ImageConverter`) | – | 🔨 M7d |
 | Vorschau und Bearbeiten **SPR** (`PreviewSpr`, `SpriteEditor`, `SpriteConverter`) | `spr info|export|build|replace|add|remove|set-palette` | ✅ Lesen/Schreiben/PNG (M7a), Bearbeiten (M7b); Oberfläche 🔨 M8 |
-| Vorschau **ACT** (`PreviewAct`) | `act info`, `act render` (PNG) | ✅ Lesen/Schreiben/Rendern (M7b); Anker, GIF 🔨 |
+| Vorschau **ACT** (`PreviewAct`) | `act info`, `act render` (PNG) | ✅ Lesen/Schreiben/Rendern, Anker-Bindung, GIF (M7b) |
 | Palette (`PreviewPalette`, `PaletteOperations`) | PAL lesen/schreiben, Palette tauschen (`spr set-palette`) | ✅; weitere Operationen 🔨 |
 | Lua/Lub dekompilieren, Text (`PreviewText`, `DecompilerSettings`) | – | 🔨 M7c |
 | Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | – | 🔨 M7e |
@@ -35,7 +35,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Aktionen, Frames, Layer, Anker lesen/schreiben | Bibliothek `rgrf-formats` | ✅ Versatz, Intervall, Aktion kopieren/entfernen; Layer-Feinbearbeitung 🔨 |
 | Referenz-Sprite wählen (auch aus GRF) | – | 🔨 M7b |
 | Interpolation (auch „erweitert“), Skripte (C#-Skript-Engine, `doc/ScriptGuide`) | – | ❓ Skripte: andere Sprache nötig (Frage) |
-| GIF-Export, Hintergrund wählen | – | 🔨 M7b |
+| GIF-Export | `act render --gif` | ✅ (Hintergrund wählen ❓) |
 | Sound-Effekte je Frame | – | 🔨 M7b |
 | Palette Editor (`PaletteEditorTool`, `PaletteSheetGenerator`) | – | 🔨 M7b |
 | Sprite von indiziert nach BGRA konvertieren (und zurück) | – | 🔨 M7b |
