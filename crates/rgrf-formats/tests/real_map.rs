@@ -478,3 +478,58 @@ fn every_rsm_has_geometry_and_a_finite_pose() {
         &bad[..bad.len().min(5)]
     );
 }
+
+/// Every GND parses completely: tiles, lightmaps and cubes, with valid tile and lightmap indices.
+#[test]
+fn every_gnd_parses_with_valid_indices() {
+    use rgrf_formats::gnd_map::parse;
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let idx = arc.select(Some("*.gnd"), NameMode::Cp1252);
+    eprintln!("{} GND files", idx.len());
+    let versions = Mutex::new(BTreeMap::<String, (usize, usize)>::new());
+    let bad: Vec<String> =
+        idx.par_iter()
+            .filter_map(|&i| {
+                let name = arc.entries()[i].name.display(NameMode::Cp1252);
+                let data = arc.read(i).unwrap().data;
+                let g = match parse(&data) {
+                    Ok(g) => g,
+                    Err(e) => return Some(format!("{name}: {e}")),
+                };
+                let n_tiles = g.tiles.len() as i32;
+                for c in &g.cubes {
+                    for t in [c.up, c.front, c.right] {
+                        if t >= n_tiles {
+                            return Some(format!("{name}: tile {t} of {n_tiles}"));
+                        }
+                    }
+                }
+                if g.tiles.iter().any(|t| {
+                    usize::from(t.lightmap) >= g.lightmap_count.max(1) && g.lightmap_count > 0
+                }) {
+                    return Some(format!("{name}: lightmap index out of range"));
+                }
+                if g.tiles
+                    .iter()
+                    .any(|t| usize::from(t.texture) >= g.textures.len())
+                {
+                    return Some(format!("{name}: texture index out of range"));
+                }
+                let mut v = versions.lock().unwrap();
+                let e = v.entry(format!("{}", g.version)).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += g.cubes.len();
+                None
+            })
+            .collect();
+    for (v, (n, cells)) in versions.lock().unwrap().iter() {
+        eprintln!("  GND {v}: {n} maps, {cells} cells");
+    }
+    assert!(
+        bad.is_empty(),
+        "{} failed, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
+    );
+}

@@ -334,6 +334,20 @@ function renderPreview(p, row, meta) {
         infoBlock(p.info),
       ];
     }
+    case "scene": {
+      const host = el("div", { class: "glhost tall" });
+      const handle = { v: null };
+      queueMicrotask(() => (S.viewer = handle.v = Viewer3D.showScene(host, p)));
+      const toggle = (label, name, on = true) => {
+        const c = el("input", { type: "checkbox", checked: on, onchange: () => handle.v?.set(name, c.checked) });
+        return el("label", {}, c, ` ${label}`);
+      };
+      return [
+        el("div", { class: "controls" }, el("span", { class: "muted", text: "drag = turn, right/shift-drag or arrows = move, wheel = zoom, double-click = reset" }), toggle("Lighting", "lit"), toggle("Lightmaps", "lightmap"), toggle("Models", "models"), toggle("Water", "water")),
+        host,
+        infoBlock(p.info),
+      ];
+    }
     case "effect":
       return [el("div", { class: "muted", text: `${p.frames} frame(s) shown at ${p.fps} fps` }), el("div", { class: "fxstage" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "effect" })), infoBlock(p.info)];
     case "map":

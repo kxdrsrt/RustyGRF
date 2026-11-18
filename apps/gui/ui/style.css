@@ -239,3 +239,4 @@ dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
 .glhost { position: relative; width: 100%; height: min(60vh, 520px); min-height: 260px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin: 6px 0; }
 .glhost canvas.gl { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 .controls label { display: inline-flex; gap: 4px; align-items: center; }
+.glhost.tall { height: min(66vh, 640px); }

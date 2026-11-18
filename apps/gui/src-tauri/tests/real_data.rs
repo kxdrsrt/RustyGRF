@@ -78,15 +78,27 @@ fn previews_of_real_files() {
         other => panic!("{other:?}"),
     }
 
+    // a world: ground, 1304 model instances of 63 models, water and light
     let i = find(&mut s, r"data\prontera.rsw");
+    let t = Instant::now();
     match s.preview(i, None).unwrap() {
-        Preview::Info { lines, .. } => {
-            assert!(lines[0].contains("RSW 2.1"), "{lines:?}");
-            assert!(lines[1].contains("1304 models"), "{lines:?}");
-            assert!(
-                lines.iter().any(|l| l.contains("\u{b098}\u{bb34}")),
-                "Korean folder names are readable: {lines:?}"
-            );
+        Preview::Scene {
+            ground,
+            models,
+            instances,
+            textures,
+            water,
+            info,
+            ..
+        } => {
+            eprintln!("prontera scene in {:?}", t.elapsed());
+            let g = ground.unwrap();
+            assert_eq!((g.width, g.height), (156, 196));
+            assert_eq!((models.len(), instances.len()), (63, 1304));
+            assert!(textures.iter().filter(|t| t.png.is_some()).count() > 150);
+            assert!(water.is_some());
+            assert!(info[1].contains("RSW 2.1"), "{info:?}");
+            assert!(instances.iter().all(|i| i.matrix.len() == 16 && i.matrix.iter().all(|v| v.is_finite())));
         }
         other => panic!("{other:?}"),
     }
@@ -101,7 +113,9 @@ fn previews_of_real_files() {
         } => {
             assert!(triangles > 0 && !parts.is_empty());
             assert!(
-                textures.iter().any(|t| t.name.contains("ad_j_01.bmp") && t.png.is_some()),
+                textures
+                    .iter()
+                    .any(|t| t.name.contains("ad_j_01.bmp") && t.png.is_some()),
                 "the texture is found and decoded"
             );
         }

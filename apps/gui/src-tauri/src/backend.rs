@@ -22,7 +22,7 @@ use rgrf_formats::act::Act;
 use rgrf_formats::edit::{Kind, quantize};
 use rgrf_formats::gat::{self, Gat};
 use rgrf_formats::gif_io::{delay_cs, encode_gif, upscale};
-use rgrf_formats::gnd::GndSummary;
+use rgrf_formats::gnd_map;
 use rgrf_formats::pal::Pal;
 use rgrf_formats::png_io::{Frame as PngFrame, frame_from_png, rgba_to_png};
 use rgrf_formats::render::{bounds_of, render_frame};
@@ -41,6 +41,40 @@ const MAX_UNDO: usize = 200;
 /// An effect preview shows at most this many frames, at half the stage size.
 const MAX_EFFECT_FRAMES: usize = 120;
 const EFFECT_SCALE: f32 = 0.5;
+
+/// Textures of a scene, each loaded once.
+#[derive(Default)]
+struct TexturePool {
+    out: Vec<TextureOut>,
+    by_key: HashMap<Vec<u8>, usize>,
+}
+
+impl TexturePool {
+    fn get(
+        &mut self,
+        s: &Session,
+        keys: &HashMap<Vec<u8>, usize>,
+        base: &[u8],
+        name: &[u8],
+    ) -> usize {
+        let full = [base, name].concat();
+        let key = GrfPath::new(full).key();
+        if let Some(&i) = self.by_key.get(&key) {
+            return i;
+        }
+        let png = keys
+            .get(&key)
+            .and_then(|&ti| s.texture_image(ti))
+            .and_then(|img| rgba_to_png(&img).ok())
+            .map(|b| b64(&b));
+        self.out.push(TextureOut {
+            name: s.shown_bytes(name),
+            png,
+        });
+        self.by_key.insert(key, self.out.len() - 1);
+        self.out.len() - 1
+    }
+}
 
 pub struct Session {
     pub path: PathBuf,
@@ -142,6 +176,48 @@ pub struct Frame {
     pub label: String,
 }
 
+/// The ground of a map as the file stores it, packed: 36 bytes per tile (8 `f32` uv, `u16` texture
+/// index into the scene's textures, `u16` lightmap) and 28 bytes per cube (4 `f32` heights, 3 `i32`
+/// tile numbers); the page builds the mesh from it.
+#[derive(Serialize, Debug)]
+pub struct GroundOut {
+    pub width: usize,
+    pub height: usize,
+    pub zoom: f32,
+    pub tiles: String,
+    pub cubes: String,
+    pub lightmap_count: usize,
+    pub lightmaps: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ModelDefOut {
+    pub parts: Vec<ModelPartOut>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct InstanceOut {
+    pub model: usize,
+    /// Column-major 4 x 4, already turned to the viewer's axes (y up, z towards the south).
+    pub matrix: Vec<f32>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct LightOut {
+    pub longitude: i32,
+    pub latitude: i32,
+    pub diffuse: [f32; 3],
+    pub ambient: [f32; 3],
+    pub intensity: f32,
+}
+
+#[derive(Serialize, Debug)]
+pub struct WaterOut {
+    pub level: f32,
+    /// The water picture (a JPEG) as base64, when the archive has it.
+    pub texture: Option<String>,
+}
+
 /// Triangles of one texture; the arrays are base64 of little-endian `f32`.
 #[derive(Serialize, Debug)]
 pub struct ModelPartOut {
@@ -188,6 +264,15 @@ pub enum Preview {
         interval_ms: u32,
         info: Vec<String>,
         note: Option<String>,
+    },
+    Scene {
+        textures: Vec<TextureOut>,
+        ground: Option<GroundOut>,
+        models: Vec<ModelDefOut>,
+        instances: Vec<InstanceOut>,
+        light: LightOut,
+        water: Option<WaterOut>,
+        info: Vec<String>,
     },
     Model {
         parts: Vec<ModelPartOut>,
@@ -1214,48 +1299,8 @@ impl Session {
                     info,
                 }
             }
-            "gnd" => {
-                let g = GndSummary::parse(&data).map_err(|e| e.to_string())?;
-                let mut lines = vec![format!(
-                    "GND {} - {} x {} ground cells, {} textures",
-                    g.version,
-                    g.width,
-                    g.height,
-                    g.textures.len()
-                )];
-                lines.extend(g.texture_names());
-                Preview::Info {
-                    title: "Ground".into(),
-                    lines,
-                }
-            }
-            "rsw" => {
-                let r = Rsw::parse(&data).map_err(|e| e.to_string())?;
-                let (m, l, s, e) = r.object_counts();
-                let mut lines = vec![
-                    format!(
-                        "RSW {} - ground {}, altitude {}",
-                        r.version,
-                        self.shown(&rsw::text(&r.ground)),
-                        self.shown(&rsw::text(&r.altitude))
-                    ),
-                    format!(
-                        "{m} models ({} files), {l} lights, {s} sounds ({} files), {e} effects",
-                        r.model_files().len(),
-                        r.sound_files().len()
-                    ),
-                ];
-                lines.push("Models:".into());
-                lines.extend(r.model_files().iter().map(|f| self.shown(f)));
-                if !r.sound_files().is_empty() {
-                    lines.push("Sounds:".into());
-                    lines.extend(r.sound_files().iter().map(|f| self.shown(f)));
-                }
-                Preview::Info {
-                    title: "World".into(),
-                    lines,
-                }
-            }
+            "rsw" => self.preview_scene(index, &data, true)?,
+            "gnd" => self.preview_scene(index, &data, false)?,
             "rsm" | "rsm2" => self.preview_model(&data)?,
             "txt" | "xml" | "lua" | "lub" | "ini" | "csv" | "json" | "log" => {
                 if data.starts_with(b"\x1bLua") {
@@ -1316,6 +1361,226 @@ impl Session {
             }
             Some(img)
         }
+    }
+
+    /// A map in 3D: the ground of a GND, and for an RSW also its models, water and light.
+    fn preview_scene(&self, index: usize, data: &[u8], is_world: bool) -> Result<Preview, String> {
+        let keys = self.key_index();
+        let mut pool = TexturePool::default();
+        let mut info = Vec::new();
+        let (world, ground_bytes);
+        if is_world {
+            let r = Rsw::parse(data).map_err(|e| e.to_string())?;
+            let gnd_name = {
+                let mut n = b"data\\".to_vec();
+                n.extend(rsw::text(&r.ground).chars().map(|c| c as u8));
+                n
+            };
+            let gi = keys
+                .get(&GrfPath::new(gnd_name.clone()).key())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "the ground file {} is not in this archive",
+                        self.shown_bytes(&gnd_name)
+                    )
+                })?;
+            ground_bytes = self.read(gi)?;
+            world = Some(r);
+        } else {
+            ground_bytes = data.to_vec();
+            world = None;
+        }
+        let g = gnd_map::parse(&ground_bytes).map_err(|e| e.to_string())?;
+        let _ = index;
+
+        // textures of the ground, then of the models, in one pool
+        let tex_of: Vec<usize> = g
+            .textures
+            .iter()
+            .map(|name| pool.get(self, keys, b"data\\texture\\", name))
+            .collect();
+        let mut tiles = Vec::with_capacity(g.tiles.len() * 36);
+        for t in &g.tiles {
+            for v in t.uv {
+                tiles.extend(v.to_le_bytes());
+            }
+            let tex = tex_of.get(usize::from(t.texture)).copied().unwrap_or(0) as u16;
+            tiles.extend(tex.to_le_bytes());
+            tiles.extend(t.lightmap.to_le_bytes());
+        }
+        let mut cubes = Vec::with_capacity(g.cubes.len() * 28);
+        for c in &g.cubes {
+            for v in c.height {
+                cubes.extend(v.to_le_bytes());
+            }
+            for v in [c.up, c.front, c.right] {
+                cubes.extend(v.to_le_bytes());
+            }
+        }
+        info.push(format!(
+            "GND {} - {} x {} cells, {} tiles, {} lightmaps, {} textures",
+            g.version,
+            g.width,
+            g.height,
+            g.tiles.len(),
+            g.lightmap_count,
+            g.textures.len()
+        ));
+        let ground = GroundOut {
+            width: g.width,
+            height: g.height,
+            zoom: g.zoom,
+            tiles: b64(&tiles),
+            cubes: b64(&cubes),
+            lightmap_count: g.lightmap_count,
+            lightmaps: b64(&g.lightmaps),
+        };
+
+        let mut models: Vec<ModelDefOut> = Vec::new();
+        let mut instances = Vec::new();
+        let mut light = LightOut {
+            longitude: 45,
+            latitude: 45,
+            diffuse: [1.0; 3],
+            ambient: [0.3; 3],
+            intensity: 1.0,
+        };
+        let mut water = None;
+        if let Some(r) = &world {
+            if let Some(l) = &r.light {
+                light = LightOut {
+                    longitude: l.longitude,
+                    latitude: l.latitude,
+                    diffuse: l.diffuse,
+                    ambient: l.ambient,
+                    intensity: l.intensity,
+                };
+            }
+            if let Some(w) = &r.water {
+                let mut path = encoding_rs::EUC_KR
+                    .encode("data\\texture\\\u{c6cc}\u{d130}\\water000.jpg")
+                    .0
+                    .into_owned();
+                if path.is_empty() {
+                    path = b"water000.jpg".to_vec();
+                }
+                let texture = keys
+                    .get(&GrfPath::new(path).key())
+                    .and_then(|&i| self.arc.read(i).ok())
+                    .map(|d| b64(&d.data));
+                water = Some(WaterOut {
+                    level: w.level / 5.0,
+                    texture,
+                });
+            }
+            let (m, l, s_, e) = r.object_counts();
+            info.push(format!(
+                "RSW {} - ground {}, {m} models, {l} lights, {s_} sounds, {e} effects",
+                r.version,
+                self.shown(&rsw::text(&r.ground))
+            ));
+            let mut by_model: HashMap<Vec<u8>, Option<usize>> = HashMap::new();
+            let mut missing: Vec<String> = Vec::new();
+            for o in &r.objects {
+                let rsw::Object::Model(mo) = o else { continue };
+                let name: Vec<u8> = mo
+                    .model_name
+                    .iter()
+                    .take_while(|&&b| b != 0)
+                    .copied()
+                    .collect();
+                let key = GrfPath::new([b"data\\model\\".as_slice(), &name].concat()).key();
+                let def = *by_model.entry(key.clone()).or_insert_with(|| {
+                    let ei = keys.get(&key).copied();
+                    let loaded = ei
+                        .and_then(|ei| self.read(ei).ok())
+                        .and_then(|d| rsm_model::parse(&d).ok());
+                    let Some(model) = loaded else {
+                        missing.push(self.shown_bytes(&name));
+                        return None;
+                    };
+                    let posed = rsm_model::static_pose(&model);
+                    let f32s = |v: &[f32]| {
+                        b64(&v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+                    };
+                    // the model's space has y down with the model standing on y = 0
+                    let flip_y = |v: &[f32]| -> Vec<f32> {
+                        v.as_chunks::<3>()
+                            .0
+                            .iter()
+                            .flat_map(|c| [c[0], -c[1], c[2]])
+                            .collect()
+                    };
+                    let parts = posed
+                        .parts
+                        .iter()
+                        .map(|p| ModelPartOut {
+                            texture: pool.get(self, keys, b"data\\texture\\", &p.texture),
+                            positions: f32s(&flip_y(&p.positions)),
+                            normals: f32s(&flip_y(&p.normals)),
+                            uvs: f32s(&p.uvs),
+                        })
+                        .collect();
+                    models.push(ModelDefOut { parts });
+                    Some(models.len() - 1)
+                });
+                let Some(model) = def else { continue };
+                let place = rsm_model::instance_matrix(
+                    mo.position.map(|v| v / 5.0),
+                    [g.width as f32, 0.0, g.height as f32],
+                    mo.rotation,
+                    mo.scale.map(|v| v / 5.0),
+                );
+                // to the viewer's axes: y up and z towards the south
+                let flip = [
+                    1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0,
+                    1.0,
+                ];
+                instances.push(InstanceOut {
+                    model,
+                    matrix: rsm_model::multiply(&flip, &place).to_vec(),
+                });
+            }
+            info.push(format!(
+                "{} model instances of {} different models{}",
+                instances.len(),
+                models.len(),
+                if missing.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " ({} not found: {})",
+                        missing.len(),
+                        missing
+                            .iter()
+                            .take(5)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            ));
+        }
+        let missing_tex = pool.out.iter().filter(|t| t.png.is_none()).count();
+        info.push(format!(
+            "{} textures{}",
+            pool.out.len(),
+            if missing_tex > 0 {
+                format!(" ({missing_tex} missing)")
+            } else {
+                String::new()
+            }
+        ));
+        Ok(Preview::Scene {
+            textures: pool.out,
+            ground: Some(ground),
+            models,
+            instances,
+            light,
+            water,
+            info,
+        })
     }
 
     /// An RSM model as triangles with its textures, for the 3D view.

@@ -352,6 +352,31 @@ fn apply(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+/// The matrix that places a model in a map, for vertices in the map's own space (y down, the model
+/// standing on y = 0 with up as negative y): move to `position` (+ `offset`), turn about z, x and y
+/// (degrees, in that order), then scale. Column-major.
+pub fn instance_matrix(
+    position: [f32; 3],
+    offset: [f32; 3],
+    rotation: [f32; 3],
+    scale: [f32; 3],
+) -> [f32; 16] {
+    let m = translation([
+        position[0] + offset[0],
+        position[1] + offset[1],
+        position[2] + offset[2],
+    ]);
+    let m = mul(&m, &axis_angle(rotation[2].to_radians(), [0.0, 0.0, 1.0]));
+    let m = mul(&m, &axis_angle(rotation[0].to_radians(), [1.0, 0.0, 0.0]));
+    let m = mul(&m, &axis_angle(rotation[1].to_radians(), [0.0, 1.0, 0.0]));
+    mul(&m, &scaling(scale))
+}
+
+/// `a * b` for two column-major 4 x 4 matrices.
+pub fn multiply(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    mul(a, b)
+}
+
 /// Triangles of one texture, in view space: y up, the model centred on x and z, standing on y = 0.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Part {

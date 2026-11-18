@@ -6,6 +6,7 @@ pub mod edit;
 pub mod gat;
 pub mod gif_io;
 pub mod gnd;
+pub mod gnd_map;
 pub mod lua;
 pub mod pal;
 pub mod png_io;
