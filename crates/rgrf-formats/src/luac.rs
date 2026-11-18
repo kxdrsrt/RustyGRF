@@ -276,6 +276,73 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
     Ok(Chunk { main })
 }
 
+/// Writes a Lua 5.1 chunk in the layout of a 64-bit host (int 4 bytes, size_t 8 bytes): the
+/// client's files are 32-bit (size_t 4), which a 64-bit Lua refuses to load. Used to run the
+/// original code in a real Lua for comparisons.
+pub fn dump(chunk: &Chunk) -> Vec<u8> {
+    fn int(out: &mut Vec<u8>, v: usize) {
+        out.extend((v as u32).to_le_bytes());
+    }
+    fn string(out: &mut Vec<u8>, s: &[u8]) {
+        // Size 0 would load as a NULL string, which Lua's GC dereferences for local names.
+        out.extend(((s.len() + 1) as u64).to_le_bytes());
+        out.extend(s);
+        out.push(0);
+    }
+    fn function(out: &mut Vec<u8>, f: &Function) {
+        if f.source.is_empty() {
+            // NULL source: Lua takes the parent's name
+            out.extend(0u64.to_le_bytes());
+        } else {
+            string(out, &f.source);
+        }
+        int(out, f.line_defined as usize);
+        int(out, f.last_line as usize);
+        out.extend([f.upvalue_count, f.params, f.is_vararg, f.max_stack]);
+        int(out, f.code.len());
+        for c in &f.code {
+            out.extend(c.to_le_bytes());
+        }
+        int(out, f.constants.len());
+        for k in &f.constants {
+            match k {
+                Constant::Nil => out.push(0),
+                Constant::Bool(b) => out.extend([1, u8::from(*b)]),
+                Constant::Number(v) => {
+                    out.push(3);
+                    out.extend(v.to_le_bytes());
+                }
+                Constant::Str(s) => {
+                    out.push(4);
+                    string(out, s);
+                }
+            }
+        }
+        int(out, f.protos.len());
+        for p in &f.protos {
+            function(out, p);
+        }
+        int(out, f.lines.len());
+        for l in &f.lines {
+            int(out, *l as usize);
+        }
+        int(out, f.locals.len());
+        for l in &f.locals {
+            string(out, &l.name);
+            int(out, l.start as usize);
+            int(out, l.end as usize);
+        }
+        int(out, f.upvalue_names.len());
+        for n in &f.upvalue_names {
+            string(out, n);
+        }
+    }
+    // ESC Lua, 5.1, official format, little-endian, int 4, size_t 8, instruction 4, number 8, not integral
+    let mut out = b"\x1bLua\x51\x00\x01\x04\x08\x04\x08\x00".to_vec();
+    function(&mut out, &chunk.main);
+    out
+}
+
 /// Reads compiled Lua of either version the client uses; 5.0 is translated to the 5.1 form
 /// (`Function::orig_code` is set then).
 pub fn parse_any(bytes: &[u8]) -> Result<Chunk, LuacError> {
@@ -548,6 +615,28 @@ mod tests {
         assert!(text.contains("LOADK"), "{text}");
         assert!(text.contains("SETGLOBAL"), "{text}");
         assert!(text.contains("\"x\""), "{text}");
+    }
+
+    #[test]
+    fn dump_gives_empty_strings_a_terminator() {
+        // Lua loads a size-0 string as NULL and crashes on it in a local's name; only the source
+        // may be NULL (it then takes the parent's name).
+        let mut c = parse(&chunk()).unwrap();
+        c.main.locals.push(Local {
+            name: Vec::new(),
+            start: 0,
+            end: 1,
+        });
+        let d = dump(&c);
+        assert_eq!(&d[..12], b"\x1bLua\x51\x00\x01\x04\x08\x04\x08\x00");
+        let tail = &d[d.len() - 25..];
+        let mut expected = 1u32.to_le_bytes().to_vec(); // one local
+        expected.extend(1u64.to_le_bytes()); // size 1: just the terminator
+        expected.push(0);
+        expected.extend(0u32.to_le_bytes());
+        expected.extend(1u32.to_le_bytes());
+        expected.extend(0u32.to_le_bytes()); // no upvalue names
+        assert_eq!(tail, &expected[..]);
     }
 
     #[test]

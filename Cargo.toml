@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/rgrf-core", "crates/rgrf-formats", "crates/rgrf-cli", "crates/rgrf-mcp"]
-exclude = ["apps/gui"]
+exclude = ["apps/gui", "tools/lua-verify"]
 
 [workspace.package]
 version = "0.0.0"
