@@ -481,8 +481,23 @@ impl Ctx<'_> {
                 ("LE", 0) => ("<=", ">"),
                 _ => (">", "<="),
             };
+            let swap = i.name() != "EQ" && constant_added_late(f, q, i.b, i.c);
             let (l, r) = (self.operand(f, &l, indent), self.operand(f, &r, indent));
-            (format!("{l} {enter} {r}"), format!("{l} {taken} {r}"))
+            if swap {
+                // `x > 5` compiles to `LT 5 x`, with the constant added after the code of `x`
+                let mirror = |op: &str| match op {
+                    "<" => ">",
+                    ">" => "<",
+                    "<=" => ">=",
+                    _ => "<=",
+                };
+                (
+                    format!("{r} {} {l}", mirror(enter)),
+                    format!("{r} {} {l}", mirror(taken)),
+                )
+            } else {
+                (format!("{l} {enter} {r}"), format!("{l} {taken} {r}"))
+            }
         };
         Ok(Some(Pair {
             enter,
@@ -1161,7 +1176,16 @@ impl Ctx<'_> {
                         .filter(|e| e.name() == "JMP")
                         .and_then(|e| usize::try_from(target as i64 + e.sbx()).ok())
                         .filter(|&u| {
-                            u > target
+                            // u == target: a jump to the next instruction, an empty `else`
+                            // u == target: a jump to the next instruction, an empty `else`; but not
+                            // the jump of a comparison just before it
+                            u >= target
+                                && (u > target
+                                    || !(target >= 2
+                                        && matches!(
+                                            Instr::decode(f.code[target - 2]).name(),
+                                            "EQ" | "LT" | "LE" | "TEST" | "TESTSET"
+                                        )))
                                 && (u <= end || Some(u) == tail)
                                 && !is_break_target(f, brk, u)
                         });
@@ -1401,6 +1425,64 @@ pub fn rk_base(f: &Function) -> u32 {
     }
 }
 
+/// Constants an instruction names (its `Bx` or its constant `RK` operands).
+fn constants_of(f: &Function, i: &Instr) -> Vec<usize> {
+    let base = rk_base(f);
+    let rk = |v: u32| (v >= base).then(|| (v - base) as usize);
+    match i.name() {
+        "LOADK" | "GETGLOBAL" | "SETGLOBAL" => vec![i.bx() as usize],
+        "SETTABLE" | "ADD" | "SUB" | "MUL" | "DIV" | "MOD" | "POW" | "EQ" | "LT" | "LE" => {
+            [i.b, i.c].into_iter().filter_map(rk).collect()
+        }
+        "GETTABLE" | "SELF" => rk(i.c).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `LT`/`LE` with a constant on the left and a register on the right: was the source `5 < x` or
+/// `x > 5`? The compiler adds the constant of `5 < x` before the constants of the code of `x`, but
+/// that of `x > 5` after them (`> 5` is turned around only when the code is made). The code of `x`
+/// is taken to start after the last instruction that ends a statement or writes a local. Only
+/// Lua 5.1 code, whose compiler we reproduce.
+fn constant_added_late(f: &Function, q: usize, b: u32, c: u32) -> bool {
+    let base = rk_base(f);
+    if f.orig_code.is_some() || b < base || c >= base {
+        return false;
+    }
+    let kb = (b - base) as usize;
+    let code = &f.code[..q.min(f.code.len())];
+    let mut start = code.len();
+    while start > 0 {
+        let i = Instr::decode(code[start - 1]);
+        let ends = match i.name() {
+            "SETGLOBAL" | "SETUPVAL" | "SETTABLE" | "RETURN" | "JMP" | "EQ" | "LT" | "LE"
+            | "TEST" | "TESTSET" | "CLOSE" | "FORLOOP" | "FORPREP" | "TFORLOOP" | "TAILCALL" => {
+                true
+            }
+            "CALL" => i.c == 1 || i.a < c,
+            "SETLIST" => false,
+            _ => i.a < c,
+        };
+        if ends {
+            break;
+        }
+        start -= 1;
+    }
+    let before = code[..start]
+        .iter()
+        .flat_map(|&r| constants_of(f, &Instr::decode(r)))
+        .max();
+    let fresh: Vec<usize> = code[start..]
+        .iter()
+        .flat_map(|&r| constants_of(f, &Instr::decode(r)))
+        .filter(|&k| before.is_none_or(|m| k > m))
+        .collect();
+    match fresh.iter().max() {
+        Some(&m) => kb >= m && before.is_none_or(|b| kb > b),
+        None => false,
+    }
+}
+
 fn rk_of(f: &Function, reg: &[Option<Expr>], v: u32) -> Result<Expr, Unsupported> {
     if v >= rk_base(f) {
         konst(f, (v - rk_base(f)) as usize)
@@ -1630,6 +1712,38 @@ mod tests {
             out.contains("for k, v in pairs(t) do\n\tprint(k, v)\nend"),
             "{out}"
         );
+    }
+
+    /// Compiles `src`, decompiles the result and compiles that again: the text and whether the
+    /// second chunk has the same code and constants as the first.
+    fn round_trip(src: &str) -> (String, bool) {
+        let first = crate::luacomp::compile(src.as_bytes(), b"=t").unwrap();
+        let text = decompile(&first, &|b| String::from_utf8_lossy(b).into_owned());
+        let second = crate::luacomp::compile(text.as_bytes(), b"=t").unwrap();
+        let same =
+            first.main.code == second.main.code && first.main.constants == second.main.constants;
+        (text, same)
+    }
+
+    #[test]
+    fn a_constant_on_the_left_keeps_the_form_the_constants_say() {
+        // `x > 5` adds the 5 after the code of `x`, `5 < x` before it
+        let (text, same) = round_trip("if Get(3) > 5 then Put(1) end");
+        assert!(text.contains("Get(3) > 5"), "{text}");
+        assert!(same, "{text}");
+        let (text, same) = round_trip("if 5 < Get(3) then Put(1) end");
+        assert!(text.contains("5 < Get(3)"), "{text}");
+        assert!(same, "{text}");
+    }
+
+    #[test]
+    fn an_empty_else_is_kept() {
+        let (text, same) = round_trip("if a then Put(1) else end Put(2)");
+        assert!(text.contains("else"), "{text}");
+        assert!(same, "{text}");
+        let (text, same) = round_trip("if a == 1 then end Put(2)");
+        assert!(!text.contains("else"), "{text}");
+        assert!(same, "{text}");
     }
 
     #[test]
