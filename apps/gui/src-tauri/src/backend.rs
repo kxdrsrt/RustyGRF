@@ -400,6 +400,11 @@ pub struct WaterOut {
     pub frames: Vec<String>,
     /// Time one picture stays, in milliseconds.
     pub frame_ms: f32,
+    /// The waves of the surface: height (in ground units), speed (degrees per 1/60 s) and
+    /// pitch (degrees per tile), from the world file.
+    pub wave_height: f32,
+    pub wave_speed: f32,
+    pub wave_pitch: f32,
 }
 
 /// Triangles of one texture; the arrays are base64 of little-endian `f32`.
@@ -2123,10 +2128,21 @@ impl Session {
                 } else {
                     3
                 };
+                // files before RSW 1.8 store no waves: assumption (not measured) of the usual
+                // values 1.0, 2.0 and 50.0
+                let stored = w.wave_height != 0.0 || w.wave_speed != 0.0 || w.wave_pitch != 0.0;
+                let (height, speed, pitch) = if stored {
+                    (w.wave_height, w.wave_speed, w.wave_pitch)
+                } else {
+                    (1.0, 2.0, 50.0)
+                };
                 water = Some(WaterOut {
                     level: w.level / 5.0,
                     frames,
                     frame_ms: ticks as f32 * 1000.0 / 60.0,
+                    wave_height: height / 5.0,
+                    wave_speed: speed,
+                    wave_pitch: pitch,
                 });
             }
             let (m, l, s_, e) = r.object_counts();

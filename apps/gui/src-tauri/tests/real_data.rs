@@ -414,3 +414,24 @@ fn the_folder_tree_holds_every_entry_once_and_opens_completely() {
         open_folders.iter().map(|r| &r.name).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn water_waves_of_real_maps_have_plausible_values() {
+    let Some(mut s) = open() else { return };
+    let mut seen = 0;
+    for map in ["pay_fild01", "comodo", "prontera", "alberta"] {
+        let i = find(&mut s, &format!("data\\{map}.rsw"));
+        let Preview::Scene { water: Some(w), .. } = s.preview(i, None).unwrap() else {
+            continue;
+        };
+        eprintln!(
+            "{map}: level {} waves {} / {} / {}",
+            w.level, w.wave_height, w.wave_speed, w.wave_pitch
+        );
+        assert!((0.0..=5.0).contains(&w.wave_height), "{map}");
+        assert!((0.0..=50.0).contains(&w.wave_speed), "{map}");
+        assert!((0.0..=360.0).contains(&w.wave_pitch), "{map}");
+        seen += 1;
+    }
+    assert!(seen >= 2, "maps with water were checked");
+}

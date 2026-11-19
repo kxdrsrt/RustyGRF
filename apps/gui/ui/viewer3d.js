@@ -318,10 +318,17 @@ void main() {
   vec3 l = uLit ? clamp(uAmb + uDif * ndl, 0.0, 1.0) : vec3(1.0);
   outColor = vec4(t.rgb * l, 1.0);
 }`;
+  // The surface rises and falls in waves: a sine of the time and of the tile the point lies in
+  // (uWave = height, speed in degrees per 1/60 s, pitch in degrees per tile).
   const WATER_VS = `#version 300 es
 in vec3 aPos; in vec2 aUv;
-uniform mat4 uVp; out vec2 vUv;
-void main() { vUv = aUv; gl_Position = uVp * vec4(aPos, 1.0); }`;
+uniform mat4 uVp; uniform float uTime; uniform vec3 uWave; uniform float uTile; out vec2 vUv;
+void main() {
+  vUv = aUv;
+  float tiles = aPos.x / uTile - aPos.z / uTile;
+  float ang = radians(uTime * 0.06 * uWave.y + tiles * uWave.z);
+  gl_Position = uVp * vec4(aPos.x, aPos.y + uWave.x * sin(ang), aPos.z, 1.0);
+}`;
   const WATER_FS = `#version 300 es
 precision mediump float;
 in vec2 vUv; uniform sampler2D uTex; uniform bool uHasTex; out vec4 outColor;
@@ -528,7 +535,18 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     let water = null;
     if (sc.water) {
       const W = ground.width, D = ground.depth, y = -sc.water.level, t = 0.2;
-      const quad = new Float32Array([0, y, 0, 0, 0, W, y, 0, W * t, 0, W, y, -D, W * t, D * t, 0, y, 0, 0, 0, W, y, -D, W * t, D * t, 0, y, -D, 0, D * t]);
+      // a grid of tiles (at most 200 x 200) so that the waves can bend the surface
+      const tile = Math.max(2, Math.ceil(Math.max(W, D) / 200));
+      const nx = Math.max(1, Math.ceil(W / tile)), nz = Math.max(1, Math.ceil(D / tile));
+      const verts = [];
+      const v = (x, z) => verts.push(x, y, -z, x * t, z * t);
+      for (let iz = 0; iz < nz; iz++) {
+        for (let ix = 0; ix < nx; ix++) {
+          const x0 = ix * tile, x1 = Math.min(W, x0 + tile), z0 = iz * tile, z1 = Math.min(D, z0 + tile);
+          v(x0, z0); v(x1, z0); v(x1, z1); v(x0, z0); v(x1, z1); v(x0, z1);
+        }
+      }
+      const quad = new Float32Array(verts);
       const vao = gl.createVertexArray();
       gl.bindVertexArray(vao);
       const b = gl.createBuffer();
@@ -539,7 +557,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
         gl.enableVertexAttribArray(l);
         gl.vertexAttribPointer(l, size, gl.FLOAT, false, 20, off * 4);
       });
-      water = { vao, frameMs: sc.water.frame_ms || 50, frames: sc.water.frames.map((f) => makeTexture(gl, f, draw, "image/jpeg")) };
+      water = { vao, count: verts.length / 5, tile, wave: [sc.water.wave_height || 0, sc.water.wave_speed || 0, sc.water.wave_pitch || 0], frameMs: sc.water.frame_ms || 50, frames: sc.water.frames.map((f) => makeTexture(gl, f, draw, "image/jpeg")) };
     }
 
     const lon = (sc.light.longitude * Math.PI) / 180, lat = (sc.light.latitude * Math.PI) / 180;
@@ -552,7 +570,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     const waterFrame = () => (water && opts.animate && water.frames.length > 1 ? Math.floor((performance.now() - clock) / water.frameMs) % water.frames.length : 0);
     const clock = performance.now();
     let timer = null;
-    const moving = () => opts.animate && ((water && opts.water && water.frames.length > 1) || (opts.models && animatedModels > 0));
+    const moving = () => opts.animate && ((water && opts.water && (water.frames.length > 1 || water.wave[0] > 0)) || (opts.models && animatedModels > 0));
     function loop() {
       render();
       timer = moving() ? requestAnimationFrame(loop) : null;
@@ -606,10 +624,13 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
         gl.uniformMatrix4fv(u(wp, "uVp"), false, vp);
         const wtex = water.frames[waterFrame()];
         gl.uniform1i(u(wp, "uTex"), 0); gl.uniform1i(u(wp, "uHasTex"), wtex ? 1 : 0);
+        gl.uniform1f(u(wp, "uTime"), opts.animate ? performance.now() - clock : 0);
+        gl.uniform3f(u(wp, "uWave"), water.wave[0], water.wave[1], water.wave[2]);
+        gl.uniform1f(u(wp, "uTile"), water.tile);
         gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
         gl.bindVertexArray(water.vao);
         if (wtex) gl.bindTexture(gl.TEXTURE_2D, wtex);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.drawArrays(gl.TRIANGLES, 0, water.count);
         gl.depthMask(true); gl.disable(gl.BLEND);
       }
     }
