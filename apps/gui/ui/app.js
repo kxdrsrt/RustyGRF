@@ -1551,17 +1551,48 @@ async function saveEdited() {
   }
 }
 
+// What the build options mean, shown next to the choice (Build dialog and Settings)
+const METHODS = [
+  ["zlib", "zlib (every client)", "The standard. Every client can read it and it builds fast. Choose this unless you have a reason not to."],
+  ["zopfli", "zopfli (smaller, slow)", "Writes the same zlib format, so every client can still read it, but squeezes the files a little further. Building takes much longer; reading is just as fast."],
+  ["lzma", "LZMA (needs client support)", "Smaller than zlib, but only a client with LZMA support can read it (for example one with a cps.dll). Try the archive in your client before you share it."],
+];
+const FORMATS = [
+  ["0x200", "0x200 (every client)", "The standard GRF format. Every client reads it. File positions are stored in 32 bits, so the archive cannot grow beyond 4 GB."],
+  ["0x300", "0x300 (over 4 GB)", "Newer format with 64-bit file positions, so the archive can be larger than 4 GB. Only newer clients read it (measured: a 2025 client does, 2020 clients do not). Use it only when 4 GB is not enough."],
+  ["0x103", "0x103 (very old clients)", "Very old format from before 0x200: the file table is not compressed and names and data are scrambled with the old DES variant. For clients too old to read 0x200. Same 4 GB limit."],
+  ["0x102", "0x102 (very old clients)", "Same as 0x103 (they differ only in the version number). Use it if an old client asks for exactly this version."],
+];
+/** A select for one of `table`'s choices with a line under it that explains the current choice. */
+function explained(table, value, onchange) {
+  const hint = el("div", { class: "hint" });
+  const sel = el("select", {}, table.map(([v, t]) => el("option", { value: v, text: t })));
+  const show = () => (hint.textContent = table.find((r) => r[0] === sel.value)?.[2] || "");
+  sel.value = value;
+  sel.addEventListener("change", () => { show(); onchange?.(sel.value); });
+  show();
+  return { sel, hint };
+}
+
 async function doBuild() {
   const src = await T.dialog.open({ directory: true, multiple: false, title: "Folder to pack (the folder that contains data\\ …)" });
   if (!src) return;
-  const method = el("select", {}, el("option", { value: "zlib", text: "zlib (every client)", selected: true }), el("option", { value: "zopfli", text: "zopfli (smaller, slow, zlib-compatible)" }), el("option", { value: "lzma", text: "LZMA (only clients with LZMA support)" }));
-  const format = el("select", {}, el("option", { value: "0x200", text: "0x200 (every client)", selected: true }), el("option", { value: "0x300", text: "0x300 (64-bit offsets, for archives over 4 GB)" }), el("option", { value: "0x103", text: "0x103 (old format, scrambled, for very old clients)" }), el("option", { value: "0x102", text: "0x102 (old format, scrambled)" }));
   const dedupe = el("input", { type: "checkbox" });
-  method.value = SET.method;
-  format.value = SET.format;
+  const m = explained(METHODS, SET.method);
+  const f = explained(FORMATS, SET.format, (v) => {
+    const old = v === "0x102" || v === "0x103";
+    dedupe.disabled = old;
+    if (old) dedupe.checked = false;
+  });
+  const method = m.sel, format = f.sel;
+  dedupe.disabled = format.value === "0x102" || format.value === "0x103";
   const body = [
     el("p", { text: `Pack ${src}` }),
-    el("div", { class: "form" }, el("label", { text: "Compression " }, method), el("label", { text: "Format " }, format), el("label", {}, dedupe, " Share identical files")),
+    el("div", { class: "form buildform" },
+      el("label", {}, el("span", { class: "fl", text: "Compression" }), method), m.hint,
+      el("label", {}, el("span", { class: "fl", text: "Format" }), format), f.hint,
+      el("label", {}, dedupe, " Share identical files"),
+      el("div", { class: "hint", text: "Stores files with identical content only once, which saves space. Not possible in 0x102 and 0x103." })),
     el("p", { class: "muted", text: "The finished archive is verified against the files on disk." }),
   ];
   const go = await ask("Build archive", body, [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }]);
@@ -1778,8 +1809,12 @@ function openSettings() {
       row("Start-up", check("reopen", "Open the last archive again")),
       row("Changes", check("warnDiscard", "Ask before pending changes are discarded")),
       el("h3", { text: "Building archives" }),
-      row("Compression", pick("method", [["zlib", "zlib (every client)"], ["zopfli", "zopfli (smaller, slow)"], ["lzma", "LZMA (needs client support)"]])),
-      row("Format", pick("format", [["0x200", "0x200 (every client)"], ["0x300", "0x300 (over 4 GB)"], ["0x103", "0x103 (very old clients)"], ["0x102", "0x102 (very old clients)"]]), "Default of the Build… dialog; you can still change it there."),
+      ...[["Compression", "method", METHODS], ["Format", "format", FORMATS]].map(([label, key, table]) => {
+        const e = explained(table, SET[key], (v) => change(key, v));
+        e.sel.setAttribute("aria-label", label);
+        return el("div", { class: "srow" }, el("label", { text: label }), e.sel, e.hint);
+      }),
+      el("p", { class: "muted", text: "These are only the starting choices of the Build… dialog; you can change them there for each archive." }),
       el("p", { class: "muted", text: `Settings are stored in this app only. Shortcut: ${/Mac/.test(navigator.platform) ? "Cmd" : "Ctrl"}+, opens this window.` }),
     ),
   );

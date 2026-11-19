@@ -421,3 +421,11 @@ button.small.on { background: var(--accent); border-color: var(--accent); color:
   .maintoolbar { gap: 4px; padding: 6px 8px; }
   .maintoolbar .grp + .grp { padding-left: 6px; }
 }
+
+/* option explanations */
+.hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.buildform { max-width: 560px; }
+.buildform label { gap: 10px; }
+.buildform .fl { flex: 0 0 96px; }
+.buildform select { flex: 1; min-width: 0; }
+.buildform > .hint { margin: -2px 0 6px 106px; }
