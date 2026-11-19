@@ -271,6 +271,9 @@ dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
 .texted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .acted { display: grid; grid-template-columns: minmax(260px, 40%) 1fr; gap: 16px; align-items: start; }
 .acted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; grid-column: 1 / -1; }
+.acted .refs { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -2px 0 8px; }
+.acted .refchip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.acted .refchip .name { max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acted .soundfield { display: inline-flex; align-items: center; gap: 6px; }
 .acted .stage { position: relative; display: inline-block; line-height: 0; min-width: 120px; min-height: 120px; }
 .acted .stage img { image-rendering: pixelated; display: block; }

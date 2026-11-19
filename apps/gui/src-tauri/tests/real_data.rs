@@ -493,3 +493,47 @@ fn the_sounds_of_an_animation_are_found_and_playable() {
     assert_eq!(missing.problem.as_deref(), Some("not in this archive"));
     assert!(s.act_sound(&"x".repeat(60)).is_err());
 }
+
+/// A headgear is edited with a head and a body behind it, attached by their anchors as in the
+/// client; a missing reference or the edited file itself is named, not drawn.
+#[test]
+fn an_animation_is_shown_with_reference_animations() {
+    use rustygrf_gui_lib::backend::ReferenceSpec;
+    let Some(mut s) = open() else { return };
+    s.set_names("cp949").unwrap();
+    let hat = find(&mut s, "남_Crushed_Snow_Man.act");
+    let alone = s.act_view(hat, 0, 0).unwrap();
+    let spec = |path: &str, under| ReferenceSpec {
+        path: path.into(),
+        under,
+    };
+    let refs = [
+        spec("data\\sprite\\인간족\\몸통\\남\\초보자_남.act", true),
+        spec("data/sprite/인간족/머리통/남/1_남.act", true),
+        spec("data\\sprite\\no_such.act", true),
+    ];
+    let v = s.act_view_with(hat, 0, 0, &refs).unwrap();
+    let problems: Vec<_> = v.references.iter().map(|r| r.problem.clone()).collect();
+    assert_eq!(
+        problems,
+        [None, None, Some("is not in this archive".to_string())]
+    );
+    assert!(v.png.is_some() && v.error.is_none());
+    // the body makes the picture taller than the hat alone
+    assert!(v.height > alone.height, "{} vs {}", v.height, alone.height);
+    let me = s
+        .act_view_with(
+            hat,
+            0,
+            0,
+            &[spec(
+                "data\\sprite\\악세사리\\남\\남_Crushed_Snow_Man.act",
+                false,
+            )],
+        )
+        .unwrap();
+    assert_eq!(
+        me.references[0].problem.as_deref(),
+        Some("is the animation being edited")
+    );
+}

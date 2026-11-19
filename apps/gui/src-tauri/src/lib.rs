@@ -351,8 +351,12 @@ async fn act_frame(
     index: usize,
     action: usize,
     frame: usize,
+    references: Option<Vec<backend::ReferenceSpec>>,
 ) -> Res<act_editor::ActFrameView> {
-    with_session(&state, move |s| s.act_view(index, action, frame)).await
+    with_session(&state, move |s| {
+        s.act_view_with(index, action, frame, &references.unwrap_or_default())
+    })
+    .await
 }
 
 /// Changes a layer, an anchor or a frame of the animation `index` (staged).

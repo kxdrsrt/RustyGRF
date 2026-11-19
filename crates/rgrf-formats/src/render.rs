@@ -162,6 +162,9 @@ pub struct Part<'a> {
     /// Move the part so that its first anchor meets the base frame's first anchor (ACT Editor's
     /// `AnchoredTo`: how headgear sits on a head). Ignored for the base and for frames without anchors.
     pub anchored: bool,
+    /// Draw the part below the base instead of on top (a reference behind the animation that is
+    /// edited). Ignored for the base.
+    pub under: bool,
 }
 
 impl<'a> Part<'a> {
@@ -170,38 +173,41 @@ impl<'a> Part<'a> {
             act,
             spr,
             anchored: false,
+            under: false,
         }
     }
 }
 
-/// All layers to draw for `frame` of `action`, parts in order. The base part must have the action
-/// and frame; the others are skipped when they lack them (a head has fewer actions than a body).
-fn frame_layers(
-    parts: &[Part<'_>],
+/// All layers to draw for `frame` of `action`: the parts marked `under`, the base, then the
+/// others, each group in order. The base part must have the action and frame; the others are
+/// skipped when they lack them (a head has fewer actions than a body).
+fn frame_layers<'a>(
+    parts: &[Part<'a>],
     action: usize,
     frame: usize,
 ) -> Result<Vec<Prepared>, RenderError> {
-    let mut out = Vec::new();
-    let mut base_anchor: Option<(i32, i32)> = None;
-    for (n, part) in parts.iter().enumerate() {
-        let f = part
-            .act
-            .actions
-            .get(action)
-            .and_then(|a| a.frames.get(frame));
-        let Some(f) = f else {
-            if n == 0 {
-                return if part.act.actions.get(action).is_some() {
-                    Err(RenderError::NoFrame { action, frame })
-                } else {
-                    Err(RenderError::NoAction(action))
-                };
-            }
-            continue;
+    let frame_of = |p: &Part<'a>| -> Option<&'a crate::act::Frame> {
+        p.act.actions.get(action).and_then(|a| a.frames.get(frame))
+    };
+    let Some(base) = parts.first() else {
+        return Ok(Vec::new());
+    };
+    let Some(base_frame) = frame_of(base) else {
+        return if base.act.actions.get(action).is_some() {
+            Err(RenderError::NoFrame { action, frame })
+        } else {
+            Err(RenderError::NoAction(action))
         };
-        if n == 0 {
-            base_anchor = f.anchors.first().map(|a| (a.x, a.y));
-        }
+    };
+    let base_anchor = base_frame.anchors.first().map(|a| (a.x, a.y));
+    let order = (1..parts.len())
+        .filter(|&n| parts[n].under)
+        .chain([0])
+        .chain((1..parts.len()).filter(|&n| !parts[n].under));
+    let mut out = Vec::new();
+    for n in order {
+        let part = &parts[n];
+        let Some(f) = frame_of(part) else { continue };
         let (dx, dy) = match (part.anchored && n > 0, base_anchor, f.anchors.first()) {
             (true, Some((bx, by)), Some(a)) => (f64::from(bx - a.x), f64::from(by - a.y)),
             _ => (0.0, 0.0),
@@ -497,6 +503,34 @@ mod tests {
             bounds_of_parts(&[Part::new(&base, &s)], 4, [0]),
             Err(RenderError::NoAction(4))
         );
+    }
+
+    #[test]
+    fn a_part_under_the_base_is_drawn_first() {
+        let red = spr(vec![IndexedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![1],
+        }]);
+        let green = spr(vec![IndexedImage {
+            width: 1,
+            height: 1,
+            pixels: vec![2],
+        }]);
+        let a = act(vec![layer(0)]);
+        let top = |under| {
+            let parts = [
+                Part::new(&a, &red),
+                Part {
+                    under,
+                    ..Part::new(&a, &green)
+                },
+            ];
+            let b = bounds_of_parts(&parts, 0, [0]).unwrap().unwrap();
+            px(&render_parts(&parts, 0, 0, b).unwrap(), 0, 0)
+        };
+        assert_eq!(top(false), [0, 255, 0, 255], "on top of the base");
+        assert_eq!(top(true), [255, 0, 0, 255], "below the base");
     }
 
     #[test]

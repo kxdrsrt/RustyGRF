@@ -166,7 +166,13 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.pending())
         }),
         "act_frame" => with(state, |s| {
-            to_json(s.act_view(arg(a, "index")?, arg(a, "action")?, arg(a, "frame")?)?)
+            let refs: Option<Vec<backend::ReferenceSpec>> = arg(a, "references")?;
+            to_json(s.act_view_with(
+                arg(a, "index")?,
+                arg(a, "action")?,
+                arg(a, "frame")?,
+                &refs.unwrap_or_default(),
+            )?)
         }),
         "stage_act_edit" => with(state, |s| {
             let edit: rustygrf_gui_lib::act_editor::ActEdit = arg(a, "edit")?;

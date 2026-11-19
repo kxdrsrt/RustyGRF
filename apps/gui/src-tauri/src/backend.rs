@@ -450,6 +450,14 @@ pub fn reduce_images(
     Ok(sum)
 }
 
+/// An animation of the archive shown with the one being edited (see `act_editor::Reference`).
+#[derive(Deserialize, Debug, Clone)]
+pub struct ReferenceSpec {
+    pub path: String,
+    #[serde(default)]
+    pub under: bool,
+}
+
 /// A sound named in an animation, as the client finds it: `data\wav\<name>`.
 #[derive(Serialize, Debug)]
 pub struct SoundOut {
@@ -1686,13 +1694,56 @@ impl Session {
         action: usize,
         frame: usize,
     ) -> Result<ActFrameView, String> {
-        let (_, act, _) = self.working_bytes(index)?;
-        let spr = self
-            .sibling(index, "spr")
-            .map(|i| self.working_bytes(i))
-            .transpose()?
-            .map(|t| t.1);
-        act_editor::view(&act, spr.as_deref(), action, frame)
+        self.act_view_with(index, action, frame, &[])
+    }
+
+    /// [`Self::act_view`] with reference animations of this archive drawn in the picture.
+    pub fn act_view_with(
+        &self,
+        index: usize,
+        action: usize,
+        frame: usize,
+        references: &[ReferenceSpec],
+    ) -> Result<ActFrameView, String> {
+        let pair = |i: usize| -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+            let act = self.working_bytes(i)?.1;
+            let spr = self
+                .sibling(i, "spr")
+                .map(|s| self.working_bytes(s))
+                .transpose()?
+                .map(|t| t.1);
+            Ok((act, spr))
+        };
+        let (act, spr) = pair(index)?;
+        let mut found = Vec::new();
+        let mut missing = Vec::new();
+        for r in references {
+            let path = GrfPath::from_display(&r.path.replace('/', "\\"), self.mode);
+            match path.and_then(|p| self.arc.find(&p)) {
+                Some(i) if i != index => found.push((r, pair(i)?)),
+                Some(_) => missing.push((r, "is the animation being edited")),
+                None => missing.push((r, "is not in this archive")),
+            }
+        }
+        let refs: Vec<act_editor::Reference<'_>> = found
+            .iter()
+            .map(|(r, (a, s))| act_editor::Reference {
+                name: r.path.clone(),
+                act: a,
+                spr: s.as_deref(),
+                under: r.under,
+            })
+            .collect();
+        let mut v = act_editor::view_with(&act, spr.as_deref(), action, frame, &refs)?;
+        v.references.extend(
+            missing
+                .into_iter()
+                .map(|(r, why)| act_editor::ReferenceView {
+                    name: r.path.clone(),
+                    problem: Some(why.into()),
+                }),
+        );
+        Ok(v)
     }
 
     /// Changes colours of a palette file.

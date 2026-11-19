@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
 use rgrf_formats::gif_io::upscale;
 use rgrf_formats::png_io::rgba_to_png;
-use rgrf_formats::render::{Bounds, bounds_of, render_frame};
+use rgrf_formats::render::{Bounds, Part, bounds_of_parts, render_parts};
 use rgrf_formats::spr::{RgbaImage, Spr};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +60,24 @@ pub struct ActFrameView {
     pub scale: u32,
     /// Why there is no picture (no sprite, or a layer that cannot be drawn).
     pub error: Option<String>,
+    /// The reference animations drawn with this frame, and what kept one from showing.
+    pub references: Vec<ReferenceView>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ReferenceView {
+    pub name: String,
+    pub problem: Option<String>,
+}
+
+/// Another animation drawn with the edited one, e.g. a head under a headgear: its first anchor
+/// meets the edited frame's first anchor, as the client attaches parts to the body.
+pub struct Reference<'a> {
+    pub name: String,
+    pub act: &'a [u8],
+    pub spr: Option<&'a [u8]>,
+    /// Behind the edited animation instead of in front of it.
+    pub under: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -333,6 +351,17 @@ pub fn view(
     action: usize,
     frame: usize,
 ) -> Result<ActFrameView, String> {
+    view_with(act_data, spr_data, action, frame, &[])
+}
+
+/// [`view`] with reference animations drawn in the same picture.
+pub fn view_with(
+    act_data: &[u8],
+    spr_data: Option<&[u8]>,
+    action: usize,
+    frame: usize,
+    references: &[Reference<'_>],
+) -> Result<ActFrameView, String> {
     let act = Act::parse(act_data).map_err(|e| e.to_string())?;
     let actions = act.actions.len();
     let action = action.min(actions.saturating_sub(1));
@@ -389,13 +418,53 @@ pub fn view(
         origin_y: 0,
         scale: 1,
         error: None,
+        references: Vec::new(),
     };
     let Some(spr) = spr else {
         v.error = Some("the matching .spr is not in this archive".into());
         return Ok(v);
     };
+    // a reference that cannot be read is named, the others are still drawn
+    let mut loaded = Vec::new();
+    for r in references {
+        let parsed = Act::parse(r.act).map_err(|e| format!("not a readable ACT: {e}"));
+        let parsed = parsed.and_then(|ra| {
+            let d = r.spr.ok_or("its .spr is not in this archive")?;
+            let rs = Spr::parse(d).map_err(|e| format!("its .spr is not readable: {e}"))?;
+            Ok((ra, rs))
+        });
+        let problem = match &parsed {
+            Err(e) => Some(e.clone()),
+            Ok((ra, _))
+                if ra
+                    .actions
+                    .get(action)
+                    .and_then(|x| x.frames.get(frame))
+                    .is_none() =>
+            {
+                Some(format!("has no frame {} in action {action}", frame + 1))
+            }
+            Ok(_) if f.anchors.is_empty() => {
+                Some("this frame has no anchor, so it is drawn at the origin".into())
+            }
+            Ok(_) => None,
+        };
+        v.references.push(ReferenceView {
+            name: r.name.clone(),
+            problem,
+        });
+        if let Ok(p) = parsed {
+            loaded.push((p, r.under));
+        }
+    }
+    let mut parts = vec![Part::new(&act, &spr)];
+    parts.extend(loaded.iter().map(|((ra, rs), under)| Part {
+        anchored: true,
+        under: *under,
+        ..Part::new(ra, rs)
+    }));
     // the picture keeps the size of the whole action, so frames can be compared while stepping
-    let bounds = match bounds_of(&act, &spr, action, 0..a.frames.len()) {
+    let bounds = match bounds_of_parts(&parts, action, 0..a.frames.len()) {
         Ok(b) => b.unwrap_or(Bounds {
             min_x: -32,
             min_y: -32,
@@ -407,7 +476,7 @@ pub fn view(
             return Ok(v);
         }
     };
-    let canvas = match render_frame(&act, &spr, action, frame, bounds) {
+    let canvas = match render_parts(&parts, action, frame, bounds) {
         Ok(c) => c,
         Err(e) => {
             v.error = Some(e.to_string());

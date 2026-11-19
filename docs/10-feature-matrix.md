@@ -34,7 +34,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Funktion (laut README, Changelog, Ordner) | RustyGRF | Stand |
 |---|---|---|
 | Aktionen, Frames, Layer, Anker lesen/schreiben | Bibliothek `rgrf-formats` | ✅ Versatz, Intervall, Aktion kopieren/entfernen; Layer-Feinbearbeitung ✅ (`act layer`: Farbe, Skalierung, Drehung, Spiegeln, wählbar je Aktion/Frame/Layer; an einer echten ACT gerendert) |
-| Referenz-Sprite wählen (auch aus GRF) | – | 🔨 M7b |
+| Referenz-Sprite wählen (auch aus GRF) | `act render --with` (Teile übereinander) | ✅ (2026-11-19) im ACT-Editor: beliebig viele Animationen des Archivs als Referenz, dahinter oder davor, am ersten Anker ausgerichtet wie im Client (Kopf und Kopfbedeckung am Körper); Vorschläge Körper/Kopf männlich/weiblich; bleibt gespeichert. Gemessen an `남_Crushed_Snow_Man.act` mit `초보자_남.act` und `1_남.act` |
 | Interpolation (auch „erweitert“), Skripte (C#-Skript-Engine, `doc/ScriptGuide`) | – | ❓ Skripte: andere Sprache nötig (Frage) |
 | GIF-Export | `act render --gif` | ✅ (Hintergrund wählen ❓) |
 | Sound-Effekte je Frame | `act sound` | ✅ (setzen/entfernen, Tabelle wächst; Eingabe im GUI ✅ (ACT-Editor), **Abspielen ✅ (2026-11-19):** „Play“ im ACT-Editor spielt die Aktion mit ihren Sounds, ein Knopf hört den Sound eines Frames vor; „atk“ wird als Treffer-Markierung erkannt) |

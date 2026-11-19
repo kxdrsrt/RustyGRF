@@ -1349,7 +1349,65 @@ async function setPalette(row) {
 
 // ---------- animation editor ----------
 
-const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map() };
+// reference animations (a body or head to fit headgear on) stay chosen between sessions
+const ACT_REFS_KEY = "rustygrf.actReferences";
+const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map(), refs: loadActRefs() };
+
+function loadActRefs() {
+  try {
+    const r = JSON.parse(localStorage.getItem(ACT_REFS_KEY) || "[]");
+    return Array.isArray(r) ? r.filter((x) => typeof x?.path === "string").map((x) => ({ path: x.path, under: !!x.under })) : [];
+  } catch {
+    return [];
+  }
+}
+function saveActRefs() {
+  try {
+    localStorage.setItem(ACT_REFS_KEY, JSON.stringify(E.refs));
+  } catch {}
+}
+
+const REF_PRESETS = [
+  ["data\\sprite\\인간족\\몸통\\남\\초보자_남.act", "Body, novice (male)"],
+  ["data\\sprite\\인간족\\몸통\\여\\초보자_여.act", "Body, novice (female)"],
+  ["data\\sprite\\인간족\\머리통\\남\\1_남.act", "Head 1 (male)"],
+  ["data\\sprite\\인간족\\머리통\\여\\1_여.act", "Head 1 (female)"],
+];
+
+async function addActReference() {
+  const input = el("input", { type: "text", class: "field", list: "ref-presets", placeholder: "data\\sprite\\…\\name.act", spellcheck: "false", value: S.selected != null && /\.act$/i.test(S.rows[S.selected - S.offset]?.name || "") && S.rows[S.selected - S.offset].name !== E.row?.name ? S.rows[S.selected - S.offset].name : "" });
+  const presets = el("datalist", { id: "ref-presets" }, REF_PRESETS.map(([v, t]) => el("option", { value: v, label: t })));
+  const under = el("input", { type: "checkbox", checked: true });
+  const go = await ask(
+    "Add a reference animation",
+    [
+      el("p", { text: "Another animation of this archive drawn with the one you edit, e.g. a body and a head to fit headgear on. Its first anchor meets the first anchor of the edited frame, as the client attaches parts to the body. Same action and frame number; the reference is only shown, never changed." }),
+      el("div", { class: "form" }, el("label", {}, "Animation (.act) ", input, presets), el("label", {}, under, " Behind the edited animation")),
+      el("div", { class: "controls" }, ...REF_PRESETS.map(([v, t]) => el("button", { type: "button", class: "small", text: t, onclick: () => (input.value = v) }))),
+    ],
+    [{ label: "Add", value: true, primary: true }, { label: "Cancel", value: null }],
+  );
+  const path = input.value.trim();
+  if (!go || !path) return;
+  E.refs = [...E.refs.filter((r) => r.path.toLowerCase() !== path.toLowerCase()), { path, under: under.checked }];
+  saveActRefs();
+  await loadActFrame();
+}
+
+function referenceRow(v) {
+  const problem = new Map((v.references || []).map((r) => [r.path ?? r.name, r.problem]));
+  const chips = E.refs.map((r, i) =>
+    el(
+      "span",
+      { class: "refchip", title: r.path },
+      el("span", { class: "name", text: r.path.split("\\").pop() }),
+      el("button", { type: "button", class: "small", text: r.under ? "Behind" : "In front", title: "Draw the reference behind or in front of the edited animation", onclick: () => { E.refs[i] = { ...r, under: !r.under }; saveActRefs(); loadActFrame(); } }),
+      el("button", { type: "button", class: "small", text: "✕", "aria-label": `Remove the reference ${r.path}`, onclick: () => { E.refs.splice(i, 1); saveActRefs(); loadActFrame(); } }),
+      problem.get(r.path) ? el("span", { class: "muted", text: problem.get(r.path) }) : null,
+    ),
+  );
+  return el("div", { class: "refs" }, el("span", { class: "muted", text: "References" }), ...chips, el("button", { type: "button", class: "small", text: "Add reference…", onclick: addActReference }));
+}
 
 async function openActEditor(row, action) {
   stopActPlay();
@@ -1413,7 +1471,7 @@ async function openTextEditor(row) {
 
 async function loadActFrame() {
   try {
-    E.view = await invoke("act_frame", { index: E.row.index, action: E.action, frame: E.frame });
+    E.view = await invoke("act_frame", { index: E.row.index, action: E.action, frame: E.frame, references: E.refs });
     E.action = E.view.action;
     E.frame = E.view.frame;
     drawActEditor();
@@ -1583,7 +1641,7 @@ function drawActEditor() {
     : el("p", { class: "muted", text: `ACT ${v.version} has no anchors.` });
   // every frame is drawn anew: keep the keyboard on Play/Stop while it plays
   const keepPlay = document.activeElement?.hasAttribute("data-act-play");
-  $("act-body").replaceChildren(el("div", { class: "acted" }, bar, left, el("div", {}, layers, anchors)));
+  $("act-body").replaceChildren(el("div", { class: "acted" }, bar, referenceRow(v), left, el("div", {}, layers, anchors)));
   if (keepPlay) $("act-body").querySelector("[data-act-play]")?.focus();
   updateEditBar();
 }
