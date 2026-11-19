@@ -733,6 +733,7 @@ function renderPreview(p, row, meta) {
     case "effect":
       return [el("div", { class: "muted", text: `${p.frames} frame(s) shown at ${p.fps} fps` }), el("div", { class: "fxstage" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "effect" })), infoBlock(p.info)];
     case "map":
+      if (p.gat) return gatEditor(row, p);
       return [el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: "map" })), infoBlock(p.info)];
     case "info":
       return [el("pre", { text: p.lines.join("\n") })];
@@ -860,6 +861,93 @@ async function removeImage(row, frame) {
   } catch (e) {
     await note("Could not remove the image", errText(e), true);
   }
+}
+
+// ---------- map cell editing ----------
+
+/** A GAT as a picture on which a rectangle of cells can be chosen and set (mouse or number fields). */
+function gatEditor(row, p) {
+  const { cells_x: cx, cells_y: cy, types } = p.gat;
+  const sel = { x0: 0, y0: 0, x1: 0, y1: 0, on: false };
+  const img = el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: `map, ${cx} by ${cy} cells`, draggable: "false" });
+  const box = el("div", { class: "gatsel", hidden: true });
+  const stage = el("div", { class: "checker gatstage" }, img, box);
+  const field = (label, key, max) => {
+    const i = el("input", { type: "number", min: "0", max: String(max), step: "1", class: "narrow", "aria-label": label });
+    i.addEventListener("change", () => {
+      const v = Math.max(0, Math.min(max, Math.round(Number(i.value) || 0)));
+      sel[key] = v;
+      sel.on = true;
+      draw();
+    });
+    return [el("label", { class: "muted", text: `${label} ` }, i), i];
+  };
+  const [lx0, ix0] = field("x from", "x0", cx - 1);
+  const [lx1, ix1] = field("to", "x1", cx - 1);
+  const [ly0, iy0] = field("y from", "y0", cy - 1);
+  const [ly1, iy1] = field("to", "y1", cy - 1);
+  const kind = el("select", { "aria-label": "Cell type" }, el("option", { value: "", text: "type: no change" }), ...types.map(([k, n]) => el("option", { value: String(k), text: `${k}: ${n}` })));
+  const height = el("input", { type: "number", step: "0.5", placeholder: "no change", class: "narrow wide", "aria-label": "Height" });
+  const apply = el("button", { type: "button", class: "small", icon: "edit", text: "Set cells", disabled: true, title: "Set the type and/or height of the chosen cells (staged, saved with Changes…)" });
+  const readout = el("span", { class: "muted", text: "Drag on the map to choose cells." });
+  const draw = () => {
+    const [xa, xb, ya, yb] = [Math.min(sel.x0, sel.x1), Math.max(sel.x0, sel.x1), Math.min(sel.y0, sel.y1), Math.max(sel.y0, sel.y1)];
+    box.hidden = !sel.on;
+    if (sel.on) {
+      Object.assign(box.style, { left: `${(xa / cx) * 100}%`, width: `${((xb - xa + 1) / cx) * 100}%`, top: `${((cy - 1 - yb) / cy) * 100}%`, height: `${((yb - ya + 1) / cy) * 100}%` });
+      ix0.value = xa;
+      ix1.value = xb;
+      iy0.value = ya;
+      iy1.value = yb;
+      readout.textContent = `x ${xa}–${xb}, y ${ya}–${yb}: ${fmtNum((xb - xa + 1) * (yb - ya + 1))} cell(s)`;
+    }
+    apply.disabled = !sel.on;
+  };
+  const cell = (e) => {
+    const r = img.getBoundingClientRect();
+    const x = Math.max(0, Math.min(cx - 1, Math.floor(((e.clientX - r.left) / r.width) * cx)));
+    const rowFromTop = Math.max(0, Math.min(cy - 1, Math.floor(((e.clientY - r.top) / r.height) * cy)));
+    return [x, cy - 1 - rowFromTop]; // game y grows to the north, the picture's rows to the south
+  };
+  let dragging = false;
+  stage.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    stage.setPointerCapture(e.pointerId);
+    [sel.x0, sel.y0] = cell(e);
+    [sel.x1, sel.y1] = [sel.x0, sel.y0];
+    sel.on = true;
+    dragging = true;
+    draw();
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    [sel.x1, sel.y1] = cell(e);
+    draw();
+  });
+  stage.addEventListener("pointerup", () => (dragging = false));
+  apply.addEventListener("click", async () => {
+    const h = height.value.trim() === "" ? null : Number(height.value);
+    if (kind.value === "" && h === null) return note("Set cells", "Choose a cell type and/or a height first.");
+    try {
+      const r = await invoke("stage_gat_edit", { index: row.index, edit: { x0: sel.x0, y0: sel.y0, x1: sel.x1, y1: sel.y1, kind: kind.value === "" ? null : Number(kind.value), height: h } });
+      setPending(r.pending);
+      setStatus(`${fmtNum(r.changed)} cell(s) of ${row.name} changed (staged); save with Changes….`);
+      refreshPreview();
+    } catch (e) {
+      await note("Could not change the cells", errText(e), true);
+    }
+  });
+  const all = el("button", { type: "button", class: "small", text: "Select all", onclick: () => {
+      Object.assign(sel, { x0: 0, y0: 0, x1: cx - 1, y1: cy - 1, on: true });
+      draw();
+    },
+  });
+  return [
+    el("div", { class: "controls wrap" }, lx0, lx1, ly0, ly1, all),
+    el("div", { class: "controls wrap" }, kind, el("label", { class: "muted", text: "height " }, height), apply, readout),
+    stage,
+    infoBlock(p.info),
+  ];
 }
 
 // ---------- palette editing ----------

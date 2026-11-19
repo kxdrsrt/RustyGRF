@@ -325,3 +325,10 @@ button.small .ic { width: 13px; height: 13px; margin-right: 4px; vertical-align:
 button { display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
 #count { white-space: nowrap; }
 .btnlike { display: inline-flex; align-items: center; white-space: nowrap; }
+
+/* map cell editor */
+.gatstage { position: relative; line-height: 0; cursor: crosshair; touch-action: none; user-select: none; }
+.gatsel { position: absolute; border: 2px solid var(--accent); background: rgba(234, 88, 12, 0.22); pointer-events: none; box-sizing: border-box; }
+.controls.wrap { flex-wrap: wrap; }
+input.narrow { width: 64px; }
+input.narrow.wide { width: 84px; }

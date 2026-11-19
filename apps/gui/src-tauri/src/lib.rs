@@ -2,6 +2,7 @@
 
 pub mod act_editor;
 pub mod backend;
+pub mod gat_editor;
 pub mod pal_editor;
 pub mod view;
 
@@ -351,6 +352,29 @@ async fn stage_act_edit(
     .await
 }
 
+/// Sets the type and/or height of a rectangle of cells of the map `index` (staged).
+#[tauri::command]
+async fn stage_gat_edit(
+    state: State<'_, AppState>,
+    index: usize,
+    edit: gat_editor::GatEdit,
+) -> Res<GatStaged> {
+    with_session(&state, move |s| {
+        let changed = s.stage_gat_edit(index, &edit)?;
+        Ok(GatStaged {
+            changed,
+            pending: s.pending(),
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+struct GatStaged {
+    changed: usize,
+    pending: Vec<PendingRow>,
+}
+
 /// The 256 colours (`rrggbb`) of the palette `index`, with staged changes applied.
 #[tauri::command]
 async fn pal_colors(state: State<'_, AppState>, index: usize) -> Res<Vec<String>> {
@@ -567,6 +591,7 @@ pub fn run() {
             stage_spr_palette,
             stage_act_interval,
             pal_colors,
+            stage_gat_edit,
             stage_pal_edit,
             act_frame,
             stage_act_edit,

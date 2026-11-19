@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::act_editor::{self, ActEdit, ActFrameView};
+use crate::gat_editor::{self, GatEdit};
 use crate::pal_editor::{self, PalEdit};
 use crate::view::{self, Line, Meta, Tree, ViewSpec};
 use base64::Engine;
@@ -191,6 +192,14 @@ struct ViewState {
     tree: Option<Tree>,
     lines: Vec<Line>,
     expanded: std::collections::HashSet<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct GatMeta {
+    pub cells_x: u32,
+    pub cells_y: u32,
+    pub scale: u32,
+    pub types: Vec<(i32, String)>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq, Default)]
@@ -477,6 +486,8 @@ pub enum Preview {
         width: u32,
         height: u32,
         info: Vec<String>,
+        /// Set for a GAT: its size in cells, the pixels per cell in the picture and the cell types.
+        gat: Option<GatMeta>,
     },
     Info {
         title: String,
@@ -987,6 +998,30 @@ impl Session {
     pub fn pal_colors(&self, index: usize) -> Result<Vec<String>, String> {
         let (_, data, _) = self.working_bytes(index)?;
         pal_editor::colors(&data)
+    }
+
+    /// Sets cells of a map; returns how many cells changed.
+    pub fn stage_gat_edit(&mut self, index: usize, edit: &GatEdit) -> Result<usize, String> {
+        let mut changed = 0;
+        self.transact(|s| {
+            let (name, data, mut what) = s.working_bytes(index)?;
+            let (out, n) = gat_editor::apply(&data, edit)?;
+            changed = n;
+            what.push(format!(
+                "{n} cell(s) of x {}..{}, y {}..{} set",
+                edit.x0.min(edit.x1),
+                edit.x0.max(edit.x1),
+                edit.y0.min(edit.y1),
+                edit.y0.max(edit.y1)
+            ));
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(out),
+                what,
+            });
+            Ok(())
+        })?;
+        Ok(changed)
     }
 
     pub fn stage_pal_edit(&mut self, index: usize, edit: &PalEdit) -> Result<(), String> {
@@ -1836,6 +1871,14 @@ impl Session {
                     width: w as u32,
                     height: h as u32,
                     info,
+                    gat: Some(GatMeta {
+                        cells_x: g.width,
+                        cells_y: g.height,
+                        scale: s as u32,
+                        types: (0..=6)
+                            .map(|k| (k, gat::type_name(k).to_string()))
+                            .collect(),
+                    }),
                 }
             }
             "rsw" => self.preview_scene(index, &data, true)?,
@@ -2584,6 +2627,48 @@ mod tests {
             .iter()
             .position(|n| n.to_ascii_lowercase().ends_with(name))
             .unwrap()
+    }
+
+    #[test]
+    fn map_cells_are_staged_and_the_preview_shows_them() {
+        let (dir, grf) = sample("gatedit");
+        let mut s = Session::open(&grf).unwrap();
+        let i = find(&s, "map.gat");
+        let Preview::Map {
+            gat: Some(meta), ..
+        } = s.preview(i, None).unwrap()
+        else {
+            panic!("a GAT preview carries its size");
+        };
+        assert_eq!((meta.cells_x, meta.cells_y, meta.scale), (2, 2, 4));
+        assert_eq!(meta.types.len(), 7);
+        // the whole map becomes type 1; every cell that was not 1 changes (types were 0, 1, 3, 5)
+        let edit = GatEdit {
+            x0: 0,
+            y0: 0,
+            x1: 1,
+            y1: 1,
+            kind: Some(1),
+            height: None,
+        };
+        assert_eq!(s.stage_gat_edit(i, &edit).unwrap(), 3);
+        assert_eq!(s.pending().len(), 1);
+        let Preview::Map { info, .. } = s.preview(i, None).unwrap() else {
+            panic!()
+        };
+        assert!(
+            info.iter()
+                .any(|l| l.contains("type 1") && l.contains("4 cells")),
+            "{info:?}"
+        );
+        // wrong input stages nothing
+        let bad = GatEdit {
+            kind: Some(9),
+            ..edit.clone()
+        };
+        assert!(s.stage_gat_edit(i, &bad).is_err());
+        assert_eq!(s.pending().len(), 1);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
