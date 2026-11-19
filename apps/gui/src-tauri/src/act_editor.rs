@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use rgrf_formats::act::{Act, Anchor, Layer, V2_3, V2_4};
+use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
 use rgrf_formats::gif_io::upscale;
 use rgrf_formats::png_io::rgba_to_png;
 use rgrf_formats::render::{Bounds, bounds_of, render_frame};
@@ -45,6 +45,10 @@ pub struct ActFrameView {
     /// Versions before 2.3 have no anchors, before 2.4 one scale for both directions.
     pub anchors_supported: bool,
     pub separate_scale: bool,
+    /// Sounds exist from ACT 2.1; `sound` is the file played with this frame, `sounds` the table.
+    pub sounds_supported: bool,
+    pub sound: Option<String>,
+    pub sounds: Vec<String>,
     pub indexed_images: usize,
     pub rgba_images: usize,
     pub png: Option<String>,
@@ -106,6 +110,10 @@ pub enum ActEdit {
     MoveAction {
         to: usize,
     },
+    /// The sound played with the frame; `None` or an empty name removes it.
+    SetSound {
+        name: Option<String>,
+    },
     /// Time per frame in milliseconds (the file keeps multiples of 25 ms).
     SetInterval {
         ms: f32,
@@ -146,6 +154,11 @@ pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result
                 return Err("the interval must be between 1 and 60000 ms".into());
             }
             act.set_interval(action, ms / 25.0)
+                .map_err(|e| e.to_string())?;
+        }
+        ActEdit::SetSound { name } => {
+            let name = name.as_deref().map(str::trim).filter(|n| !n.is_empty());
+            act.set_frame_sound(action, frame, name)
                 .map_err(|e| e.to_string())?;
         }
         _ => return apply_in_action(act, action, frame, edit),
@@ -361,6 +374,12 @@ pub fn view(
             .collect(),
         anchors_supported: act.version >= V2_3,
         separate_scale: act.version >= V2_4,
+        sounds_supported: act.version >= V2_1,
+        sound: usize::try_from(f.sound_id)
+            .ok()
+            .and_then(|i| act.sounds.get(i))
+            .map(sound_name),
+        sounds: act.sounds.iter().map(sound_name).collect(),
         indexed_images: spr.as_ref().map_or(0, |s| s.indexed.len()),
         rgba_images: spr.as_ref().map_or(0, |s| s.rgba.len()),
         png: None,
@@ -552,6 +571,29 @@ mod tests {
             assert!(apply(&act, 0, 0, &edit(bad.clone())).is_err(), "{bad}");
         }
         assert!(apply(&act, 3, 0, &edit(serde_json::json!({"op": "add_layer"}))).is_err());
+    }
+
+    #[test]
+    fn a_frame_sound_is_set_listed_and_cleared() {
+        let (act, _) = sample();
+        let set = |d: &[u8], name: serde_json::Value| {
+            apply(
+                d,
+                0,
+                0,
+                &edit(serde_json::json!({"op": "set_sound", "name": name})),
+            )
+        };
+        let a = set(&act, "effect\\hit.wav".into()).unwrap();
+        let v = view(&a, None, 0, 0).unwrap();
+        assert!(v.sounds_supported);
+        assert_eq!(v.sound.as_deref(), Some("effect\\hit.wav"));
+        assert_eq!(v.sounds, ["effect\\hit.wav"]);
+        let b = set(&a, serde_json::Value::Null).unwrap();
+        let v = view(&b, None, 0, 0).unwrap();
+        assert_eq!(v.sound, None);
+        assert_eq!(v.sounds.len(), 1, "the table keeps the name");
+        assert!(set(&act, "x".repeat(60).into()).is_err());
     }
 
     #[test]

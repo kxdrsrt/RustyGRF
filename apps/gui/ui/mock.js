@@ -116,7 +116,7 @@ if (!window.__TAURI__) {
             const g = c.getContext("2d");
             g.fillStyle = "#6a9";
             g.fillRect(30 + a.frame * 6, 20, 50, 60);
-            return { version: "2.5", actions: 8, frames: 4, action: a.action, frame: Math.min(a.frame, 3), interval_ms: 100, layers: [{ sprite_index: 0, sprite_type: 0, offset_x: 0, offset_y: 0, mirror: false, scale_x: 1, scale_y: 1, rotation: 0, color: [255, 255, 255, 255] }, { sprite_index: 1, sprite_type: 0, offset_x: 5, offset_y: -3, mirror: true, scale_x: 1, scale_y: 1, rotation: 90, color: [255, 128, 0, 200] }], anchors: [{ x: 4, y: -20 }], anchors_supported: true, separate_scale: true, indexed_images: 6, rgba_images: 0, png: c.toDataURL().split(",")[1], width: 120, height: 100, origin_x: 60, origin_y: 80, scale: 4, error: null };
+            return { version: "2.5", actions: 8, frames: 4, action: a.action, frame: Math.min(a.frame, 3), interval_ms: 100, layers: [{ sprite_index: 0, sprite_type: 0, offset_x: 0, offset_y: 0, mirror: false, scale_x: 1, scale_y: 1, rotation: 0, color: [255, 255, 255, 255] }, { sprite_index: 1, sprite_type: 0, offset_x: 5, offset_y: -3, mirror: true, scale_x: 1, scale_y: 1, rotation: 90, color: [255, 128, 0, 200] }], anchors: [{ x: 4, y: -20 }], anchors_supported: true, separate_scale: true, sounds_supported: true, sound: "effect\\hit.wav", sounds: ["effect\\hit.wav", "effect\\miss.wav"], indexed_images: 6, rgba_images: 0, png: c.toDataURL().split(",")[1], width: 120, height: 100, origin_x: 60, origin_y: 80, scale: 4, error: null };
           }
           case "stage_act_edit":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action} frame ${a.frame}: ${a.edit.op}` });

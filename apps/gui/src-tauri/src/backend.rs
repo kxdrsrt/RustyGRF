@@ -1210,6 +1210,7 @@ impl Session {
             ActEdit::RemoveAction => "action removed",
             ActEdit::MoveAction { .. } => "action moved",
             ActEdit::SetInterval { .. } => "interval set",
+            ActEdit::SetSound { .. } => "sound set",
         };
         let note = format!("action {action} frame {frame}: {kind}");
         if !what.contains(&note) {

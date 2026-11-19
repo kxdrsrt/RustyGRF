@@ -623,6 +623,13 @@ async function removeAction(i) {
 
 const hex2 = (n) => n.toString(16).padStart(2, "0");
 
+function soundField(v) {
+  const list = el("datalist", { id: "act-sounds" }, v.sounds.map((s) => el("option", { value: s })));
+  const input = el("input", { type: "text", style: "width:13em", list: "act-sounds", value: v.sound ?? "", placeholder: "none", title: "Sound file played with this frame, e.g. effect\\hit.wav (empty = none)", size: "22" });
+  input.addEventListener("change", () => actEdit({ op: "set_sound", name: input.value.trim() === "" ? null : input.value.trim() }));
+  return el("label", { class: "muted", text: "Sound " }, input, list);
+}
+
 function drawActEditor() {
   const v = E.view;
   const num = (value, onset, opts = {}) => {
@@ -642,6 +649,7 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", text: "▶", disabled: v.frame >= v.frames - 1, onclick: () => { E.frame += 1; loadActFrame(); } }),
     el("label", { class: "muted", text: "ms/frame " }, num(v.interval_ms, (n) => actEdit({ op: "set_interval", ms: n }), { narrow: true })),
     el("span", { class: "muted", text: `ACT ${v.version}` }),
+    v.sounds_supported ? soundField(v) : null,
     el("button", { type: "button", class: "small", id: "act-undo", text: "Undo", onclick: () => doHistory(false) }),
     el("button", { type: "button", class: "small", id: "act-redo", text: "Redo", onclick: () => doHistory(true) }),
     el("button", { type: "button", class: "small", text: "Copy frame", title: "Insert a copy after this frame", onclick: () => actEdit({ op: "copy_frame" }) }),
