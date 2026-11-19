@@ -46,6 +46,9 @@ struct Unsupported(String);
 
 struct Ctx<'a> {
     names: &'a dyn Fn(&[u8]) -> String,
+    /// Strings that are not Korean (Latin-1 bytes) are written with `\ddd` escapes, because the
+    /// file also has Korean strings and the compiler cannot tell them apart.
+    escape_raw: bool,
     /// How many functions deep the function being written is nested.
     depth: std::cell::Cell<usize>,
     /// How many blocks (`if`, loops, condition code) deep the code being walked is.
@@ -120,7 +123,23 @@ pub fn string_text(s: &[u8], names: &dyn Fn(&[u8]) -> String) -> String {
     }
 }
 
+/// A string with non-ASCII bytes that no Korean text stands for: `names` showed every byte as the
+/// character of the same value.
+fn is_raw_string(s: &[u8], names: &dyn Fn(&[u8]) -> String) -> bool {
+    !s.is_ascii()
+        && std::str::from_utf8(s).map_or(true, |t| {
+            t.is_ascii() || t.chars().any(|c| (c as u32) < 0x800)
+        })
+        && names(s)
+            .chars()
+            .map(|c| c as u32)
+            .eq(s.iter().map(|&b| u32::from(b)))
+}
+
 fn quote(ctx: &Ctx<'_>, s: &[u8]) -> String {
+    if ctx.escape_raw && is_raw_string(s, ctx.names) {
+        return quote_bytes(s);
+    }
     let text = string_text(s, ctx.names);
     let mut out = String::from("\"");
     for ch in text.chars() {
@@ -132,6 +151,25 @@ fn quote(ctx: &Ctx<'_>, s: &[u8]) -> String {
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => out.push_str(&format!("\\{:03}", c as u32)),
             c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A string written byte by byte, non-ASCII bytes as `\ddd`.
+#[inline(never)]
+fn quote_bytes(s: &[u8]) -> String {
+    let mut out = String::from("\"");
+    for &b in s {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7e => out.push(char::from(b)),
+            _ => out.push_str(&format!("\\{b:03}")),
         }
     }
     out.push('"');
@@ -473,30 +511,28 @@ impl Ctx<'_> {
             if i.c == 0 { (yes, no) } else { (no, yes) }
         } else {
             let (l, r) = (rk_of(f, reg, i.b)?, rk_of(f, reg, i.c)?);
-            let (enter, taken) = match (i.name(), i.a) {
-                ("EQ", 0) => ("==", "~="),
-                ("EQ", _) => ("~=", "=="),
-                ("LT", 0) => ("<", ">="),
-                ("LT", _) => (">=", "<"),
-                ("LE", 0) => ("<=", ">"),
-                _ => (">", "<="),
-            };
             let swap = i.name() != "EQ" && constant_added_late(f, q, i.b, i.c);
             let (l, r) = (self.operand(f, &l, indent), self.operand(f, &r, indent));
-            if swap {
-                // `x > 5` compiles to `LT 5 x`, with the constant added after the code of `x`
-                let mirror = |op: &str| match op {
-                    "<" => ">",
-                    ">" => "<",
-                    "<=" => ">=",
-                    _ => "<=",
-                };
-                (
-                    format!("{r} {} {l}", mirror(enter)),
-                    format!("{r} {} {l}", mirror(taken)),
-                )
-            } else {
+            if i.name() == "EQ" {
+                let (enter, taken) = if i.a == 0 { ("==", "~=") } else { ("~=", "==") };
                 (format!("{l} {enter} {r}"), format!("{l} {taken} {r}"))
+            } else {
+                // `<` and `<=` are not each other's opposite for every value (NaN, `__lt`), and
+                // `not (a < b)` compiles differently from `a >= b`: keep what the opcode says
+                let op = if i.name() == "LT" { "<" } else { "<=" };
+                let (l, r, op) = if swap {
+                    (r, l, if op == "<" { ">" } else { ">=" })
+                } else {
+                    (l, r, op)
+                };
+                let plain = format!("{l} {op} {r}");
+                let negated = format!("not ({plain})");
+                // A = 0: the jump is taken when the comparison is false
+                if i.a == 0 {
+                    (plain, negated)
+                } else {
+                    (negated, plain)
+                }
             }
         };
         Ok(Some(Pair {
@@ -697,6 +733,54 @@ impl Ctx<'_> {
         let pad = "\t".repeat(indent);
         forget_changed(reg, &[&inner, &cs], 0..0);
         Ok((format!("{pad}while {cond} do\n{body}{pad}end\n"), exit))
+    }
+
+    /// `if c then ... else break end`: the compiler sends the jump of `c` straight to the exit,
+    /// and the block ends with `JMP end` and the `JMP exit` of the else. Kept out of line so the
+    /// recursive `block` keeps a small stack frame.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn else_break(
+        &self,
+        f: &Function,
+        reg: &mut [Option<Expr>],
+        top: usize,
+        pair: &Pair,
+        exit: usize,
+        end: usize,
+        indent: usize,
+        brk: Option<usize>,
+    ) -> Result<Option<String>, Unsupported> {
+        let pad = "\t".repeat(indent);
+        let jump_to = |q: usize| {
+            let j = Instr::decode(f.code[q]);
+            (j.name() == "JMP").then(|| q as i64 + 1 + j.sbx())
+        };
+        let body_from = pair.jmp + 1;
+        if !(end >= body_from + 2
+            && end <= f.code.len()
+            && jump_to(end - 2) == Some(end as i64)
+            && jump_to(end - 1).is_some_and(|t| is_break_target(f, Some(exit), t as usize)))
+        {
+            return Ok(None);
+        }
+        let mut then_state = State {
+            reg: reg.to_vec(),
+            top,
+        };
+        let body = self.block(
+            f,
+            &mut then_state,
+            body_from,
+            end - 2,
+            indent + 1,
+            Exits { brk, tail: None },
+        )?;
+        forget_changed(reg, &[&then_state], 0..0);
+        Ok(Some(format!(
+            "{pad}if {} then\n{body}{pad}else\n{pad}\tbreak\n{pad}end\n",
+            pair.enter
+        )))
     }
 
     /// The instructions `start..end` as statements. Comparisons become `if` (with `else`, `and`,
@@ -902,10 +986,11 @@ impl Ctx<'_> {
                     for r in a + 1..=a + n {
                         items.push(get(reg, r)?);
                     }
+                    // list items are loaded when they are met in the source, but stored by the
+                    // `SETLIST` at the end: put each back among the keyed entries where it was loaded
+                    let slots = list_item_slots(f, at, a, n);
                     match reg[a].as_mut() {
-                        Some(Expr::Table(entries)) => {
-                            entries.extend(items.into_iter().map(Entry::Item))
-                        }
+                        Some(Expr::Table(entries)) => insert_list_items(entries, items, &slots),
                         _ => return Err(Unsupported("list for an unknown table".into())),
                     }
                 }
@@ -1125,6 +1210,15 @@ impl Ctx<'_> {
                             .iter()
                             .take_while(|p| is_break_target(f, Some(b), p.target))
                             .count();
+                        if let Some(text) = (k == 1)
+                            .then(|| self.else_break(f, reg, *top, &pairs[0], b, end, indent, brk))
+                            .transpose()?
+                            .flatten()
+                        {
+                            out.push_str(&text);
+                            pc = end;
+                            break 'cmp;
+                        }
                         let cond: Vec<&str> = pairs[..k].iter().map(|p| p.taken.as_str()).collect();
                         out.push_str(&format!(
                             "{pad}if {} then\n{pad}\tbreak\n{pad}end\n",
@@ -1430,6 +1524,74 @@ pub fn rk_base(f: &Function) -> u32 {
     }
 }
 
+/// Puts the items of a `SETLIST` among the entries of the table, at the places they were loaded.
+#[inline(never)]
+fn insert_list_items(entries: &mut Vec<Entry>, items: Vec<Expr>, slots: &[usize]) {
+    for (k, item) in items.into_iter().enumerate() {
+        let items_before = entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Item(_)))
+            .count();
+        let at_index = slots
+            .get(k)
+            .map_or(usize::MAX, |&keyed| keyed + items_before)
+            .min(entries.len());
+        entries.insert(at_index, Entry::Item(item));
+    }
+}
+
+/// For the items of the `SETLIST` at `at` (registers `a + 1 ..= a + n`): how many keyed entries
+/// (`SETTABLE` on `a`) of the same constructor come before the instruction that loaded the item.
+fn list_item_slots(f: &Function, at: usize, a: usize, n: usize) -> Vec<usize> {
+    let ins = |q: usize| Instr::decode(f.code[q]);
+    let Some(start) = (0..at).rev().find(|&q| {
+        let i = ins(q);
+        i.name() == "NEWTABLE" && i.a as usize == a
+    }) else {
+        return Vec::new();
+    };
+    let writes = |q: usize, r: usize| {
+        let i = ins(q);
+        i.a as usize == r
+            && matches!(
+                i.name(),
+                "MOVE"
+                    | "LOADK"
+                    | "LOADBOOL"
+                    | "LOADNIL"
+                    | "GETUPVAL"
+                    | "GETGLOBAL"
+                    | "GETTABLE"
+                    | "NEWTABLE"
+                    | "SELF"
+                    | "ADD"
+                    | "SUB"
+                    | "MUL"
+                    | "DIV"
+                    | "MOD"
+                    | "POW"
+                    | "UNM"
+                    | "NOT"
+                    | "LEN"
+                    | "CONCAT"
+                    | "CLOSURE"
+                    | "CALL"
+                    | "VARARG"
+            )
+    };
+    (1..=n)
+        .map(|k| {
+            let def = (start + 1..at)
+                .rev()
+                .find(|&q| writes(q, a + k))
+                .unwrap_or(at);
+            (start + 1..def)
+                .filter(|&q| ins(q).name() == "SETTABLE" && ins(q).a as usize == a)
+                .count()
+        })
+        .collect()
+}
+
 /// Constants an instruction names (its `Bx` or its constant `RK` operands).
 fn constants_of(f: &Function, i: &Instr) -> Vec<usize> {
     let base = rk_base(f);
@@ -1529,8 +1691,10 @@ fn konst(f: &Function, i: usize) -> Result<Expr, Unsupported> {
 
 /// Lua source for the chunk. `names` turns raw bytes (names, strings) into text.
 pub fn decompile(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
+    let kinds = string_kinds(&chunk.main, names);
     let ctx = Ctx {
         names,
+        escape_raw: kinds.raw && (kinds.korean || kinds.utf8),
         depth: std::cell::Cell::new(0),
         block_depth: std::cell::Cell::new(0),
     };
@@ -1541,8 +1705,11 @@ pub fn decompile(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
     };
     // The compiler (`luacomp::compile_text`) reads this mark to write the strings back as UTF-8;
     // every other file is written back as CP949 (measured: no file of the real archives mixes both).
-    let utf8 = if has_utf8_strings(&chunk.main) {
+    let utf8 = if kinds.utf8 {
         "; strings: UTF-8"
+    } else if kinds.raw && !kinds.korean {
+        // only Latin-1 strings (a file of another language): the text is written back byte for byte
+        "; strings: Latin-1"
     } else {
         ""
     };
@@ -1551,12 +1718,40 @@ pub fn decompile(chunk: &Chunk, names: &dyn Fn(&[u8]) -> String) -> String {
     out
 }
 
-/// Whether some string constant is shown as UTF-8 (see [`string_text`]).
-fn has_utf8_strings(f: &Function) -> bool {
-    f.constants.iter().any(|k| {
-        matches!(k, Constant::Str(s) if !s.is_ascii() && std::str::from_utf8(s)
-            .is_ok_and(|t| t.chars().all(|c| c.is_ascii() || c as u32 >= 0x800)))
-    }) || f.protos.iter().any(has_utf8_strings)
+/// Which kinds of non-ASCII strings a chunk holds.
+struct StringKinds {
+    utf8: bool,
+    korean: bool,
+    raw: bool,
+}
+
+fn string_kinds(f: &Function, names: &dyn Fn(&[u8]) -> String) -> StringKinds {
+    let mut k = StringKinds {
+        utf8: false,
+        korean: false,
+        raw: false,
+    };
+    // a work list, not recursion: functions can be nested very deeply
+    let mut todo = vec![f];
+    while let Some(f) = todo.pop() {
+        for c in &f.constants {
+            let Constant::Str(s) = c else { continue };
+            if s.is_ascii() {
+                continue;
+            }
+            if std::str::from_utf8(s)
+                .is_ok_and(|t| t.chars().all(|c| c.is_ascii() || c as u32 >= 0x800))
+            {
+                k.utf8 = true;
+            } else if is_raw_string(s, names) {
+                k.raw = true;
+            } else {
+                k.korean = true;
+            }
+        }
+        todo.extend(&f.protos);
+    }
+    k
 }
 
 /// True when every function of the chunk was decompiled (no "not decompiled" comment).
@@ -1740,6 +1935,57 @@ mod tests {
         let same =
             first.main.code == second.main.code && first.main.constants == second.main.constants;
         (text, same)
+    }
+
+    #[test]
+    fn comparisons_lists_and_breaks_come_back_exactly() {
+        for src in [
+            "if not (a < b) then Put(1) end",
+            "if not (a <= b) then Put(1) end",
+            "for i = 1, 5 do local c = Get(i) if c then Put(c) else break end end Done()",
+            "t = { 1, f(), \"x\", [2] = 3, g = 4 }",
+            "t = { a = 1, \"NPC\", [\"k\"] = { \"a\", \"b\" }, 2 }",
+        ] {
+            let (text, same) = round_trip(src);
+            assert!(!text.contains("not decompiled"), "{src}\n{text}");
+            assert!(same, "{src}\n{text}");
+        }
+    }
+
+    #[test]
+    fn strings_that_are_not_korean_keep_their_bytes() {
+        let latin = |s: &[u8]| s.iter().map(|&b| char::from(b)).collect::<String>();
+        let make = |strings: &[&[u8]]| {
+            let n = strings.len() as u32;
+            let code = (0..n)
+                .flat_map(|i| [insx(1, 0, i), insx(7, 0, n)])
+                .chain([ins(30, 0, 1, 0)])
+                .collect();
+            let mut consts: Vec<Constant> =
+                strings.iter().map(|b| Constant::Str(b.to_vec())).collect();
+            consts.push(s("v"));
+            Chunk {
+                main: func(code, consts, vec![]),
+            }
+        };
+        // only Latin-1: marker, no escapes; the compiler writes the bytes back
+        let only = make(&[b"m\xf6chtest"]);
+        let out = decompile(&only, &|b| latin(b));
+        assert!(
+            out.starts_with("-- decompiled by RustyGRF from Lua 5.1 bytecode; strings: Latin-1"),
+            "{out}"
+        );
+        let again =
+            crate::luacomp::compile_text(&out, b"=t", crate::luacomp::TextEncoding::Auto, &|_| {
+                None
+            })
+            .unwrap();
+        assert!(
+            again
+                .main
+                .constants
+                .contains(&Constant::Str(b"m\xf6chtest".to_vec()))
+        );
     }
 
     #[test]

@@ -2641,6 +2641,10 @@ pub enum TextEncoding {
     /// strings are UTF-8), else CP949.
     Auto,
     Utf8,
+    /// Every character below U+0100 is the byte of that value (files of other languages, whose
+    /// strings are Latin-1 and not Korean). `Auto` picks it when the first line says
+    /// `strings: Latin-1`.
+    Latin1,
     /// The client's encoding: every run of non-ASCII characters is written as CP949, as Latin-1
     /// when it is not Korean, and as UTF-8 when it fits neither.
     Cp949,
@@ -2663,16 +2667,31 @@ pub(crate) fn text_bytes<'a>(
     encoding: TextEncoding,
     cp949: &dyn Fn(&str) -> Option<Vec<u8>>,
 ) -> std::borrow::Cow<'a, [u8]> {
-    let utf8 = match encoding {
-        TextEncoding::Utf8 => true,
-        TextEncoding::Cp949 => false,
-        TextEncoding::Auto => text
-            .lines()
+    let first = |mark: &str| {
+        text.lines()
             .next()
-            .is_some_and(|l| l.starts_with("--") && l.contains("strings: UTF-8")),
+            .is_some_and(|l| l.starts_with("--") && l.contains(mark))
+    };
+    let (utf8, latin1) = match encoding {
+        TextEncoding::Utf8 => (true, false),
+        TextEncoding::Cp949 => (false, false),
+        TextEncoding::Latin1 => (false, true),
+        TextEncoding::Auto => (first("strings: UTF-8"), first("strings: Latin-1")),
     };
     if utf8 || text.is_ascii() {
         return std::borrow::Cow::Borrowed(text.as_bytes());
+    }
+    if latin1 {
+        let mut bytes = Vec::with_capacity(text.len());
+        for c in text.chars() {
+            if (c as u32) < 0x100 {
+                bytes.push(c as u32 as u8);
+            } else {
+                let mut b = [0u8; 4];
+                bytes.extend(c.encode_utf8(&mut b).as_bytes());
+            }
+        }
+        return std::borrow::Cow::Owned(bytes);
     }
     let mut bytes = Vec::with_capacity(text.len());
     let mut run = String::new();

@@ -504,13 +504,7 @@ fn lua50_files_dump_and_compile_back() {
     let cp949 = |run: &str| {
         rgrf_core::GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec())
     };
-    let known = [
-        "skillinfolist.lub",
-        "1@ma_b.lub",
-        "optioninfo.lub",
-        "chatwndinfo_f.lub",
-        "ma_scene01.lub",
-    ];
+    let known = ["1@ma_b.lub", "optioninfo.lub", "ma_scene01.lub"];
     let different: Vec<&str> = files
         .par_iter()
         .filter(|(_, d)| {
@@ -530,5 +524,5 @@ fn lua50_files_dump_and_compile_back() {
         unexpected.is_empty(),
         "unexpected differences: {unexpected:?}"
     );
-    assert!(different.len() <= 5, "{different:?}");
+    assert!(different.len() <= 3, "{different:?}");
 }

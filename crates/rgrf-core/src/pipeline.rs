@@ -130,13 +130,17 @@ fn encrypt_plain(key: &crate::grfcrypt::Key, size: u32, p: &mut Prepared) {
     }
 }
 
-/// Writes the hidden entry that marks an archive as encrypted: the CRC32 of the key.
+/// Writes the hidden entry that marks an archive as encrypted: the CRC32 of the key, as a stored
+/// zlib block like GRF Editor writes it (so the archives are byte for byte the same).
 pub(crate) fn encryption_marker(
     writer: &mut Sink,
     key: &crate::grfcrypt::Key,
 ) -> Result<crate::writer::OutEntry> {
     let crc = crate::grfcrypt::key_crc(key).to_le_bytes();
-    let placed = writer.put_stream(&crate::encode::encode(crate::encode::Method::DEFAULT, &crc))?;
+    let placed = writer.put_stream(&crate::encode::encode(
+        crate::encode::Method::Zlib { level: 0 },
+        &crc,
+    ))?;
     Ok(crate::writer::OutEntry {
         name: GrfPath::new(crate::grfcrypt::MARKER_NAME.as_bytes()),
         placed,

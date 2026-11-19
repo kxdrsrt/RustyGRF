@@ -475,6 +475,7 @@ enum EncodingArg {
     Auto,
     Cp949,
     Utf8,
+    Latin1,
 }
 
 #[derive(Subcommand)]
@@ -1091,6 +1092,7 @@ fn run(cli: &Cli) -> Result<i32> {
                     EncodingArg::Auto => rgrf_formats::luacomp::TextEncoding::Auto,
                     EncodingArg::Cp949 => rgrf_formats::luacomp::TextEncoding::Cp949,
                     EncodingArg::Utf8 => rgrf_formats::luacomp::TextEncoding::Utf8,
+                    EncodingArg::Latin1 => rgrf_formats::luacomp::TextEncoding::Latin1,
                 },
                 name.as_deref(),
                 *overwrite,

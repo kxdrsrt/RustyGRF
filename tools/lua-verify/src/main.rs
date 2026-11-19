@@ -166,7 +166,11 @@ fn outcome_text(code: &Code, bytes: &[u8]) -> String {
     match code {
         // the client's scripts hold CP949 bytes; the decompiled text holds the same characters as UTF-8
         Code::Binary(_) => decode_segments(bytes),
-        Code::Text(_) => String::from_utf8_lossy(bytes).into_owned(),
+        // text with the Latin-1 mark, or with escapes, prints raw bytes like the binary does
+        Code::Text(_) => match std::str::from_utf8(bytes) {
+            Ok(t) => t.to_owned(),
+            Err(_) => decode_segments(bytes),
+        },
     }
 }
 
@@ -514,6 +518,13 @@ fn dump_roundtrip(files: &[Entry]) -> usize {
 /// bytes, or Latin-1 bytes when it is not Korean (the inverse of the decompiler's string rule).
 fn encode_text(text: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(text.len());
+    // the mark of a file whose strings are all Latin-1 (another language): one byte per character
+    if text.lines().next().is_some_and(|l| l.starts_with("--") && l.contains("strings: Latin-1")) {
+        for c in text.chars() {
+            out.push(u8::try_from(u32::from(c)).map_err(|_| format!("cannot encode {c:?}"))?);
+        }
+        return Ok(out);
+    }
     let mut run = String::new();
     let flush = |run: &mut String, out: &mut Vec<u8>| -> Result<(), String> {
         if run.is_empty() {
