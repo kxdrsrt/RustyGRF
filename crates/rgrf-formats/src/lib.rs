@@ -26,6 +26,7 @@ pub mod rsw;
 pub mod spr;
 pub mod str_effect;
 pub mod tga;
+pub mod unused;
 pub mod version;
 pub mod wav;
 

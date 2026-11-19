@@ -575,6 +575,42 @@ fn bmp24(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
 }
 
 #[test]
+fn client_unused_lists_files_no_text_names() {
+    let dir = tmpdir("client-unused");
+    let src = dir.join("src/data/texture/town");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(dir.join("src/data/luafiles514")).unwrap();
+    for n in ["used.bmp", "lonely.bmp"] {
+        std::fs::write(src.join(n), vec![7u8; 100]).unwrap();
+    }
+    std::fs::write(
+        dir.join("src/data/luafiles514/t.lua"),
+        "pic = \"data\\\\texture\\\\town\\\\Used.BMP\"",
+    )
+    .unwrap();
+    let grf = dir.join("t.grf").to_string_lossy().into_owned();
+    let s = dir.join("src").to_string_lossy().into_owned();
+    assert_eq!(
+        rgrf(&["build", &s, "-o", &grf, "--quiet"]).status.code(),
+        Some(0)
+    );
+    let o = rgrf(&["client", "unused", &grf, "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(v["files_looked_at"].as_u64(), Some(2));
+    assert_eq!(v["unnamed_files"].as_u64(), Some(1));
+    assert_eq!(
+        v["folders"][0]["examples"][0],
+        "data\\texture\\town\\lonely.bmp"
+    );
+}
+
+#[test]
 fn client_optimize_copies_the_folder_and_reduces_every_archive() {
     let dir = tmpdir("client-optimize");
     let src = dir.join("src/data");

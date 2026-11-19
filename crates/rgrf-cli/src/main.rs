@@ -36,6 +36,7 @@ mod pal_cmd;
 mod patch_cmd;
 mod refs_cmd;
 mod spr_cmd;
+mod unused_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -478,6 +479,19 @@ enum ClientCmd {
         recompress: bool,
         #[command(flatten)]
         write: WriteArgs,
+    },
+    /// Files of the archives (textures, sprites, sounds, models) that no map, animation, effect,
+    /// text, Lua table or program names: candidates to leave out of a smaller client. Names put
+    /// together while the program runs cannot be seen, so check before removing anything
+    Unused {
+        /// A client folder (with DATA.INI, the first archive wins) or one archive
+        input: PathBuf,
+        /// How many folders (or files with --files) to list
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+        /// Also list the biggest single files
+        #[arg(long)]
+        files: bool,
     },
     /// Report what could go wrong before the client is started (exit 0 ok, 2 warnings, 3 errors)
     Check {
@@ -1420,6 +1434,11 @@ fn run(cli: &Cli) -> Result<i32> {
                 opts.copy_streams = !*recompress;
                 optimize_client(cli, folder, output, *min_psnr, &opts)
             }
+            ClientCmd::Unused {
+                input,
+                limit,
+                files,
+            } => unused_cmd::unused(input, *limit, *files, cli.names, cli.json),
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)
             }
