@@ -59,7 +59,13 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 .filter(|p| !p.is_empty())
                 .map(|p| rgrf_core::grfcrypt::key_from_password(p).map_err(|e| e.to_string()))
                 .transpose()?;
-            let s = Session::open_with(&PathBuf::from(arg::<String>(a, "path")?), key.as_ref())?;
+            let mut s =
+                Session::open_with(&PathBuf::from(arg::<String>(a, "path")?), key.as_ref())?;
+            // drafts below RGRF_DRAFT_DIR, or the temporary folder
+            s.set_draft_root(Some(std::env::var_os("RGRF_DRAFT_DIR").map_or_else(
+                || std::env::temp_dir().join("rustygrf-drafts"),
+                PathBuf::from,
+            )));
             let info = s.info();
             *state.lock().map_err(|_| "state is locked")? = Some(s);
             to_json(info)
@@ -204,6 +210,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.pending())
         }),
         "pending" => with(state, |s| to_json(s.pending())),
+        "restore_draft" => with(state, |s| to_json(s.restore_draft()?)),
+        "discard_draft" => with(state, |s| {
+            s.discard_draft();
+            Ok(Value::Null)
+        }),
         "discard_pending" => with(state, |s| {
             s.discard_pending();
             Ok(Value::Null)

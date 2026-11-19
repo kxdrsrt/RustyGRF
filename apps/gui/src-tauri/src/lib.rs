@@ -2,6 +2,7 @@
 
 pub mod act_editor;
 pub mod backend;
+pub mod draft;
 pub mod gat_editor;
 pub mod pal_editor;
 pub mod spr_editor;
@@ -51,17 +52,20 @@ where
 
 #[tauri::command]
 async fn open_archive(
+    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     password: Option<String>,
 ) -> Res<ArchiveInfo> {
     let shared = Arc::clone(&state.session);
+    let drafts = app.path().app_data_dir().ok().map(|d| d.join("drafts"));
     tauri::async_runtime::spawn_blocking(move || {
         let key = password
             .filter(|p| !p.is_empty())
             .map(|p| rgrf_core::grfcrypt::key_from_password(&p).map_err(|e| e.to_string()))
             .transpose()?;
-        let s = Session::open_with(&PathBuf::from(path), key.as_ref())?;
+        let mut s = Session::open_with(&PathBuf::from(path), key.as_ref())?;
+        s.set_draft_root(drafts);
         let info = s.info();
         *shared
             .lock()
@@ -476,6 +480,22 @@ async fn pending(state: State<'_, AppState>) -> Res<Vec<PendingRow>> {
     with_session(&state, |s| Ok(s.pending())).await
 }
 
+/// Takes the changes of the draft found when the archive was opened.
+#[tauri::command]
+async fn restore_draft(state: State<'_, AppState>) -> Res<backend::DraftRestored> {
+    with_session(&state, |s| s.restore_draft()).await
+}
+
+/// Deletes the draft found when the archive was opened.
+#[tauri::command]
+async fn discard_draft(state: State<'_, AppState>) -> Res<()> {
+    with_session(&state, |s| {
+        s.discard_draft();
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn discard_pending(state: State<'_, AppState>) -> Res<()> {
     with_session(&state, |s| {
@@ -730,6 +750,8 @@ pub fn run() {
             stage_text_edit,
             pending,
             discard_pending,
+            restore_draft,
+            discard_draft,
             history,
             undo_change,
             redo_change,

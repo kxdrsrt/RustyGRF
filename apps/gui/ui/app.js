@@ -150,7 +150,7 @@ async function openWithKey(path) {
 
 async function openPath(path, force = false) {
   if (!force && S.changes.length && SET.warnDiscard) {
-    const go = await ask("Open another archive?", el("p", { text: `${fmtNum(S.changes.length)} pending change(s) in the open archive will be lost.` }), [{ label: "Open anyway", value: true }, { label: "Cancel", value: null, primary: true }]);
+    const go = await ask("Open another archive?", el("p", { text: `${fmtNum(S.changes.length)} pending change(s) of the open archive are not saved in an archive yet. They are kept as a draft and offered again when you open this archive next time.` }), [{ label: "Open", value: true }, { label: "Cancel", value: null, primary: true }]);
     if (!go) return;
   }
   setStatus(`Opening ${path} …`);
@@ -181,7 +181,33 @@ async function openPath(path, force = false) {
   setStatus(
     `${S.info.file_name}: ${S.info.format}, ${fmtNum(S.info.files)} files, ${fmtBytes(S.info.file_size)}`,
   );
+  if (S.info.draft) await offerDraft(S.info.draft);
   $("viewport").focus();
+}
+
+/** Unsaved changes of an earlier session were found for this archive: restore or discard them. */
+async function offerDraft(d) {
+  const when = new Date(d.saved_at * 1000).toLocaleString();
+  const body = [el("p", { text: `${fmtNum(d.changes)} change(s) from ${when} were not saved in an archive. They were kept as a draft (for example because the app closed).` })];
+  if (d.archive_changed) body.push(el("p", { class: "error", text: "The archive itself has changed since then. Check the changes before you save." }));
+  if (d.missing_files) body.push(el("p", { class: "muted", text: `${fmtNum(d.missing_files)} replacement file(s) no longer exist on disk and will be left out.` }));
+  body.push(el("p", { class: "muted", text: "Later keeps the draft for the next time; changes you make now are then not added to it." }));
+  const act = await ask("Restore unsaved changes?", body, [{ label: "Restore", value: "restore", primary: true }, { label: "Discard", value: "discard" }, { label: "Later", value: null }]);
+  try {
+    if (act === "restore") {
+      const r = await invoke("restore_draft");
+      setPending(await invoke("pending"));
+      refreshPreview();
+      setStatus(`${fmtNum(r.restored)} change(s) restored${r.skipped ? `, ${fmtNum(r.skipped)} left out` : ""}`);
+    } else if (act === "discard") {
+      await invoke("discard_draft");
+      setStatus("Draft discarded");
+    } else {
+      setStatus("The draft is kept for the next time");
+    }
+  } catch (e) {
+    await note("Could not restore the changes", errText(e), true);
+  }
 }
 
 // ---------- lists ----------

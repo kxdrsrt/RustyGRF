@@ -216,6 +216,11 @@ pub struct Session {
     keys: OnceLock<HashMap<Vec<u8>, usize>>,
     /// The key of GRF Editor's encryption, if the archive was opened with one.
     crypt_key: Option<rgrf_core::grfcrypt::Key>,
+    /// Folder for drafts of pending changes (see [`crate::draft`]); none: no drafts.
+    draft_root: Option<PathBuf>,
+    /// A draft was found when the archive was opened and is not restored or discarded yet; it is
+    /// not overwritten until then.
+    draft_offered: bool,
 }
 
 /// One arranged list: its settings, and either the flat order or a folder tree with its open folders.
@@ -323,6 +328,15 @@ pub struct ArchiveInfo {
     pub file_size: u64,
     /// Set for an archive with GRF Editor's encryption.
     pub encryption: Option<EncryptionOut>,
+    /// Unsaved changes of an earlier session, kept as a draft, waiting to be restored or discarded.
+    pub draft: Option<crate::draft::DraftInfo>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct DraftRestored {
+    pub restored: usize,
+    /// Changes left out because their file or stored content is gone.
+    pub skipped: usize,
 }
 
 #[derive(Serialize, Debug)]
@@ -997,7 +1011,87 @@ impl Session {
             redo: Vec::new(),
             keys: OnceLock::new(),
             crypt_key: key.copied(),
+            draft_root: None,
+            draft_offered: false,
         })
+    }
+
+    /// Where drafts of pending changes are kept; a draft of this archive found there is offered
+    /// through [`Session::info`] until it is restored or discarded.
+    pub fn set_draft_root(&mut self, root: Option<PathBuf>) {
+        self.draft_offered = root
+            .as_deref()
+            .is_some_and(|r| crate::draft::info(r, &self.path).is_some());
+        self.draft_root = root;
+    }
+
+    /// Writes the pending changes as the draft (or removes it when there are none). A failure is
+    /// returned to nobody: the changes are still in memory, only the safety copy is missing.
+    fn persist_draft(&self) {
+        let Some(root) = &self.draft_root else { return };
+        if self.draft_offered {
+            return;
+        }
+        let changes: Vec<crate::draft::DraftChange> = self
+            .pending
+            .iter()
+            .map(|c| match c {
+                Change::Put { name, file } => crate::draft::DraftChange::Put {
+                    name: name.as_bytes().to_vec(),
+                    file: file.clone(),
+                },
+                Change::PutBytes { name, data, what } => crate::draft::DraftChange::Bytes {
+                    name: name.as_bytes().to_vec(),
+                    data: Arc::clone(data),
+                    what: what.clone(),
+                },
+                Change::Remove { name } => crate::draft::DraftChange::Remove {
+                    name: name.as_bytes().to_vec(),
+                },
+            })
+            .collect();
+        if let Err(e) = crate::draft::save(root, &self.path, &changes) {
+            eprintln!("draft of {} not written: {e}", self.path.display());
+        }
+    }
+
+    /// Takes the changes of the offered draft as the pending changes (one step for undo).
+    pub fn restore_draft(&mut self) -> Result<DraftRestored, String> {
+        let root = self.draft_root.clone().ok_or("drafts are off")?;
+        let (changes, skipped) =
+            crate::draft::load(&root, &self.path).ok_or("there is no draft for this archive")?;
+        self.draft_offered = false;
+        let restored = changes.len();
+        self.transact(|s| {
+            s.pending = changes
+                .into_iter()
+                .map(|c| match c {
+                    crate::draft::DraftChange::Put { name, file } => Change::Put {
+                        name: GrfPath::new(name),
+                        file,
+                    },
+                    crate::draft::DraftChange::Bytes { name, data, what } => Change::PutBytes {
+                        name: GrfPath::new(name),
+                        data,
+                        what,
+                    },
+                    crate::draft::DraftChange::Remove { name } => Change::Remove {
+                        name: GrfPath::new(name),
+                    },
+                })
+                .collect();
+            Ok(())
+        })?;
+        Ok(DraftRestored { restored, skipped })
+    }
+
+    /// Deletes the offered draft; the pending changes from now on are saved as the new draft.
+    pub fn discard_draft(&mut self) {
+        if let Some(root) = &self.draft_root {
+            crate::draft::discard(root, &self.path);
+        }
+        self.draft_offered = false;
+        self.persist_draft();
     }
 
     pub fn stage_replace(&mut self, index: usize, file: &Path) -> Result<(), String> {
@@ -1154,6 +1248,7 @@ impl Session {
                     self.undo.remove(0);
                 }
                 self.redo.clear();
+                self.persist_draft();
                 Ok(v)
             }
             Err(e) => {
@@ -1168,6 +1263,7 @@ impl Session {
         match self.undo.pop() {
             Some(prev) => {
                 self.redo.push(std::mem::replace(&mut self.pending, prev));
+                self.persist_draft();
                 true
             }
             None => false,
@@ -1178,6 +1274,7 @@ impl Session {
         match self.redo.pop() {
             Some(next) => {
                 self.undo.push(std::mem::replace(&mut self.pending, next));
+                self.persist_draft();
                 true
             }
             None => false,
@@ -1561,6 +1658,11 @@ impl Session {
                 encrypted_entries: e.encrypted_entries,
                 key_needed: !e.key_set,
             }),
+            draft: self
+                .draft_root
+                .as_deref()
+                .filter(|_| self.draft_offered)
+                .and_then(|r| crate::draft::info(r, &self.path)),
         }
     }
 
@@ -3388,6 +3490,71 @@ mod tests {
         );
         s.discard_pending();
         assert!(s.pending().is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pending_changes_survive_as_a_draft_and_come_back() {
+        let (dir, grf) = sample("draft");
+        let root = dir.join("drafts");
+        let new_text = dir.join("new.txt");
+        fs::write(&new_text, "replacement").unwrap();
+        let find = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+
+        let mut s = Session::open(&grf).unwrap();
+        s.set_draft_root(Some(root.clone()));
+        assert!(s.info().draft.is_none());
+        let (txt, act, blob) = (
+            find(&mut s, "readme.txt"),
+            find(&mut s, "a.act"),
+            find(&mut s, "blob.bin"),
+        );
+        s.stage_replace(txt, &new_text).unwrap();
+        s.stage_act_interval(act, 0, 100.0).unwrap();
+        s.stage_remove(&[blob]).unwrap();
+        let before = s.pending();
+        let edited_act = s.read_working(act).unwrap();
+        drop(s); // the window closes or the app crashes
+
+        // the next session offers the draft and does not overwrite it before a decision
+        let mut s = Session::open(&grf).unwrap();
+        s.set_draft_root(Some(root.clone()));
+        let d = s.info().draft.unwrap();
+        assert_eq!(
+            (d.changes, d.archive_changed, d.missing_files),
+            (3, false, 0)
+        );
+        let other = find(&mut s, "korean.txt");
+        s.stage_remove(&[other]).unwrap();
+        s.discard_pending();
+        assert_eq!(crate::draft::info(&root, &grf).unwrap().changes, 3);
+        let r = s.restore_draft().unwrap();
+        assert_eq!((r.restored, r.skipped), (3, 0));
+        assert!(s.info().draft.is_none());
+        assert_eq!(format!("{:?}", s.pending()), format!("{before:?}"));
+        assert_eq!(s.read_working(act).unwrap(), edited_act);
+        // the restore is one step for undo, and from now on the draft follows the changes
+        assert!(s.undo());
+        assert!(crate::draft::info(&root, &grf).is_none());
+        assert!(s.redo());
+        assert_eq!(crate::draft::info(&root, &grf).unwrap().changes, 3);
+        let out = dir.join("out.grf");
+        let r = save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        assert_eq!((r.replaced, r.removed, r.verified), (2, 1, true));
+
+        // a draft that is discarded is gone, and the session saves its own changes again
+        drop(s);
+        let mut s = Session::open(&grf).unwrap();
+        s.set_draft_root(Some(root.clone()));
+        assert!(s.info().draft.is_some());
+        s.discard_draft();
+        assert!(crate::draft::info(&root, &grf).is_none());
+        let k = find(&mut s, "korean.txt");
+        s.stage_remove(&[k]).unwrap();
+        assert_eq!(crate::draft::info(&root, &grf).unwrap().changes, 1);
         let _ = fs::remove_dir_all(dir);
     }
 
