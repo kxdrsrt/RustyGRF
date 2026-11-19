@@ -1581,7 +1581,15 @@ function wireStage(stage, v) {
   stage.addEventListener("pointerdown", async (e) => {
     if (e.button !== 0) return;
     stopActPlay();
-    stage.setPointerCapture(e.pointerId);
+    // capturing fails for a pointer that is already gone; the drag then simply ends early
+    try {
+      stage.setPointerCapture(e.pointerId);
+    } catch {}
+    const dot = e.target.closest?.("[data-anchor]");
+    if (dot) {
+      drag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, anchor: Number(dot.dataset.anchor), dot };
+      return;
+    }
     const r = stage.querySelector("img").getBoundingClientRect();
     const px = (e.clientX - r.left) * ratio();
     const py = (e.clientY - r.top) * ratio();
@@ -1602,6 +1610,10 @@ function wireStage(stage, v) {
     if (!drag) return;
     drag.dx = e.clientX - drag.x;
     drag.dy = e.clientY - drag.y;
+    if (drag.dot) {
+      drag.dot.style.transform = `translate(${drag.dx}px, ${drag.dy}px)`;
+      return;
+    }
     // the box follows the pointer 1:1; the picture is drawn again when the move is staged
     const box = stage.querySelector(".layerbox");
     if (box && drag.layer != null) box.style.transform = `translate(${drag.dx}px, ${drag.dy}px)`;
@@ -1610,9 +1622,16 @@ function wireStage(stage, v) {
     const d = drag;
     drag = null;
     if (!d) return;
-    stage.releasePointerCapture?.(e.pointerId);
+    try {
+      stage.releasePointerCapture(e.pointerId);
+    } catch {}
     const k = ratio() / v.scale;
     const [fx, fy] = [Math.round(d.dx * k), Math.round(d.dy * k)];
+    if (d.dot) {
+      const a = v.anchors[d.anchor];
+      if (a && Math.hypot(d.dx, d.dy) >= 3 && (fx || fy)) return actEdit({ op: "set_anchor", anchor: d.anchor, x: a.x + fx, y: a.y + fy });
+      return drawActEditor();
+    }
     // a click (or a tiny slip) only selects
     if (d.layer != null && Math.hypot(d.dx, d.dy) >= 3 && (fx || fy)) move(d.layer, fx, fy);
     else drawActEditor();
@@ -1668,7 +1687,7 @@ function drawActEditor() {
   const stage = el("div", { class: "stage checker", tabindex: "0", "data-act-stage": "", role: "group", "aria-roledescription": "frame editor", "aria-label": `Frame ${v.frame + 1}. Click a layer to select it and drag it to move it; the arrow keys move the selected layer by 1 pixel, with Shift by 10.${E.layer != null ? ` Layer ${E.layer} is selected.` : ""}` });
   if (v.png) {
     stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width, height: v.height, alt: "", draggable: "false" }), el("div", { class: "cross-h", style: `top:${v.origin_y}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x}px` }));
-    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: `anchor ${i}`, style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
+    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: `Anchor ${i}: drag to move it`, "data-anchor": String(i), style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
     const b = E.layer != null ? v.layers[E.layer]?.bounds : null;
     if (b) stage.append(el("div", { class: "layerbox", style: `left:${b[0]}px;top:${b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px` }));
     wireStage(stage, v);

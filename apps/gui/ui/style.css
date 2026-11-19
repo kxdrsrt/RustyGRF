@@ -285,7 +285,9 @@ dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
 .acted .cross-h, .acted .cross-v { position: absolute; background: var(--accent); opacity: 0.55; pointer-events: none; }
 .acted .cross-h { height: 1px; left: 0; right: 0; }
 .acted .cross-v { width: 1px; top: 0; bottom: 0; }
-.acted .dot { position: absolute; width: 7px; height: 7px; margin: -3px 0 0 -3px; border: 1px solid #fff; background: #d33; border-radius: 50%; pointer-events: none; }
+.acted .dot { position: absolute; width: 9px; height: 9px; margin: -4px 0 0 -4px; border: 1px solid #fff; background: #d33; border-radius: 50%; cursor: move; }
+/* a larger target than the dot itself */
+.acted .dot::after { content: ""; position: absolute; inset: -6px; }
 .acted table { border-collapse: collapse; font-size: 12px; width: 100%; }
 .acted th { text-align: left; color: var(--muted); font-weight: 500; padding: 2px 4px; }
 .acted td { padding: 2px 3px; white-space: nowrap; }
