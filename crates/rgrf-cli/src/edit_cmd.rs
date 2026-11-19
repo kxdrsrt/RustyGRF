@@ -235,6 +235,76 @@ pub fn spr_remove(
     Ok(0)
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum ConvertTo {
+    Rgba,
+    Indexed,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spr_convert(
+    input: &Path,
+    entry: Option<&str>,
+    to: ConvertTo,
+    act: Option<&Path>,
+    act_output: Option<&Path>,
+    output: &Path,
+    overwrite: bool,
+    names: NameMode,
+    json: bool,
+) -> Result<i32> {
+    let mut spr = spr_from(input, entry, names)?;
+    let mut act_data = match (act, act_output) {
+        (Some(a), Some(_)) => Some(act_from(a, None, names)?),
+        (None, None) => None,
+        _ => bail!("--act and --act-output belong together"),
+    };
+    let (count, lossless) = match to {
+        ConvertTo::Rgba => (spr.to_rgba(act_data.as_mut())?, true),
+        ConvertTo::Indexed => {
+            let r = spr.to_indexed(act_data.as_mut())?;
+            (r.images, r.lossless)
+        }
+    };
+    // true-colour images need SPR 2.0 or newer
+    let version = if matches!(to, ConvertTo::Rgba) && spr.version < rgrf_formats::spr::Version::V2_0
+    {
+        rgrf_formats::spr::Version::V2_1
+    } else {
+        spr.version
+    };
+    if let Some(p) = act_output
+        && p.exists()
+        && !overwrite
+    {
+        bail!("{} exists already (use --overwrite)", p.display());
+    }
+    if output.exists() && !overwrite {
+        bail!("{} exists already (use --overwrite)", output.display());
+    }
+    write_new(output, overwrite, &spr.to_bytes(version)?)?;
+    if let (Some(a), Some(p)) = (act_data, act_output) {
+        write_new(p, overwrite, &a.to_bytes(a.version)?)?;
+    }
+    if !json {
+        println!(
+            "{count} images converted{}",
+            if lossless {
+                ""
+            } else {
+                " (colours were reduced or semi-transparent pixels cut: not lossless)"
+            }
+        );
+    }
+    report(
+        json,
+        "spr convert",
+        output,
+        serde_json::json!({"images": count, "lossless": lossless}),
+    );
+    Ok(0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spr_set_palette(
     input: &Path,

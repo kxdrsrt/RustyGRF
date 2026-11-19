@@ -38,7 +38,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | GIF-Export | `act render --gif` | ✅ (Hintergrund wählen ❓) |
 | Sound-Effekte je Frame | – | 🔨 M7b |
 | Palette Editor (`PaletteEditorTool`, `PaletteSheetGenerator`) | – | 🔨 M7b |
-| Sprite von indiziert nach BGRA konvertieren (und zurück) | – | 🔨 M7b |
+| Sprite von indiziert nach BGRA konvertieren (und zurück) | `spr convert --to rgba|indexed [--act … --act-output …]` | ✅ (2026-11-19; ACT-Ebenen folgen; zurück verlustfrei bei höchstens 255 Farben, sonst Median-Cut mit Meldung; echter Sprite `C_Surf_Board_Poring` hin und zurück: gleiche Größe, 9 Bilder) |
 | `GrfShellExplorer` (Windows-Explorer-Integration) | – | ❓ nur Windows |
 
 ## Was RustyGRF anders machen soll

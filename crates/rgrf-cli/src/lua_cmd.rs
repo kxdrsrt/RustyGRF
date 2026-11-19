@@ -194,7 +194,8 @@ pub fn decompile(
     Ok(if complete { 0 } else { 2 })
 }
 
-/// `rgrf lua compile`: Lua 5.1 source to a `.lub` in the layout of the client's own files.
+/// `rgrf lua compile`: Lua 5.1 (or 5.0) source to a `.lub` in the layout of the client's own files.
+#[allow(clippy::too_many_arguments)]
 pub fn compile(
     input: &Path,
     output: &Path,
@@ -203,9 +204,10 @@ pub fn compile(
     name: Option<&str>,
     overwrite: bool,
     json: bool,
+    lua50: bool,
 ) -> Result<i32> {
     use rgrf_core::GrfPath;
-    use rgrf_formats::{luac, luacomp};
+    use rgrf_formats::{luac, luac50, luacomp, luacomp50};
     let bytes = fs::read(input).with_context(|| format!("cannot read {}", input.display()))?;
     if bytes.starts_with(b"\x1bLua") {
         bail!(
@@ -231,24 +233,40 @@ pub fn compile(
         .map_err(|_| anyhow::anyhow!("{} is not valid UTF-8 text", input.display()))?;
     let cp949 =
         |run: &str| GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec());
-    let mut chunk = luacomp::compile_text(&text, &source, encoding, &cp949)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    if strip {
-        luacomp::strip(&mut chunk);
-    }
-    let lub = luac::dump32(&chunk);
-    luac::check_bytecode(&lub)
-        .map_err(|e| anyhow::anyhow!("internal error, the result is invalid: {e}"))?;
+    let compile_error = |e: luacomp::CompileError| anyhow::anyhow!("{e}");
+    let (lub, functions, instructions) = if lua50 {
+        fn count(f: &luac50::Function) -> usize {
+            1 + f.protos.iter().map(count).sum::<usize>()
+        }
+        let mut chunk =
+            luacomp50::compile_text(&text, &source, encoding, &cp949).map_err(compile_error)?;
+        if strip {
+            luacomp50::strip(&mut chunk);
+        }
+        let lub = luac50::dump32(&chunk);
+        luac50::parse(&lub)
+            .map_err(|e| anyhow::anyhow!("internal error, the result is invalid: {e}"))?;
+        (lub, count(&chunk.main), chunk.main.code.len())
+    } else {
+        fn count(f: &luac::Function) -> usize {
+            1 + f.protos.iter().map(count).sum::<usize>()
+        }
+        let mut chunk =
+            luacomp::compile_text(&text, &source, encoding, &cp949).map_err(compile_error)?;
+        if strip {
+            luacomp::strip(&mut chunk);
+        }
+        let lub = luac::dump32(&chunk);
+        luac::check_bytecode(&lub)
+            .map_err(|e| anyhow::anyhow!("internal error, the result is invalid: {e}"))?;
+        (lub, count(&chunk.main), chunk.main.code.len())
+    };
     let tmp = output.with_extension("lub.tmp");
     fs::write(&tmp, &lub).with_context(|| format!("cannot write {}", tmp.display()))?;
     if overwrite && output.exists() {
         fs::remove_file(output)?;
     }
     fs::rename(&tmp, output)?;
-    fn count(f: &luac::Function) -> usize {
-        1 + f.protos.iter().map(count).sum::<usize>()
-    }
-    let (functions, instructions) = (count(&chunk.main), chunk.main.code.len());
     if json {
         println!(
             "{}",

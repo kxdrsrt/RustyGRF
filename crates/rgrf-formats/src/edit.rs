@@ -20,6 +20,25 @@ pub enum EditError {
     NoAction { index: usize, count: usize },
     #[error("too many actions (at most 65535)")]
     TooManyActions,
+    #[error("the ACT is older than version 2.0 and cannot refer to true-colour images")]
+    ActTooOld,
+    #[error("the sprite has no true-colour images")]
+    NoRgba,
+    #[error("the sprite has no palette images")]
+    NoIndexed,
+    #[error("too many images (at most 65535 of one kind)")]
+    TooManyImages,
+}
+
+/// What `Spr::to_indexed` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedReport {
+    /// Every pixel kept its colour (no colour was merged, no semi-transparent pixel was cut).
+    pub lossless: bool,
+    /// Colours of the palette in use (without the transparent entry 0).
+    pub colours: usize,
+    /// Images converted.
+    pub images: usize,
 }
 
 /// Kind of SPR image; ACT layers use `0` for palette images and `1` for true-colour images.
@@ -147,6 +166,184 @@ impl Spr {
         }
         Ok(())
     }
+}
+
+impl Spr {
+    /// Turns every palette image into a true-colour image (index 0 becomes transparent) and drops
+    /// the palette. Pass the ACT of the sprite so that its layers follow.
+    pub fn to_rgba(&mut self, act: Option<&mut Act>) -> Result<usize, EditError> {
+        let pal = match (&self.palette, self.indexed.is_empty()) {
+            (_, true) => return Err(EditError::NoIndexed),
+            (Some(p), false) => p.clone(),
+            (None, false) => return Err(EditError::NoPalette),
+        };
+        if self.rgba.len() + self.indexed.len() > usize::from(u16::MAX) {
+            return Err(EditError::TooManyImages);
+        }
+        if let Some(a) = &act
+            && a.version < crate::act::V2_0
+        {
+            return Err(EditError::ActTooOld);
+        }
+        let offset = self.rgba.len() as i32;
+        let n = self.indexed.len();
+        for img in std::mem::take(&mut self.indexed) {
+            let mut pixels = Vec::with_capacity(img.pixels.len() * 4);
+            for &i in &img.pixels {
+                let c = &pal[4 * usize::from(i)..4 * usize::from(i) + 3];
+                pixels.extend_from_slice(&[c[0], c[1], c[2], if i == 0 { 0 } else { 255 }]);
+            }
+            self.rgba.push(RgbaImage {
+                width: img.width,
+                height: img.height,
+                pixels,
+            });
+        }
+        self.palette = None;
+        if let Some(act) = act {
+            for l in act
+                .actions
+                .iter_mut()
+                .flat_map(|a| &mut a.frames)
+                .flat_map(|f| &mut f.layers)
+            {
+                if l.sprite_index >= 0 && l.sprite_type == 0 {
+                    l.sprite_index += offset;
+                    l.sprite_type = 1;
+                }
+            }
+        }
+        Ok(n)
+    }
+
+    /// Turns every true-colour image into a palette image. With a palette present the nearest of
+    /// its colours is used; without one a palette is made from the images (exact when they use
+    /// at most 255 colours, else by median cut). Pixels with alpha below 128 become index 0.
+    pub fn to_indexed(&mut self, act: Option<&mut Act>) -> Result<IndexedReport, EditError> {
+        if self.rgba.is_empty() {
+            return Err(EditError::NoRgba);
+        }
+        if self.rgba.len() + self.indexed.len() > usize::from(u16::MAX) {
+            return Err(EditError::TooManyImages);
+        }
+        let pal: Box<[u8; PALETTE_LEN]> = match &self.palette {
+            Some(p) => p.clone(),
+            None => Box::new(build_palette(&self.rgba)),
+        };
+        let mut lossless = true;
+        let offset = self.indexed.len() as i32;
+        let images = self.rgba.len();
+        let mut used = std::collections::BTreeSet::new();
+        for img in std::mem::take(&mut self.rgba) {
+            let indexed = quantize(&img, &pal);
+            for (p, &i) in img.pixels.as_chunks::<4>().0.iter().zip(&indexed.pixels) {
+                if p[3] != 0 && p[3] != 255 {
+                    lossless = false;
+                }
+                if p[3] >= 128 {
+                    used.insert(i);
+                    let c = &pal[4 * usize::from(i)..4 * usize::from(i) + 3];
+                    if c != &p[..3] {
+                        lossless = false;
+                    }
+                }
+            }
+            self.indexed.push(indexed);
+        }
+        self.palette = Some(pal);
+        if let Some(act) = act {
+            for l in act
+                .actions
+                .iter_mut()
+                .flat_map(|a| &mut a.frames)
+                .flat_map(|f| &mut f.layers)
+            {
+                if l.sprite_index >= 0 && l.sprite_type == 1 {
+                    l.sprite_index += offset;
+                    l.sprite_type = 0;
+                }
+            }
+        }
+        Ok(IndexedReport {
+            lossless,
+            colours: used.len(),
+            images,
+        })
+    }
+}
+
+/// A palette (entry 0 reserved for transparency) for true-colour images: the exact colours when
+/// there are at most 255 opaque ones, else a median cut.
+fn build_palette(images: &[RgbaImage]) -> [u8; PALETTE_LEN] {
+    let mut count: std::collections::HashMap<[u8; 3], u64> = std::collections::HashMap::new();
+    let mut order: Vec<[u8; 3]> = Vec::new();
+    for p in images.iter().flat_map(|i| i.pixels.as_chunks::<4>().0) {
+        if p[3] >= 128 {
+            let c = [p[0], p[1], p[2]];
+            let n = count.entry(c).or_insert(0);
+            if *n == 0 {
+                order.push(c);
+            }
+            *n += 1;
+        }
+    }
+    let colours: Vec<[u8; 3]> = if order.len() <= 255 {
+        order
+    } else {
+        median_cut(order.iter().map(|c| (*c, count[c])).collect(), 255)
+    };
+    let mut pal = [0u8; PALETTE_LEN];
+    for (i, c) in colours.iter().enumerate() {
+        pal[4 * (i + 1)..4 * (i + 1) + 3].copy_from_slice(c);
+    }
+    pal
+}
+
+/// Median cut on weighted colours: repeatedly splits the box with the most pixels along its widest
+/// channel, then averages each box.
+fn median_cut(colours: Vec<([u8; 3], u64)>, target: usize) -> Vec<[u8; 3]> {
+    let mut boxes = vec![colours];
+    while boxes.len() < target {
+        let Some((at, _)) = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.len() > 1)
+            .max_by_key(|(_, b)| b.iter().map(|(_, n)| n).sum::<u64>())
+        else {
+            break;
+        };
+        let mut b = boxes.swap_remove(at);
+        let widest = (0..3)
+            .max_by_key(|&c| {
+                let (lo, hi) = b.iter().fold((255u8, 0u8), |(lo, hi), (p, _)| {
+                    (lo.min(p[c]), hi.max(p[c]))
+                });
+                hi - lo
+            })
+            .unwrap_or(0);
+        b.sort_by_key(|(p, _)| p[widest]);
+        let total: u64 = b.iter().map(|(_, n)| n).sum();
+        let (mut acc, mut cut) = (0u64, 1);
+        for (i, (_, n)) in b.iter().enumerate() {
+            acc += n;
+            if acc * 2 >= total {
+                cut = (i + 1).clamp(1, b.len() - 1);
+                break;
+            }
+        }
+        let tail = b.split_off(cut);
+        boxes.push(b);
+        boxes.push(tail);
+    }
+    boxes
+        .iter()
+        .map(|b| {
+            let total: u64 = b.iter().map(|(_, n)| n).sum::<u64>().max(1);
+            let avg =
+                |c: usize| (b.iter().map(|(p, n)| u64::from(p[c]) * n).sum::<u64>() / total) as u8;
+            [avg(0), avg(1), avg(2)]
+        })
+        .collect()
 }
 
 impl Act {
@@ -363,6 +560,83 @@ mod tests {
             .collect();
         assert_eq!(idx, vec![-1, 0, 2]);
         assert!(s.remove_image(Kind::Rgba, 0, None).is_err());
+    }
+
+    #[test]
+    fn palette_images_become_true_colour_and_back_with_the_layers_following() {
+        let mut s = spr();
+        s.indexed.push(img(0)); // a transparent pixel
+        let mut a = act();
+        a.actions[0].frames[0].layers[1].sprite_index = 3;
+        s.rgba.push(RgbaImage {
+            width: 1,
+            height: 1,
+            pixels: vec![9, 9, 9, 255],
+        });
+        let before = s.clone();
+        assert_eq!(s.to_rgba(Some(&mut a)).unwrap(), 4);
+        assert!(s.indexed.is_empty() && s.palette.is_none());
+        // the existing true-colour image stays first, the converted ones follow
+        assert_eq!(s.rgba[0].pixels, [9, 9, 9, 255]);
+        assert_eq!(s.rgba[1].pixels, [255, 0, 0, 255]);
+        assert_eq!(s.rgba[4].pixels[3], 0);
+        let layers: Vec<(i32, i32)> = a.actions[0].frames[0]
+            .layers
+            .iter()
+            .map(|l| (l.sprite_index, l.sprite_type))
+            .collect();
+        assert_eq!(layers, [(1, 1), (4, 1), (3, 1)]);
+        assert_eq!(s.to_rgba(None), Err(EditError::NoIndexed));
+
+        // and back: the colours are exact, so nothing is lost
+        let r = s.to_indexed(Some(&mut a)).unwrap();
+        assert!(r.lossless, "{r:?}");
+        assert_eq!((r.images, r.colours), (5, 4));
+        assert_eq!(s.indexed.len(), 5);
+        let kinds: Vec<(i32, i32)> = a.actions[0].frames[0]
+            .layers
+            .iter()
+            .map(|l| (l.sprite_index, l.sprite_type))
+            .collect();
+        assert_eq!(kinds, [(1, 0), (4, 0), (3, 0)]);
+        // the image that was already true-colour (9, 9, 9) is now palette entry 4 or whatever it got
+        let p = s.palette.as_ref().unwrap();
+        let i = usize::from(s.indexed[0].pixels[0]);
+        assert_eq!(&p[4 * i..4 * i + 3], [9, 9, 9]);
+        assert_eq!(before.indexed.len(), 4);
+    }
+
+    #[test]
+    fn many_colours_are_reduced_and_reported_as_lossy() {
+        let mut s = Spr {
+            version: Version::V2_1,
+            indexed: vec![],
+            rgba: vec![RgbaImage {
+                width: 400,
+                height: 1,
+                pixels: (0..400u32)
+                    .flat_map(|i| [(i % 256) as u8, (i / 2) as u8, (i * 7 % 256) as u8, 255])
+                    .collect(),
+            }],
+            palette: None,
+            warnings: vec![],
+        };
+        let r = s.to_indexed(None).unwrap();
+        assert!(!r.lossless && r.colours <= 255, "{r:?}");
+        assert!(s.indexed[0].pixels.iter().all(|&i| i != 0));
+        // semi-transparent pixels are cut even when the colours fit
+        let mut s = Spr {
+            version: Version::V2_1,
+            indexed: vec![],
+            rgba: vec![RgbaImage {
+                width: 1,
+                height: 1,
+                pixels: vec![1, 2, 3, 200],
+            }],
+            palette: None,
+            warnings: vec![],
+        };
+        assert!(!s.to_indexed(None).unwrap().lossless);
     }
 
     #[test]

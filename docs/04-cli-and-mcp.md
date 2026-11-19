@@ -27,6 +27,7 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 | `rgrf spr add <spr> --png <datei> -o <spr>` | **M7b:** Bild anhängen, gibt den neuen Index aus |
 | `rgrf spr remove <spr> --frame N [--act <act> --act-output <act>] -o <spr>` | **M7b:** Bild entfernen; mit `--act` werden die Layer nachgeführt (Layer mit dem Bild werden leer, spätere Indizes rücken nach) |
 | `rgrf spr set-palette <spr> --pal <pal> -o <spr>` | **M7b:** Palette tauschen (Bilder behalten ihre Indizes) |
+| `rgrf spr convert <spr> --to rgba\|indexed [--act <act> --act-output <act>] -o <spr>` | **2026-11-19:** Paletten- in True-Colour-Bilder umwandeln und zurück; die Ebenen der ACT folgen. Zurück ist verlustfrei bei höchstens 255 Farben und ohne halbtransparente Pixel, sonst wird reduziert und die Ausgabe sagt es |
 | `rgrf act translate <act> --dx X --dy Y [--action N] -o <act>` | **M7b:** alle Layer und Anker verschieben |
 | `rgrf act interval <act> --action N --value V -o <act>` | **M7b:** Frame-Zeit (Einheit 25 ms) |
 | `rgrf act copy-action <act> --from N --to M -o <act>` / `remove-action --action N` | **M7b:** Aktion kopieren/entfernen |

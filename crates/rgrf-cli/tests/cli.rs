@@ -886,6 +886,61 @@ fn spr_and_act_edit_commands() {
         Some(1)
     );
 
+    // palette images to true-colour and back, the ACT following
+    let o = rgrf(&[
+        "spr",
+        "convert",
+        &p("a.spr"),
+        "--to",
+        "rgba",
+        "--act",
+        &p("a.act"),
+        "--act-output",
+        &p("cv.act"),
+        "-o",
+        &p("cv.spr"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let c = read_spr("cv.spr");
+    assert!(c.indexed.is_empty() && c.palette.is_none());
+    assert_eq!(c.rgba.len(), 3);
+    assert_eq!(c.rgba[1].pixels, [0, 255, 0, 255]);
+    let layers: Vec<(i32, i32)> = read_act("cv.act").actions[0].frames[0]
+        .layers
+        .iter()
+        .map(|l| (l.sprite_index, l.sprite_type))
+        .collect();
+    assert_eq!(layers, [(0, 1), (1, 1), (2, 1)]);
+    let o = rgrf(&[
+        "spr",
+        "convert",
+        &p("cv.spr"),
+        "--to",
+        "indexed",
+        "--json",
+        "-o",
+        &p("cv2.spr"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["details"]["lossless"], true);
+    assert_eq!(read_spr("cv2.spr").indexed.len(), 3);
+    // converting to the kind it already is
+    assert_eq!(
+        rgrf(&[
+            "spr",
+            "convert",
+            &p("cv.spr"),
+            "--to",
+            "rgba",
+            "-o",
+            &p("cv3.spr")
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+
     let o = rgrf(&[
         "act",
         "translate",
@@ -1756,6 +1811,58 @@ fn lua_compile_makes_client_ready_bytecode_and_round_trips_korean_text() {
     assert_eq!(r.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&r.stderr).contains("t.lua:2: unexpected symbol near '='"));
     assert!(!dir.join("bad.lub").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn lua_compile_version_5_0_writes_the_older_format() {
+    let dir = tmpdir("luacompile50");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("t.lua");
+    std::fs::write(
+        &src,
+        "function f(a, ...)\n\tfor i = 1, a do print(i, arg.n) end\n\treturn a\nend\n",
+    )
+    .unwrap();
+    let out = dir.join("t.lub");
+    let (s, o) = (
+        src.to_string_lossy().into_owned(),
+        out.to_string_lossy().into_owned(),
+    );
+    let r = rgrf(&[
+        "lua",
+        "compile",
+        &s,
+        "-o",
+        &o,
+        "--lua-version",
+        "5.0",
+        "--json",
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(json(&r)["functions"], 2);
+    // Lua 5.0, little endian, int 4, size_t 4, instruction 4, OP/A/B/C 6/8/9/9, double
+    let bytes = std::fs::read(&out).unwrap();
+    assert_eq!(
+        &bytes[..14],
+        b"\x1bLua\x50\x01\x04\x04\x04\x06\x08\x09\x09\x08"
+    );
+    assert_eq!(rgrf(&["lua", "check", &o]).status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&rgrf(&["lua", "decompile", &o]).stdout).contains("for"));
+    // 5.0 grammar: no `#` operator
+    std::fs::write(&src, "x = #t\n").unwrap();
+    let r = rgrf(&[
+        "lua",
+        "compile",
+        &s,
+        "-o",
+        &o,
+        "--lua-version",
+        "5.0",
+        "--overwrite",
+    ]);
+    assert_eq!(r.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&r.stderr).contains("t.lua:1: unexpected symbol near `#'"));
     let _ = std::fs::remove_dir_all(dir);
 }
 

@@ -364,8 +364,9 @@ enum LuaCmd {
         #[arg(long)]
         listing: bool,
     },
-    /// Compile Lua 5.1 source (.lua, e.g. an edited decompiled file) to a client-ready .lub: the
-    /// same bytes as the real `luac` 5.1 makes, in the 32-bit layout the Ragnarok Online client loads
+    /// Compile Lua 5.1 (or, with --lua-version 5.0, 5.0) source (.lua, e.g. an edited decompiled
+    /// file) to a client-ready .lub: the same bytes as the real `luac` makes, in the 32-bit layout
+    /// the Ragnarok Online client loads
     Compile {
         /// The source file
         input: PathBuf,
@@ -385,7 +386,18 @@ enum LuaCmd {
         /// Replace an existing output file
         #[arg(long)]
         overwrite: bool,
+        /// Lua version of the source and of the file: 5.1, or 5.0 (62 of the kRO archive's files)
+        #[arg(long, value_enum, default_value = "5.1")]
+        lua_version: LuaVersionArg,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum LuaVersionArg {
+    #[value(name = "5.1")]
+    V51,
+    #[value(name = "5.0")]
+    V50,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -561,6 +573,24 @@ enum SprCmd {
         #[arg(long)]
         frame: usize,
         /// The .act that belongs to the sprite (layers using the image become empty, later ones move down)
+        #[arg(long, requires = "act_output")]
+        act: Option<PathBuf>,
+        #[arg(long, requires = "act")]
+        act_output: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Convert between palette images and true-colour images (writes a new file; with --act/--act-output
+    /// the layers of that ACT follow)
+    Convert {
+        input: PathBuf,
+        entry: Option<String>,
+        /// `rgba`: palette images become true-colour (the palette is dropped). `indexed`: true-colour
+        /// images become palette images (lossless when they use at most 255 colours, else reduced)
+        #[arg(long, value_enum)]
+        to: edit_cmd::ConvertTo,
         #[arg(long, requires = "act_output")]
         act: Option<PathBuf>,
         #[arg(long, requires = "act")]
@@ -916,6 +946,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 encoding,
                 name,
                 overwrite,
+                lua_version,
             } => lua_cmd::compile(
                 input,
                 output,
@@ -928,6 +959,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 name.as_deref(),
                 *overwrite,
                 cli.json,
+                matches!(lua_version, LuaVersionArg::V50),
             ),
             LuaCmd::Check { input, pattern } => {
                 lua_cmd::check(input, pattern.as_deref(), cli.names, cli.json)
@@ -1124,6 +1156,25 @@ fn run(cli: &Cli) -> Result<i32> {
                 entry.as_deref(),
                 *kind,
                 *frame,
+                act.as_deref(),
+                act_output.as_deref(),
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            SprCmd::Convert {
+                input,
+                entry,
+                to,
+                act,
+                act_output,
+                output,
+                overwrite,
+            } => edit_cmd::spr_convert(
+                input,
+                entry.as_deref(),
+                *to,
                 act.as_deref(),
                 act_output.as_deref(),
                 output,
