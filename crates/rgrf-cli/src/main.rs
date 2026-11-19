@@ -30,6 +30,7 @@ mod crypt_cmd;
 mod edit_cmd;
 mod lua_cmd;
 mod map_cmd;
+mod pal_cmd;
 mod patch_cmd;
 mod spr_cmd;
 
@@ -247,6 +248,11 @@ enum Cmd {
     Spr {
         #[command(subcommand)]
         action: SprCmd,
+    },
+    /// Palettes (.pal, or the palette of an .spr): show, picture, edit, preview a sprite with them
+    Pal {
+        #[command(subcommand)]
+        action: PalCmd,
     },
     /// Animations (.act): show, render frames as PNG
     Act {
@@ -486,6 +492,105 @@ fn parse_color(s: &str) -> Result<[u8; 4], String> {
     }
     let b = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(255);
     Ok([b(0), b(2), b(4), if h.len() == 8 { b(6) } else { 255 }])
+}
+
+#[derive(Subcommand)]
+enum PalCmd {
+    /// The 256 colours (a loose .pal or .spr, or a GRF and the entry path)
+    Info {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// Save the palette of an .spr as a .pal file
+    Extract {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Draw the palette as a PNG of 16 x 16 cells (index 0 top left)
+    Png {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Size of one cell in pixels (1 to 64)
+        #[arg(long, default_value_t = 16)]
+        cell: u16,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Make a .pal from a PNG: an indexed PNG gives its own palette, any other PNG must be
+    /// 16 x 16 cells as `pal png` draws them (edit that picture in any paint program)
+    FromPng {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Set single colours (writes a new .pal)
+    Set {
+        input: PathBuf,
+        entry: Option<String>,
+        /// INDEX=RRGGBB, repeatable
+        #[arg(long = "color", required = true, value_parser = pal_cmd::parse_set)]
+        colors: Vec<(u8, [u8; 3])>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Shift the hue and scale saturation and brightness of a range of colours (new .pal)
+    Adjust {
+        input: PathBuf,
+        entry: Option<String>,
+        /// First colour (default 1: index 0 is the transparent one)
+        #[arg(long, default_value_t = 1)]
+        from: u8,
+        #[arg(long, default_value_t = 255)]
+        to: u8,
+        /// Degrees added to the hue
+        #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
+        hue: f32,
+        /// Factor for the saturation (0 = grey)
+        #[arg(long, default_value_t = 1.0)]
+        saturation: f32,
+        /// Factor for the brightness
+        #[arg(long, default_value_t = 1.0)]
+        brightness: f32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Draw one frame of a sprite with its own palette and with each --pal, in one PNG
+    Sheet {
+        /// The .act (a loose file, or a GRF and the entry path)
+        input: PathBuf,
+        entry: Option<String>,
+        /// Sprite to use instead of the one with the same name
+        #[arg(long)]
+        spr: Option<PathBuf>,
+        /// Palettes (.pal or .spr; loose files, or else entries of the same GRF); repeatable
+        #[arg(long = "pal", required = true)]
+        pals: Vec<String>,
+        #[arg(long, default_value_t = 0)]
+        action: usize,
+        #[arg(long, default_value_t = 0)]
+        frame: usize,
+        /// Pictures per row
+        #[arg(long, default_value_t = 4)]
+        columns: usize,
+        #[arg(long, default_value_t = 1)]
+        scale: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1178,6 +1283,107 @@ fn run(cli: &Cli) -> Result<i32> {
                 *listing,
                 cli.names,
             ),
+        },
+        Cmd::Pal { action } => match action {
+            PalCmd::Info { input, entry } => {
+                pal_cmd::info(input, entry.as_deref(), cli.names, cli.json)
+            }
+            PalCmd::Extract {
+                input,
+                entry,
+                output,
+                overwrite,
+            } => pal_cmd::extract(
+                input,
+                entry.as_deref(),
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            PalCmd::Png {
+                input,
+                entry,
+                cell,
+                output,
+                overwrite,
+            } => pal_cmd::png(
+                input,
+                entry.as_deref(),
+                *cell,
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            PalCmd::FromPng {
+                input,
+                output,
+                overwrite,
+            } => pal_cmd::from_png(input, output, *overwrite, cli.json),
+            PalCmd::Set {
+                input,
+                entry,
+                colors,
+                output,
+                overwrite,
+            } => pal_cmd::set(
+                input,
+                entry.as_deref(),
+                colors,
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            PalCmd::Adjust {
+                input,
+                entry,
+                from,
+                to,
+                hue,
+                saturation,
+                brightness,
+                output,
+                overwrite,
+            } => pal_cmd::adjust(&pal_cmd::AdjustArgs {
+                input,
+                entry: entry.as_deref(),
+                from: *from,
+                to: *to,
+                hue: *hue,
+                saturation: *saturation,
+                brightness: *brightness,
+                output,
+                overwrite: *overwrite,
+                names: cli.names,
+                json: cli.json,
+            }),
+            PalCmd::Sheet {
+                input,
+                entry,
+                spr,
+                pals,
+                action,
+                frame,
+                columns,
+                scale,
+                output,
+                overwrite,
+            } => pal_cmd::sheet(&pal_cmd::SheetArgs {
+                input,
+                entry: entry.as_deref(),
+                spr: spr.as_deref(),
+                pals,
+                action: *action,
+                frame: *frame,
+                columns: *columns,
+                scale: *scale,
+                output,
+                overwrite: *overwrite,
+                names: cli.names,
+                json: cli.json,
+            }),
         },
         Cmd::Act { action } => match action {
             ActCmd::Info { input, entry } => {

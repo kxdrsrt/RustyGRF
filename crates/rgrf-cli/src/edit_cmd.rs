@@ -33,7 +33,7 @@ impl From<KindArg> for Kind {
     }
 }
 
-fn write_new(output: &Path, overwrite: bool, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_new(output: &Path, overwrite: bool, bytes: &[u8]) -> Result<()> {
     if output.exists() && !overwrite {
         bail!("{} exists already (use --overwrite)", output.display());
     }
@@ -43,7 +43,7 @@ fn write_new(output: &Path, overwrite: bool, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn report(json: bool, what: &str, output: &Path, extra: serde_json::Value) {
+pub(crate) fn report(json: bool, what: &str, output: &Path, extra: serde_json::Value) {
     if json {
         println!(
             "{}",
