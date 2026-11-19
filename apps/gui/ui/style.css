@@ -391,7 +391,9 @@ button.small.on { background: var(--accent); border-color: var(--accent); color:
 .settings .accents button { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
 .settings .accents button.on { border-color: var(--text); }
 .settings label.check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-#settings-body { max-height: 62vh; overflow: auto; padding-right: 4px; }
+#settings-dlg { width: min(680px, calc(100vw - 48px)); }
+#settings-body { max-height: calc(100vh - 210px); overflow: auto; padding-right: 4px; }
+.settings select { max-width: 320px; }
 
 /* narrow windows: the buttons keep their icons, the words go (they stay as tooltips and for screen readers) */
 @media (max-width: 1180px) {
