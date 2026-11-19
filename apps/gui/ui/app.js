@@ -219,7 +219,7 @@ const SIZE_UNITS = { k: 1024, m: 1024 * 1024 };
 const PREFS_KEY = "rustygrf-view";
 
 const V = Object.assign(
-  { layout: "list", sort: "archive", desc: false, kinds: [], size: "", recursive: false, preview: "right", folder: null, listW: null, previewH: null, foldersW: null },
+  { layout: "tree", sort: "archive", desc: false, kinds: [], size: "", recursive: false, preview: "right", folder: null, listW: null, previewH: null, foldersW: null },
   (() => {
     try {
       return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
@@ -770,15 +770,44 @@ function renderPreview(p, row, meta) {
       const host = el("div", { class: "glhost tall" });
       const handle = { v: null };
       queueMicrotask(() => (S.viewer = handle.v = Viewer3D.showScene(host, p)));
-      const toggle = (label, name, on = true) => {
-        const c = el("input", { type: "checkbox", checked: on, onchange: () => handle.v?.set(name, c.checked) });
+      // the parts of the picture; "All" switches them together (Animate is motion, not a part)
+      const parts = {};
+      const allLabel = el("span");
+      const allBtn = el("button", { type: "button", class: "small", icon: "eye", title: "Show or hide lighting, lightmaps, models and water together" }, allLabel);
+      const syncAll = () => {
+        const on = Object.values(parts).some((c) => c.checked);
+        allLabel.textContent = on ? "Hide all" : "Show all";
+        allBtn.setAttribute("aria-pressed", String(Object.values(parts).every((c) => c.checked)));
+      };
+      const toggle = (label, name, isPart = true) => {
+        const c = el("input", { type: "checkbox", checked: true, onchange: () => { handle.v?.set(name, c.checked); syncAll(); } });
+        if (isPart) parts[name] = c;
         return el("label", {}, c, ` ${label}`);
       };
-      return [
-        el("div", { class: "controls" }, el("span", { class: "muted", text: "drag = turn, right/shift-drag or arrows = move, wheel = zoom, double-click = reset" }), toggle("Lighting", "lit"), toggle("Lightmaps", "lightmap"), toggle("Models", "models"), toggle("Water", "water"), p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle("Animate", "animate") : null, el("button", { type: "button", class: "small", icon: "extract", text: "Extract map…", title: "Write this map with every file it needs (ground, altitude, textures, models, sounds, water, minimap, effects) into a folder", onclick: () => doExtractMap(row) })),
-        host,
-        infoBlock(p.info),
-      ];
+      allBtn.addEventListener("click", () => {
+        const on = !Object.values(parts).some((c) => c.checked);
+        for (const [name, c] of Object.entries(parts)) {
+          c.checked = on;
+          handle.v?.set(name, on);
+        }
+        syncAll();
+      });
+      const shown = () => Object.fromEntries(Object.entries(parts).map(([k, c]) => [k, c.checked]));
+      const controls = el(
+        "div",
+        { class: "controls" },
+        toggle("Lighting", "lit"),
+        toggle("Lightmaps", "lightmap"),
+        toggle("Models", "models"),
+        toggle("Water", "water"),
+        allBtn,
+        p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle("Animate", "animate", false) : null,
+        el("button", { type: "button", class: "small", icon: "image", text: "Save picture…", title: "Save the view as it is now (with what is switched off) as a PNG, larger than on screen", onclick: () => saveMapPicture(row, handle.v) }),
+        el("button", { type: "button", class: "small", icon: "extract", text: "Extract map…", title: "Write this map with the files it needs into a folder; parts switched off here can be left out", onclick: () => doExtractMap(row, shown()) }),
+      );
+      syncAll();
+      const hint = el("p", { class: "muted viewhint", text: "Drag to turn, right- or Shift-drag or the arrow keys to move, wheel to zoom, double-click to reset." });
+      return [controls, hint, host, infoBlock(p.info)];
     }
     case "effect":
       return [el("div", { class: "muted", text: `${p.frames} frame(s) shown at ${p.fps} fps` }), el("div", { class: "fxstage" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "effect" })), infoBlock(p.info)];
@@ -801,23 +830,62 @@ async function entriesOf(row) {
   return row.folder ? invoke("folder_entries", { view: 0, path: row.name }) : [row.index];
 }
 
-/** Writes the map of `row` (RSW, GAT or GND) with all its files into a folder. */
-async function doExtractMap(row) {
+/** Saves the 3D view of a map as it is now as PNG. */
+async function saveMapPicture(row, viewer) {
+  if (!viewer?.snapshot) return note("Cannot save the picture", "The 3D view is not ready.", true);
+  const scale = el("select", { class: "field" }, ...[[1, "As on screen"], [2, "2 × (recommended)"], [4, "4 ×"]].map(([v, t]) => el("option", { value: String(v), text: t, selected: v === 2 })));
+  const go = await ask("Save picture", [el("p", { text: "The view as it is now: same angle, and only what is switched on. A larger picture is drawn again at that size, not enlarged." }), el("div", { class: "form" }, el("label", {}, "Size ", scale))], [{ label: "Choose file…", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const base = row.name.split("\\").pop().replace(/\.[^.]+$/, "");
+  const path = await T.dialog.save({ title: "Save picture as", defaultPath: `${base}.png`, filters: [{ name: "PNG pictures", extensions: ["png"] }] });
+  if (!path) return;
+  try {
+    const shot = viewer.snapshot(Number(scale.value));
+    const bytes = await invoke("save_picture", { path, png: shot.url.slice(shot.url.indexOf(",") + 1) });
+    setStatus(`Picture saved: ${path} (${shot.width} × ${shot.height}, ${fmtBytes(bytes)})`);
+  } catch (e) {
+    await note("Could not save the picture", errText(e), true);
+  }
+}
+
+const MAP_PARTS = [
+  ["models", "Models and their textures"],
+  ["water", "Water pictures"],
+  ["sounds", "Sounds"],
+  ["minimap", "Minimap"],
+  ["effects", "Effect script and its textures"],
+];
+
+/** Writes the map of `row` (RSW, GAT or GND) with its files into a folder; `shown` are the switches of the 3D view. */
+async function doExtractMap(row, shown = {}) {
+  const boxes = Object.fromEntries(MAP_PARTS.map(([k]) => [k, el("input", { type: "checkbox", checked: shown[k] ?? true })]));
+  const offNote = shown.lit === false || shown.lightmap === false ? el("p", { class: "muted", text: "Lighting and lightmaps are part of the world and ground files, which are always written; switching them off only changes the view (use Save picture… for that)." }) : null;
+  const go = await ask(
+    "Extract map",
+    [
+      el("p", { text: "The world, ground and altitude files and the ground textures are always written. Parts switched off in the view start unticked here; the files are copied unchanged, so in the client the map still has everything it lists." }),
+      el("div", { class: "form" }, ...MAP_PARTS.map(([k, t]) => el("label", {}, boxes[k], ` ${t}`))),
+      offNote,
+    ],
+    [{ label: "Choose folder…", value: true, primary: true }, { label: "Cancel", value: null }],
+  );
+  if (!go) return;
+  const skip = MAP_PARTS.map(([k]) => k).filter((k) => !boxes[k].checked);
   const dest = await T.dialog.open({ directory: true, multiple: false, title: "Folder for the map (the files go below it as data\\...)" });
   if (!dest) return;
   setStatus("Extracting the map …");
   try {
     let r;
     try {
-      r = await invoke("extract_map", { index: row.index, dest, rename: false });
+      r = await invoke("extract_map", { index: row.index, dest, rename: false, skip });
     } catch (e) {
       if (!/exists/i.test(errText(e))) throw e;
       const go = await ask("Files exist already", el("p", { text: `${errText(e)}. Keep both, with a number added to the new file names?` }), [{ label: "Keep both", value: true, primary: true }, { label: "Cancel", value: null }]);
       if (!go) return setStatus("Nothing extracted");
-      r = await invoke("extract_map", { index: row.index, dest, rename: true });
+      r = await invoke("extract_map", { index: row.index, dest, rename: true, skip });
     }
     setStatus(`Map ${r.map}: ${fmtNum(r.files)} files written to ${r.dest}`);
-    const body = [el("p", { text: `${fmtNum(r.files)} files of ${r.map} written to ${r.dest}.` })];
+    const body = [el("p", { text: `${fmtNum(r.files)} files of ${r.map} written to ${r.dest}.${r.skipped ? ` ${fmtNum(r.skipped)} left out (${skip.join(", ")}).` : ""}` })];
     if (r.missing.length) body.push(el("p", { text: `${fmtNum(r.missing.length)} file(s) the map names are not in this archive (they may be in another GRF of the client):` }), el("ul", { class: "pending" }, ...r.missing.slice(0, 50).map((m) => el("li", { text: m }))));
     if (r.problems.length) body.push(el("p", { class: "error", text: r.problems.slice(0, 10).join("\n") }));
     if (r.damaged) body.push(el("p", { class: "error", text: `${fmtNum(r.damaged)} file(s) are damaged and were written as far as they could be read.` }));
@@ -2184,7 +2252,7 @@ function openSettings() {
       row("Animations", pick("motion", [["system", "Follow the system"], ["off", "Off"]]), "Turns off the arrow and other transitions."),
       el("h3", { text: "When opening an archive" }),
       row("File names", pick("names", [["cp949", "Korean (CP949)"], ["cp1252", "Latin-1 (as GRF Editor shows them)"], ["utf8", "UTF-8"]])),
-      row("List layout", pick("layout", [["last", "As last used"], ["list", "List"], ["details", "Details"], ["tree", "Tree"], ["folders", "Folders"]]), "Takes effect the next time the app starts."),
+      row("List layout", pick("layout", [["last", "As last used"], ["tree", "Tree"], ["folders", "Folders"], ["list", "List"], ["details", "Details"]]), "Takes effect the next time the app starts."),
       row("Preview", pick("preview", [["last", "As last used"], ["right", "Right"], ["bottom", "Bottom"], ["off", "Off"]]), "Takes effect the next time the app starts."),
       row("Start-up", check("reopen", "Open the last archive again")),
       row("Changes", check("warnDiscard", "Ask before pending changes are discarded")),
@@ -2426,7 +2494,7 @@ window.addEventListener("keydown", (e) => {
   }
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && "1234".includes(e.key) && e.key.length === 1 && S.info) {
     e.preventDefault();
-    setLayout(["list", "details", "tree", "folders"][Number(e.key) - 1]);
+    setLayout(["tree", "folders", "list", "details"][Number(e.key) - 1]);
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
     e.preventDefault();

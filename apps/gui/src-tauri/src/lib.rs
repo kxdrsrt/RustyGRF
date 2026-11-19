@@ -164,11 +164,25 @@ async fn extract_map(
     index: usize,
     dest: String,
     rename: bool,
+    skip: Option<Vec<String>>,
 ) -> Res<backend::MapExtractSummary> {
     with_session(&state, move |s| {
-        s.extract_map(index, &PathBuf::from(dest), rename)
+        s.extract_map(
+            index,
+            &PathBuf::from(dest),
+            rename,
+            &skip.unwrap_or_default(),
+        )
     })
     .await
+}
+
+/// Writes a picture made by the page (the 3D view) as PNG.
+#[tauri::command]
+async fn save_picture(path: String, png: String) -> Res<u64> {
+    tauri::async_runtime::spawn_blocking(move || backend::save_picture(&PathBuf::from(path), &png))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -745,10 +759,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         item("changes", "Review Changes...", None)?,
     ];
     let mut view = vec![
-        item("layout-list", "As List", Some("CmdOrCtrl+1"))?,
-        item("layout-details", "As Details", Some("CmdOrCtrl+2"))?,
-        item("layout-tree", "As Tree", Some("CmdOrCtrl+3"))?,
-        item("layout-folders", "As Folders", Some("CmdOrCtrl+4"))?,
+        item("layout-tree", "As Tree", Some("CmdOrCtrl+1"))?,
+        item("layout-folders", "As Folders", Some("CmdOrCtrl+2"))?,
+        item("layout-list", "As List", Some("CmdOrCtrl+3"))?,
+        item("layout-details", "As Details", Some("CmdOrCtrl+4"))?,
         sep()?,
         item("preview-right", "Preview on the Right", None)?,
         item("preview-bottom", "Preview at the Bottom", None)?,
@@ -847,6 +861,7 @@ pub fn run() {
             reduce_preview,
             act_sound,
             act_layer_at,
+            save_picture,
             stage_reduce,
             reduce_images,
             stage_replace,

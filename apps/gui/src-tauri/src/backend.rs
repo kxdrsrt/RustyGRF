@@ -531,6 +531,39 @@ pub struct MapExtractSummary {
     /// Files that exist but could not be read to follow what they name.
     pub problems: Vec<String>,
     pub dest: String,
+    /// Files left out on purpose (the parts given in `skip`).
+    pub skipped: usize,
+}
+
+/// Which files of a map belong to a part that can be left out of an extraction.
+fn map_part(kind: rgrf_formats::map_files::Kind) -> Option<&'static str> {
+    use rgrf_formats::map_files::Kind;
+    Some(match kind {
+        Kind::Model | Kind::ModelTexture => "models",
+        Kind::Water => "water",
+        Kind::Sound => "sounds",
+        Kind::Minimap => "minimap",
+        Kind::EffectScript | Kind::EffectTexture => "effects",
+        Kind::World | Kind::Ground | Kind::Altitude | Kind::GroundTexture => return None,
+    })
+}
+
+/// Writes a picture (PNG) the page made, e.g. of the 3D view.
+pub fn save_picture(path: &Path, png_base64: &str) -> Result<u64, String> {
+    if !path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+    {
+        return Err("the picture is saved as .png".into());
+    }
+    let data = B64
+        .decode(png_base64)
+        .map_err(|e| format!("not a picture: {e}"))?;
+    if !data.starts_with(b"\x89PNG") {
+        return Err("not a PNG picture".into());
+    }
+    std::fs::write(path, &data).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(data.len() as u64)
 }
 
 #[derive(Serialize, Debug)]
@@ -2052,7 +2085,7 @@ impl Session {
                 st.expanded = if spec.layout == "tree" && matches <= view::AUTO_EXPAND_LIMIT {
                     t.all_keys()
                 } else {
-                    Default::default()
+                    t.opening_keys()
                 };
             }
             st.lines = view::visible(t, &st.expanded, spec.layout == "tree");
@@ -3019,7 +3052,13 @@ impl Session {
         index: usize,
         dest: &Path,
         rename: bool,
+        skip: &[String],
     ) -> Result<MapExtractSummary, String> {
+        for p in skip {
+            if !["models", "water", "sounds", "minimap", "effects"].contains(&p.as_str()) {
+                return Err(format!("'{p}' is not a part of a map that can be left out"));
+            }
+        }
         struct Src<'a>(&'a Session);
         impl rgrf_formats::map_files::MapSource for Src<'_> {
             fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
@@ -3038,7 +3077,10 @@ impl Session {
             .map_err(|e| e.to_string())?
             .name
             .display(NameMode::Cp1252);
-        let files = rgrf_formats::map_files::resolve(&name, &Src(self))?;
+        let mut files = rgrf_formats::map_files::resolve(&name, &Src(self))?;
+        let before = files.len();
+        files.retain(|f| !map_part(f.kind).is_some_and(|p| skip.iter().any(|s| s == p)));
+        let skipped = before - files.len();
         let keys = self.key_index();
         let mut indices = Vec::new();
         let mut missing = Vec::new();
@@ -3064,6 +3106,7 @@ impl Session {
             missing,
             problems,
             dest: rep.dest,
+            skipped,
         })
     }
 

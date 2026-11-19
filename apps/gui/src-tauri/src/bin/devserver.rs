@@ -108,8 +108,13 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 arg(a, "index")?,
                 &PathBuf::from(arg::<String>(a, "dest")?),
                 arg(a, "rename")?,
+                &arg::<Option<Vec<String>>>(a, "skip")?.unwrap_or_default(),
             )?)
         }),
+        "save_picture" => to_json(backend::save_picture(
+            &PathBuf::from(arg::<String>(a, "path")?),
+            &arg::<String>(a, "png")?,
+        )?),
         "extract" => with(state, |s| {
             let indices: Vec<usize> = arg(a, "indices")?;
             let list = if indices.is_empty() {

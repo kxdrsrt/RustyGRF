@@ -231,6 +231,21 @@ impl Tree {
     pub fn all_keys(&self) -> HashSet<String> {
         self.nodes.iter().skip(1).map(|n| n.key.clone()).collect()
     }
+
+    /// The folders opened when an archive is shown, as GRF Editor does: a single top folder
+    /// (`data`) is open, and so is every single folder below it that holds nothing else.
+    pub fn opening_keys(&self) -> HashSet<String> {
+        let mut keys = HashSet::new();
+        let mut n = 0;
+        while let [only] = self.nodes[n].folders[..] {
+            keys.insert(self.nodes[only].key.clone());
+            n = only;
+            if !self.nodes[n].files.is_empty() {
+                break;
+            }
+        }
+        keys
+    }
 }
 
 /// One line of a tree: a folder (`node`) or a file (`entry`) at `depth`.
@@ -331,6 +346,26 @@ mod tests {
 
     fn all() -> Vec<usize> {
         (0..6).collect()
+    }
+
+    #[test]
+    fn the_single_top_folder_opens_and_single_folders_below_it() {
+        let n: Vec<String> = [r"data\sprite\a\x.spr", r"data\sprite\b\z.spr"]
+            .map(String::from)
+            .to_vec();
+        let t = Tree::build(&n, &[0, 1], &meta, false);
+        // data holds only sprite, sprite holds two folders: both open, a and b stay closed
+        let keys = t.opening_keys();
+        assert_eq!(keys, HashSet::from([r"data".into(), r"data\sprite".into()]));
+        // two top folders (data and Data are one, root.txt is a file at the top): data opens
+        let t = Tree::build(&names(), &all(), &meta, false);
+        assert!(t.opening_keys().contains("data"));
+        let two: Vec<String> = [r"data\a.txt", r"other\b.txt"].map(String::from).to_vec();
+        assert!(
+            Tree::build(&two, &[0, 1], &meta, false)
+                .opening_keys()
+                .is_empty()
+        );
     }
 
     #[test]

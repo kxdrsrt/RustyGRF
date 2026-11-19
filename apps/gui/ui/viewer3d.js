@@ -607,10 +607,13 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     }
     orbit(canvas, cam, home, size, draw);
 
-    function render() {
+    // `pixels` draws at a given pixel size (a picture to save) instead of the size on screen;
+    // requestAnimationFrame passes a time stamp here, which is not a size
+    function render(pixels) {
       dirty = false;
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      const fixed = typeof pixels === "object" && pixels !== null;
+      const w = fixed ? pixels.w : Math.max(1, Math.round(canvas.clientWidth * dpr)), h = fixed ? pixels.h : Math.max(1, Math.round(canvas.clientHeight * dpr));
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       gl.viewport(0, 0, w, h);
       gl.clearColor(0.45, 0.6, 0.8, 1);
@@ -673,6 +676,20 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     return {
       canvas,
       set(name, value) { opts[name] = value; startLoop(); draw(); },
+      get: (name) => opts[name],
+      /** The view as it is now, `scale` times the size on screen (at most what WebGL can draw), as a PNG data URL. */
+      snapshot(scale = 1) {
+        const dpr = window.devicePixelRatio || 1;
+        const [maxW, maxH] = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+        const cw = canvas.clientWidth * dpr, ch = canvas.clientHeight * dpr;
+        const k = Math.min(scale, maxW / cw, maxH / ch, 8192 / Math.max(cw, ch));
+        const w = Math.max(1, Math.round(cw * k)), h = Math.max(1, Math.round(ch * k));
+        render({ w, h });
+        // read in the same task as the drawing, before the buffer is handed to the screen
+        const url = canvas.toDataURL("image/png");
+        draw();
+        return { url, width: w, height: h };
+      },
       /** Index of the water picture shown right now (for tests). */
       waterFrame,
       animatedModels: () => animatedModels,
