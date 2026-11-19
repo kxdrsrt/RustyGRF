@@ -167,6 +167,7 @@ async function openPath(path, force = false) {
   V.folder = null;
   buildKindFilter();
   syncViewBar();
+  THUMB.reset();
   S.changes = [];
   S.changed = new Map();
   updateTitle();
@@ -245,9 +246,19 @@ class VList {
     this.spacer = $(ids.spacer);
     this.rowsEl = $(ids.rows);
   }
+  /** Lines of one row each, or (gallery) cells in `cols` columns: `{cols, w, h}`. */
+  geom() {
+    return this.grid || { cols: 1, w: 0, h: ROW_H };
+  }
+  spacerHeight(total) {
+    const { cols, h } = this.geom();
+    return Math.ceil(total / cols) * h;
+  }
   range() {
-    const first = Math.max(0, Math.floor(this.vp.scrollTop / ROW_H) - OVERSCAN);
-    const last = Math.min(this.st.total, Math.ceil((this.vp.scrollTop + this.vp.clientHeight) / ROW_H) + OVERSCAN);
+    const { cols, h } = this.geom();
+    const over = this.grid ? 2 : OVERSCAN;
+    const first = Math.max(0, (Math.floor(this.vp.scrollTop / h) - over) * cols);
+    const last = Math.min(this.st.total, (Math.ceil((this.vp.scrollTop + this.vp.clientHeight) / h) + over) * cols);
     return [first, last];
   }
   row(pos) {
@@ -301,6 +312,7 @@ class VList {
     }
     this.rowsEl.style.top = "0";
     this.rowsEl.replaceChildren(...out);
+    this.onDraw?.();
     if (this.st.selected != null) this.vp.setAttribute("aria-activedescendant", `${this.prefix}-${this.st.selected}`);
     else this.vp.removeAttribute("aria-activedescendant");
   }
@@ -315,15 +327,16 @@ class VList {
     st.total = total;
     st.rows = [];
     st.offset = 0;
-    this.spacer.style.height = `${total * ROW_H}px`;
+    this.spacer.style.height = `${this.spacerHeight(total)}px`;
     if (!keepScroll) this.vp.scrollTop = 0;
     await this.load();
   }
   scrollTo(pos) {
-    const top = pos * ROW_H;
+    const { cols, h } = this.geom();
+    const top = Math.floor(pos / cols) * h;
     const vp = this.vp;
     if (top < vp.scrollTop) vp.scrollTop = top;
-    else if (top + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = top + ROW_H - vp.clientHeight;
+    else if (top + h > vp.scrollTop + vp.clientHeight) vp.scrollTop = top + h - vp.clientHeight;
   }
   async pick(pos, scroll = true) {
     const st = this.st;
@@ -352,6 +365,7 @@ const dirOf = (name) => (name.includes("\\") ? name.slice(0, name.lastIndexOf("\
 const extOf = (name) => (baseOf(name).includes(".") ? baseOf(name).split(".").pop() : "");
 
 function mainRow(r, pos) {
+  if (V.layout === "gallery") return galleryCell(r, pos);
   const sel = pos === S.selected ? " selected" : "";
   const tree = V.layout === "tree";
   const indent = tree ? `padding-left:${8 + r.depth * 16}px;` : "";
@@ -389,6 +403,109 @@ function mainRow(r, pos) {
     el("span", { class: "size", text: fmtBytes(r.size) }),
   );
 }
+
+const PICTURE_KINDS = ["image", "sprite"];
+const THUMB_EXTS = new Set(["bmp", "tga", "png", "jpg", "jpeg", "gif", "spr"]);
+const THUMB_SIDE = 160;
+const THUMB_KEEP = 1500;
+const CELL_MIN_W = 124;
+const CELL_H = 136;
+
+/** Thumbnails of the gallery: made by the backend, kept here (index -> thumbnail or its error). */
+const THUMB = {
+  cache: new Map(),
+  pending: new Set(),
+  gen: 0,
+  timer: null,
+  reset() {
+    this.cache.clear();
+    this.pending.clear();
+    this.gen++;
+  },
+};
+
+function fillThumb(box, r, t) {
+  if (t?.data) {
+    box.replaceChildren(el("img", { src: `data:${t.mime};base64,${t.data}`, alt: "", draggable: "false" }));
+  } else {
+    box.replaceChildren(kindIcon(r.kind));
+  }
+}
+
+function galleryCell(r, pos) {
+  const { cols, w, h } = mainList.grid;
+  const t = THUMB.cache.get(r.index);
+  const key = changeKey(r.name);
+  const state = S.changed.has(key) ? ` changed ${S.changed.get(key)}` : "";
+  const box = el("span", { class: "gthumb", "data-thumb": r.index });
+  fillThumb(box, r, t);
+  const sub = t?.width ? `${t.width} × ${t.height}` : fmtBytes(r.size);
+  return el(
+    "div",
+    { class: `row gcell${pos === S.selected ? " selected" : ""}${state}`, style: `top:${Math.floor(pos / cols) * h}px;left:${(pos % cols) * w}px;width:${w}px;height:${h}px`, title: r.name, "data-pos": pos },
+    box,
+    el("span", { class: "gname", text: baseOf(r.name) }),
+    el("span", { class: "gsub", text: sub }),
+  );
+}
+
+/** Columns and cell size of the gallery for the width of the list (none in the other layouts). */
+function setGrid() {
+  const was = mainList.grid;
+  if (V.layout !== "gallery") {
+    mainList.grid = null;
+  } else {
+    const width = mainList.vp.clientWidth || 600;
+    const cols = Math.max(1, Math.floor(width / CELL_MIN_W));
+    mainList.grid = { cols, w: Math.floor(width / cols), h: CELL_H };
+  }
+  mainList.onDraw = mainList.grid ? scheduleThumbs : null;
+  const now = mainList.grid;
+  if (S.info && (was?.cols !== now?.cols || was?.w !== now?.w || !was !== !now)) {
+    mainList.spacer.style.height = `${mainList.spacerHeight(S.total)}px`;
+    mainList.draw();
+  }
+}
+
+function scheduleThumbs() {
+  clearTimeout(THUMB.timer);
+  THUMB.timer = setTimeout(loadThumbs, 60);
+}
+
+async function loadThumbs() {
+  if (!mainList.grid || !S.info) return;
+  const [first, last] = mainList.range();
+  const want = [];
+  for (let p = first; p < last; p++) {
+    const r = mainList.row(p);
+    if (r && !r.folder && THUMB_EXTS.has(extOf(r.name).toLowerCase()) && !THUMB.cache.has(r.index) && !THUMB.pending.has(r.index)) want.push(r.index);
+  }
+  if (!want.length) return;
+  const gen = THUMB.gen;
+  for (const i of want) THUMB.pending.add(i);
+  let made = [];
+  try {
+    made = await invoke("thumbnails", { entries: want, side: THUMB_SIDE });
+  } catch {}
+  if (gen !== THUMB.gen) return;
+  for (const i of want) THUMB.pending.delete(i);
+  for (const t of made) {
+    THUMB.cache.set(t.index, t);
+    if (THUMB.cache.size > THUMB_KEEP) THUMB.cache.delete(THUMB.cache.keys().next().value);
+    const box = mainList.rowsEl.querySelector(`.gthumb[data-thumb="${t.index}"]`);
+    if (!box) continue;
+    const r = mainList.row(Number(box.parentElement.dataset.pos));
+    if (!r) continue;
+    fillThumb(box, r, t);
+    if (t.width) box.parentElement.querySelector(".gsub").textContent = `${t.width} × ${t.height}`;
+  }
+  // a thumbnail that came late may belong to a cell that was scrolled in meanwhile
+  if (made.length) scheduleThumbs();
+}
+
+new ResizeObserver(() => {
+  if (V.layout === "gallery") setGrid();
+}).observe($("viewport"));
 
 function folderRow(r, pos) {
   const on = V.folder != null && r.name.toLowerCase() === V.folder.toLowerCase();
@@ -435,7 +552,7 @@ function mainSpec(autoExpand) {
   const folders = V.layout === "folders";
   return {
     query: S.query,
-    kinds: V.kinds,
+    kinds: V.layout === "gallery" && !V.kinds.length ? PICTURE_KINDS : V.kinds,
     min_size: min,
     max_size: max,
     sort: V.sort,
@@ -481,7 +598,7 @@ async function applyView({ keepSelection = true, autoExpand = false, pane = true
   if (V.layout === "folders" && pane) await applyFolderPane(autoExpand);
   $("count").textContent = filtersActive() ? `${fmtNum(S.matches)} of ${fmtNum(S.info.entries)}` : `${fmtNum(S.matches)} entries`;
   $("btn-reset-filters").disabled = !filtersActive();
-  const note = V.layout === "folders" && S.query ? " (search covers all folders)" : "";
+  const note = V.layout === "folders" && S.query ? " (search covers all folders)" : V.layout === "gallery" && !V.kinds.length ? " (pictures and sprites)" : "";
   if (note) $("count").textContent += note;
 }
 
@@ -504,7 +621,7 @@ async function toggleFolder(list, pos) {
   const total = await invoke("tree_toggle", { view: list.view, path: r.name });
   const top = list.vp.scrollTop;
   list.st.total = total;
-  list.spacer.style.height = `${total * ROW_H}px`;
+  list.spacer.style.height = `${list.spacerHeight(total)}px`;
   list.st.rows = [];
   list.vp.scrollTop = top;
   await list.load();
@@ -516,7 +633,7 @@ async function expandAll(open, which) {
   const list = which || (V.layout === "folders" ? folderList : mainList);
   const total = await invoke("tree_set_all", { view: list.view, open });
   list.st.total = total;
-  list.spacer.style.height = `${total * ROW_H}px`;
+  list.spacer.style.height = `${list.spacerHeight(total)}px`;
   list.st.rows = [];
   list.vp.scrollTop = 0;
   await list.load();
@@ -550,9 +667,10 @@ function syncViewBar() {
   $("size-filter").value = V.size;
   for (const b of document.querySelectorAll("#colhead button")) b.classList.toggle("on", b.dataset.sort === V.sort);
   const kinds = $("kind-label");
-  kinds.textContent = V.kinds.length ? `Type: ${V.kinds.length === 1 ? (KINDS.find((k) => k[0] === V.kinds[0]) || [0, V.kinds[0]])[1] : `${V.kinds.length} kinds`}` : "Type: all";
+  kinds.textContent = V.layout === "gallery" && !V.kinds.length ? "Type: pictures" : V.kinds.length ? `Type: ${V.kinds.length === 1 ? (KINDS.find((k) => k[0] === V.kinds[0]) || [0, V.kinds[0]])[1] : `${V.kinds.length} kinds`}` : "Type: all";
   $("kind-filter").querySelector("summary").classList.toggle("active", V.kinds.length > 0);
   $("viewport").setAttribute("role", V.layout === "tree" ? "tree" : "listbox");
+  setGrid();
   for (const b of document.querySelectorAll("#view-seg button")) b.setAttribute("aria-pressed", String(b.dataset.layout === V.layout));
   for (const b of document.querySelectorAll("#preview-seg button")) b.setAttribute("aria-pressed", String(b.dataset.preview === V.preview));
   const main = document.querySelector("main");
@@ -1088,6 +1206,7 @@ function updateTitle() {
 }
 
 function setPending(rows) {
+  THUMB.reset();
   S.changes = rows;
   S.changed = new Map(rows.map((r) => [changeKey(r.name), r.kind]));
   updateTitle();
@@ -1732,6 +1851,37 @@ async function actEdit(edit) {
   await loadActFrame();
 }
 
+/** Asks how many in-between frames to add, then stages them (see `Act::interpolate`). */
+async function openInterpolate(v) {
+  const count = el("input", { type: "number", min: "1", max: "20", value: "1", class: "narrow", "aria-label": "In-between frames per pair" });
+  const whole = el("input", { type: "checkbox" });
+  const smooth = el("input", { type: "checkbox" });
+  const wrap = el("input", { type: "checkbox" });
+  const keep = el("input", { type: "checkbox", checked: true });
+  const last = v.frame >= v.frames - 1;
+  const sync = () => (keep.disabled = !whole.checked);
+  whole.addEventListener("change", sync);
+  sync();
+  const row = (input, text) => el("label", { class: "check" }, input, ` ${text}`);
+  const go = await ask(
+    "Add in-between frames",
+    [
+      el("p", { text: "Adds frames that move position, scale, rotation, colour and anchors in steps from one frame to the next. The picture and mirroring change halfway, and sounds stay with the original frames." }),
+      el("p", {}, el("label", {}, "In-between frames per pair ", count)),
+      row(whole, `Whole action (all ${v.frames} frames), not only frame ${v.frame + 1} and the next`),
+      row(smooth, "Smooth: slow at the start and the end of each step"),
+      row(wrap, "Loop: the last frame also blends back into the first"),
+      row(keep, "Keep the speed: shorten the frame time so the action lasts as long as before (whole action only)"),
+      last ? el("p", { class: "muted", text: "This is the last frame: without \"Loop\" or \"Whole action\" there is no next frame to blend with." }) : null,
+    ],
+    [{ label: "Add frames", value: true, primary: true }, { label: "Cancel", value: null }],
+    "info",
+  );
+  if (!go) return;
+  const n = Math.max(1, Math.min(20, Math.round(Number(count.value) || 1)));
+  await actEdit({ op: "interpolate", count: n, smooth: smooth.checked, whole: whole.checked, wrap: wrap.checked, keep_speed: whole.checked && keep.checked });
+}
+
 async function removeAction(i) {
   const go = await ask(`Remove action ${i}?`, el("p", { text: "Later actions move down by one. The client picks actions by number (direction, state), so other files that use them may change meaning." }), [{ label: "Remove", value: true, primary: true }, { label: "Cancel", value: null }]);
   if (go) await actEdit({ op: "remove_action" });
@@ -1865,6 +2015,7 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", id: "act-undo", text: "Undo", onclick: () => doHistory(false) }),
     el("button", { type: "button", class: "small", id: "act-redo", text: "Redo", onclick: () => doHistory(true) }),
     el("button", { type: "button", class: "small", text: "Copy frame", title: "Insert a copy after this frame", onclick: () => actEdit({ op: "copy_frame" }) }),
+    el("button", { type: "button", class: "small", icon: "interpolate", text: "In-betweens…", title: "Add frames that blend smoothly from one frame to the next", disabled: v.frames <= 1, onclick: () => openInterpolate(v) }),
     el("button", { type: "button", class: "small", text: "Frame ←", title: "Move the frame one place earlier", disabled: v.frame === 0, onclick: () => actEdit({ op: "move_frame", to: v.frame - 1 }) }),
     el("button", { type: "button", class: "small", text: "Frame →", title: "Move the frame one place later", disabled: v.frame >= v.frames - 1, onclick: () => actEdit({ op: "move_frame", to: v.frame + 1 }) }),
     el("button", { type: "button", class: "small", text: "Copy action", title: "Insert a copy of this action after it", onclick: () => actEdit({ op: "copy_action" }) }),
@@ -2374,7 +2525,7 @@ function openSettings() {
       row("Animations", pick("motion", [["system", "Follow the system"], ["off", "Off"]]), "Turns off the arrow and other transitions."),
       el("h3", { text: "When opening an archive" }),
       row("File names", pick("names", [["cp949", "Korean (CP949)"], ["cp1252", "Latin-1 (as GRF Editor shows them)"], ["utf8", "UTF-8"]])),
-      row("List layout", pick("layout", [["last", "As last used"], ["tree", "Tree"], ["folders", "Folders"], ["list", "List"], ["details", "Details"]]), "Takes effect the next time the app starts."),
+      row("List layout", pick("layout", [["last", "As last used"], ["tree", "Tree"], ["folders", "Folders"], ["list", "List"], ["details", "Details"], ["gallery", "Gallery"]]), "Takes effect the next time the app starts."),
       row("Preview", pick("preview", [["last", "As last used"], ["right", "Right"], ["bottom", "Bottom"], ["off", "Off"]]), "Takes effect the next time the app starts."),
       row("Start-up", check("reopen", "Open the last archive again")),
       row("Changes", check("warnDiscard", "Ask before pending changes are discarded")),
@@ -2493,10 +2644,13 @@ function wireList(list) {
         return expandAll(true, list);
       }
     }
-    const moves = { ArrowDown: cur + 1, ArrowUp: cur - 1, PageDown: cur + page, PageUp: cur - page, Home: 0, End: st.total - 1 };
+    const g = list.grid;
+    const moves = g
+      ? { ArrowRight: cur + 1, ArrowLeft: cur - 1, ArrowDown: cur + g.cols, ArrowUp: cur - g.cols, PageDown: cur + g.cols * Math.max(1, Math.floor(vp.clientHeight / g.h) - 1), PageUp: cur - g.cols * Math.max(1, Math.floor(vp.clientHeight / g.h) - 1), Home: 0, End: st.total - 1 }
+      : { ArrowDown: cur + 1, ArrowUp: cur - 1, PageDown: cur + page, PageUp: cur - page, Home: 0, End: st.total - 1 };
     if (e.key in moves) {
       e.preventDefault();
-      list.pick(cur < 0 && (e.key === "ArrowDown" || e.key === "PageDown") ? 0 : moves[e.key]);
+      list.pick(cur < 0 && (e.key === "ArrowDown" || e.key === "PageDown" || e.key === "ArrowRight") ? 0 : Math.max(0, Math.min(st.total - 1, moves[e.key])));
     }
   });
 }
@@ -2614,9 +2768,9 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openSettings();
   }
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && "1234".includes(e.key) && e.key.length === 1 && S.info) {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && "12345".includes(e.key) && e.key.length === 1 && S.info) {
     e.preventDefault();
-    setLayout(["tree", "folders", "list", "details"][Number(e.key) - 1]);
+    setLayout(["tree", "folders", "list", "details", "gallery"][Number(e.key) - 1]);
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
     e.preventDefault();

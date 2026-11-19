@@ -131,6 +131,19 @@ pub enum ActEdit {
     MoveAction {
         to: usize,
     },
+    /// In-between frames: between this frame and the next, or (`whole`) between all frames of the
+    /// action; `keep_speed` (whole action) shortens the frame time so that the action lasts as long.
+    Interpolate {
+        count: usize,
+        #[serde(default)]
+        smooth: bool,
+        #[serde(default)]
+        whole: bool,
+        #[serde(default)]
+        wrap: bool,
+        #[serde(default)]
+        keep_speed: bool,
+    },
     /// The sound played with the frame; `None` or an empty name removes it.
     SetSound {
         name: Option<String>,
@@ -176,6 +189,26 @@ pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result
             }
             act.set_interval(action, ms / 25.0)
                 .map_err(|e| e.to_string())?;
+        }
+        ActEdit::Interpolate {
+            count,
+            smooth,
+            whole,
+            wrap,
+            keep_speed,
+        } => {
+            let ease = if *smooth {
+                rgrf_formats::edit::Ease::Smooth
+            } else {
+                rgrf_formats::edit::Ease::Linear
+            };
+            let from = (!whole).then_some(frame);
+            act.interpolate(action, from, *count, ease, *wrap)
+                .map_err(|e| e.to_string())?;
+            if *whole && *keep_speed {
+                let a = &mut act.actions[action];
+                a.interval = (a.interval / (*count + 1) as f32).max(1.0);
+            }
         }
         ActEdit::SetSound { name } => {
             let name = name.as_deref().map(str::trim).filter(|n| !n.is_empty());
@@ -589,6 +622,52 @@ mod tests {
 
     fn parsed(data: &[u8]) -> Act {
         Act::parse(data).unwrap()
+    }
+
+    #[test]
+    fn adds_in_between_frames() {
+        let (act, _) = sample();
+        let moved = apply(&act, 0, 0, &edit(serde_json::json!({"op": "copy_frame"}))).unwrap();
+        let moved = apply(
+            &moved,
+            0,
+            1,
+            &edit(serde_json::json!({"op": "set_layer", "layer": 0, "offset_x": 10})),
+        )
+        .unwrap();
+        let one = apply(
+            &moved,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "interpolate", "count": 1})),
+        )
+        .unwrap();
+        let xs: Vec<f32> = parsed(&one).actions[0]
+            .frames
+            .iter()
+            .map(|f| f.layers[0].offset_x)
+            .collect();
+        assert_eq!(xs, [0.0, 5.0, 10.0]);
+        let whole = apply(
+            &moved,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "interpolate", "count": 3, "whole": true, "wrap": true, "keep_speed": true})),
+        )
+        .unwrap();
+        let a = &parsed(&whole).actions[0];
+        // 2 frames and 2 gaps (one wraps) of 3 each, the frame time shrinks to a quarter
+        assert_eq!((a.frames.len(), a.interval), (8, 1.0));
+        // the last frame has no next frame to blend with
+        assert!(
+            apply(
+                &moved,
+                0,
+                1,
+                &edit(serde_json::json!({"op": "interpolate", "count": 1}))
+            )
+            .is_err()
+        );
     }
 
     #[test]

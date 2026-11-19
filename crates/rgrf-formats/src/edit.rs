@@ -2,7 +2,7 @@
 //!
 //! Everything works on the in-memory structures; the CLI writes the result to a new file.
 
-use crate::act::{Act, Action};
+use crate::act::{Act, Action, Anchor, Frame, Layer};
 use crate::pal::Pal;
 use crate::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr};
 use crate::version::Version;
@@ -29,6 +29,10 @@ pub enum EditError {
     },
     #[error("nothing selected: no layer matches")]
     NoLayerSelected,
+    #[error("action {action} has no frame after frame {frame} to blend with")]
+    NoNextFrame { action: usize, frame: usize },
+    #[error("between 1 and {max} in-between frames can be added at once")]
+    BadCount { max: usize },
     #[error("{what} needs ACT version {need} or newer (this file is {have})")]
     NeedsVersion {
         what: &'static str,
@@ -580,10 +584,160 @@ impl Act {
         Ok(())
     }
 
+    /// Adds `count` in-between frames that blend each frame with the next one, as an animator's
+    /// "tweening": offsets, scale, rotation (the short way round), colour and anchors move in
+    /// equal steps (or with a smooth start and stop); the image, mirroring and sound do not blend,
+    /// the image changes halfway, and the sound stays with the original frame.
+    ///
+    /// `from` is one frame (blended with the one after it), or `None` for the whole action. With
+    /// `wrap` the last frame also blends back into the first (looping actions). Returns how many
+    /// frames were added. Layers and anchors are paired by number; those only one side has appear
+    /// in the first or second half.
+    pub fn interpolate(
+        &mut self,
+        action: usize,
+        from: Option<usize>,
+        count: usize,
+        ease: Ease,
+        wrap: bool,
+    ) -> Result<usize, EditError> {
+        self.check_action(action)?;
+        if !(1..=MAX_IN_BETWEEN).contains(&count) {
+            return Err(EditError::BadCount {
+                max: MAX_IN_BETWEEN,
+            });
+        }
+        let frames = &self.actions[action].frames;
+        let n = frames.len();
+        let pairs: Vec<(usize, usize)> = match from {
+            Some(f) => {
+                if f >= n {
+                    return Err(EditError::NoFrame {
+                        action,
+                        frame: f,
+                        count: n,
+                    });
+                }
+                if f + 1 < n {
+                    vec![(f, f + 1)]
+                } else if wrap && n > 1 {
+                    vec![(f, 0)]
+                } else {
+                    return Err(EditError::NoNextFrame { action, frame: f });
+                }
+            }
+            None => {
+                let mut p: Vec<_> = (0..n.saturating_sub(1)).map(|i| (i, i + 1)).collect();
+                if wrap && n > 1 {
+                    p.push((n - 1, 0));
+                }
+                if p.is_empty() {
+                    return Err(EditError::NoNextFrame { action, frame: 0 });
+                }
+                p
+            }
+        };
+        let added = pairs.len() * count;
+        if n + added > MAX_FRAMES {
+            return Err(EditError::BadCount {
+                max: (MAX_FRAMES - n) / pairs.len(),
+            });
+        }
+        let mut out = Vec::with_capacity(n + added);
+        for (i, f) in frames.iter().enumerate() {
+            out.push(f.clone());
+            if let Some(&(a, b)) = pairs.iter().find(|p| p.0 == i) {
+                for k in 1..=count {
+                    let t = k as f32 / (count + 1) as f32;
+                    out.push(blend_frames(&frames[a], &frames[b], t, ease));
+                }
+            }
+        }
+        self.actions[action].frames = out;
+        Ok(added)
+    }
+
     pub fn remove_action(&mut self, index: usize) -> Result<(), EditError> {
         self.check_action(index)?;
         self.actions.remove(index);
         Ok(())
+    }
+}
+
+/// The most in-between frames added between two frames at once, and the most frames of an action.
+pub const MAX_IN_BETWEEN: usize = 20;
+const MAX_FRAMES: usize = 4096;
+
+/// How in-between frames are spaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ease {
+    /// Equal steps.
+    #[default]
+    Linear,
+    /// Slow at both ends (smoothstep).
+    Smooth,
+}
+
+fn lerp(a: f32, b: f32, s: f32) -> f32 {
+    a + (b - a) * s
+}
+
+/// The frame a fraction `t` (0 to 1) of the way from `a` to `b`; see [`Act::interpolate`].
+pub fn blend_frames(a: &Frame, b: &Frame, t: f32, ease: Ease) -> Frame {
+    let s = match ease {
+        Ease::Linear => t,
+        Ease::Smooth => t * t * (3.0 - 2.0 * t),
+    };
+    let mut layers = Vec::new();
+    for i in 0..a.layers.len().max(b.layers.len()) {
+        match (a.layers.get(i), b.layers.get(i)) {
+            (Some(x), Some(y)) => layers.push(blend_layer(x, y, t, s)),
+            (Some(x), None) if t < 0.5 => layers.push(x.clone()),
+            (None, Some(y)) if t >= 0.5 => layers.push(y.clone()),
+            _ => {}
+        }
+    }
+    let mut anchors = Vec::new();
+    for i in 0..a.anchors.len().max(b.anchors.len()) {
+        match (a.anchors.get(i), b.anchors.get(i)) {
+            (Some(x), Some(y)) => anchors.push(Anchor {
+                x: lerp(x.x as f32, y.x as f32, s).round() as i32,
+                y: lerp(x.y as f32, y.y as f32, s).round() as i32,
+                ..x.clone()
+            }),
+            (Some(x), None) if t < 0.5 => anchors.push(x.clone()),
+            (None, Some(y)) if t >= 0.5 => anchors.push(y.clone()),
+            _ => {}
+        }
+    }
+    Frame {
+        range: a.range,
+        layers,
+        sound_id: -1,
+        anchors,
+    }
+}
+
+fn blend_layer(a: &Layer, b: &Layer, t: f32, s: f32) -> Layer {
+    let near = if t < 0.5 { a } else { b };
+    // nothing to move towards when one side shows no image
+    if a.sprite_index < 0 || b.sprite_index < 0 {
+        return near.clone();
+    }
+    // the short way round: 350 to 10 degrees is 20 degrees, not 340
+    let turn = (b.rotation - a.rotation + 540).rem_euclid(360) - 180;
+    let mut color = [0u8; 4];
+    for (c, (x, y)) in color.iter_mut().zip(a.color.iter().zip(&b.color)) {
+        *c = lerp(f32::from(*x), f32::from(*y), s).round() as u8;
+    }
+    Layer {
+        offset_x: lerp(a.offset_x, b.offset_x, s).round(),
+        offset_y: lerp(a.offset_y, b.offset_y, s).round(),
+        scale_x: lerp(a.scale_x, b.scale_x, s),
+        scale_y: lerp(a.scale_y, b.scale_y, s),
+        rotation: a.rotation + (turn as f32 * s).round() as i32,
+        color,
+        ..near.clone()
     }
 }
 
@@ -904,5 +1058,111 @@ mod tests {
         let back = Act::parse(&bytes).unwrap();
         assert_eq!(back.actions, a.actions);
         assert_eq!(back.sounds, a.sounds);
+    }
+
+    fn moving_act() -> Act {
+        let at = |x: f32, rot: i32, c: u8, sprite: i32| Layer {
+            offset_x: x,
+            rotation: rot,
+            color: [c, c, c, 255],
+            sprite_index: sprite,
+            ..Layer::default()
+        };
+        let frame = |x, rot, c, sprite, sound| Frame {
+            layers: vec![at(x, rot, c, sprite)],
+            anchors: vec![Anchor {
+                unknown: [0; 4],
+                x: x as i32,
+                y: 0,
+                other: 0,
+            }],
+            sound_id: sound,
+            ..Frame::default()
+        };
+        Act {
+            version: V2_5,
+            reserved: [0; 10],
+            actions: vec![Action {
+                frames: vec![frame(0.0, 350, 0, 0, 3), frame(10.0, 10, 100, 1, 4)],
+                interval: 6.0,
+            }],
+            sounds: vec![],
+            trailing: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn interpolates_one_pair_in_equal_steps() {
+        let mut a = moving_act();
+        assert_eq!(a.interpolate(0, Some(0), 1, Ease::Linear, false), Ok(1));
+        let f = &a.actions[0].frames;
+        assert_eq!(f.len(), 3);
+        let mid = &f[1];
+        assert_eq!(mid.layers[0].offset_x, 5.0);
+        assert_eq!(mid.layers[0].color, [50, 50, 50, 255]);
+        // 350 to 10 degrees turns by 20 the short way
+        assert_eq!(mid.layers[0].rotation, 360);
+        assert_eq!(mid.anchors[0].x, 5);
+        // the image changes halfway, the sound stays with the original frames
+        assert_eq!(mid.layers[0].sprite_index, 1);
+        assert_eq!((f[0].sound_id, mid.sound_id, f[2].sound_id), (3, -1, 4));
+        let mut b = moving_act();
+        b.interpolate(0, Some(0), 3, Ease::Linear, false).unwrap();
+        let xs: Vec<f32> = b.actions[0]
+            .frames
+            .iter()
+            .map(|f| f.layers[0].offset_x)
+            .collect();
+        assert_eq!(xs, [0.0, 3.0, 5.0, 8.0, 10.0]);
+        assert_eq!(b.actions[0].frames[1].layers[0].sprite_index, 0);
+    }
+
+    #[test]
+    fn interpolates_a_whole_action_and_loops() {
+        let mut a = moving_act();
+        assert_eq!(a.interpolate(0, None, 1, Ease::Linear, true), Ok(2));
+        let xs: Vec<f32> = a.actions[0]
+            .frames
+            .iter()
+            .map(|f| f.layers[0].offset_x)
+            .collect();
+        // the last frame blends back into the first
+        assert_eq!(xs, [0.0, 5.0, 10.0, 5.0]);
+        let mut s = moving_act();
+        s.interpolate(0, Some(0), 3, Ease::Smooth, false).unwrap();
+        let xs: Vec<f32> = s.actions[0]
+            .frames
+            .iter()
+            .map(|f| f.layers[0].offset_x)
+            .collect();
+        assert!(xs[1] < 3.0 && xs[2] == 5.0 && xs[3] > 7.0);
+    }
+
+    #[test]
+    fn interpolation_rejects_bad_requests() {
+        let mut a = moving_act();
+        assert!(matches!(
+            a.interpolate(0, Some(1), 1, Ease::Linear, false),
+            Err(EditError::NoNextFrame { .. })
+        ));
+        assert!(matches!(
+            a.interpolate(0, Some(0), 0, Ease::Linear, false),
+            Err(EditError::BadCount { .. })
+        ));
+        assert!(a.interpolate(5, None, 1, Ease::Linear, false).is_err());
+        assert_eq!(a.actions[0].frames.len(), 2);
+    }
+
+    #[test]
+    fn layers_only_one_side_has_appear_in_their_half() {
+        let mut a = moving_act();
+        a.actions[0].frames[1].layers.push(Layer {
+            sprite_index: 2,
+            ..Layer::default()
+        });
+        a.interpolate(0, Some(0), 3, Ease::Linear, false).unwrap();
+        let counts: Vec<usize> = a.actions[0].frames.iter().map(|f| f.layers.len()).collect();
+        assert_eq!(counts, [1, 1, 2, 2, 2]);
     }
 }

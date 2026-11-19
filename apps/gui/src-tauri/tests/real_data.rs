@@ -56,6 +56,36 @@ fn search_and_paging_on_200k_entries() {
     assert_eq!(s.search(""), total);
 }
 
+/// The gallery: 96 thumbnails of real pictures and sprites (measured: time, size, failures).
+#[test]
+fn thumbnails_of_real_pictures() {
+    let Some(mut s) = open() else { return };
+    let mut indices = Vec::new();
+    for pattern in ["*.bmp", "*.tga", "*.spr", "*.png", "*.jpg"] {
+        let n = s.search(pattern);
+        indices.extend(s.page(n / 2, 24).into_iter().map(|r| r.index));
+    }
+    let t = Instant::now();
+    let thumbs = s.thumbnails(&indices, 160);
+    let took = t.elapsed();
+    let bytes: usize = thumbs
+        .iter()
+        .filter_map(|t| t.data.as_ref())
+        .map(String::len)
+        .sum();
+    let failed: Vec<_> = thumbs.iter().filter(|t| t.data.is_none()).collect();
+    eprintln!(
+        "{} thumbnails in {took:?}, {} KB as base64, {} failed {:?}",
+        thumbs.len(),
+        bytes / 1024,
+        failed.len(),
+        failed.iter().map(|t| t.error.clone()).collect::<Vec<_>>()
+    );
+    assert_eq!(thumbs.len(), indices.len());
+    assert!(failed.len() * 10 < thumbs.len(), "too many failed");
+    assert!(took.as_millis() < 5000, "took {took:?}");
+}
+
 #[test]
 fn previews_of_real_files() {
     let Some(mut s) = open() else { return };

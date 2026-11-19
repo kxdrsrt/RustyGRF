@@ -241,6 +241,18 @@ pub struct GatMeta {
     pub types: Vec<(i32, String)>,
 }
 
+/// One thumbnail for the gallery; `data` is missing when the entry has none (see `error`).
+#[derive(Serialize, Debug)]
+pub struct ThumbOut {
+    pub index: usize,
+    pub mime: String,
+    pub data: Option<String>,
+    /// Size of the original picture (0 for pictures passed on unchanged).
+    pub width: u32,
+    pub height: u32,
+    pub error: Option<String>,
+}
+
 #[derive(Serialize, Debug, PartialEq, Eq, Default)]
 pub struct Located {
     pub line: Option<usize>,
@@ -1896,6 +1908,7 @@ impl Session {
             ActEdit::RemoveAction => "action removed",
             ActEdit::MoveAction { .. } => "action moved",
             ActEdit::SetInterval { .. } => "interval set",
+            ActEdit::Interpolate { .. } => "in-between frames added",
             ActEdit::SetSound { .. } => "sound set",
         };
         let note = format!("action {action} frame {frame}: {kind}");
@@ -2346,6 +2359,43 @@ impl Session {
         let mut b = bytes[..=dot].to_vec();
         b.extend(new_ext.as_bytes());
         self.arc.find(&GrfPath::new(b))
+    }
+
+    /// Thumbnails of the given entries, made in parallel; a bad entry yields an `error`, never a failure.
+    pub fn thumbnails(&self, indices: &[usize], side: u32) -> Vec<ThumbOut> {
+        use rayon::prelude::*;
+        let side = side.clamp(16, 512);
+        indices
+            .par_iter()
+            .map(|&index| {
+                let made = self
+                    .names
+                    .get(index)
+                    .ok_or_else(|| "no such entry".to_string())
+                    .and_then(|name| {
+                        let data = self.read_working(index)?;
+                        crate::thumb::make(&ext(name), &data, side)
+                    });
+                match made {
+                    Ok(t) => ThumbOut {
+                        index,
+                        mime: t.mime.into(),
+                        data: Some(b64(&t.bytes)),
+                        width: t.width,
+                        height: t.height,
+                        error: None,
+                    },
+                    Err(e) => ThumbOut {
+                        index,
+                        mime: String::new(),
+                        data: None,
+                        width: 0,
+                        height: 0,
+                        error: Some(e),
+                    },
+                }
+            })
+            .collect()
     }
 
     pub fn preview(&self, index: usize, action: Option<usize>) -> Result<Preview, String> {
@@ -3581,6 +3631,26 @@ mod tests {
         assert!(d.name.ends_with(".txt") && d.size > 0 && d.codec == "zlib");
         assert!(s.details(99).is_err());
         assert!(Session::open(&dir.join("missing.grf")).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn thumbnails_of_pictures_and_sprites() {
+        let (dir, grf) = sample("thumbs");
+        let s = Session::open(&grf).unwrap();
+        let ids = [
+            find(&s, "pic.bmp"),
+            find(&s, "a.spr"),
+            find(&s, "readme.txt"),
+            9999,
+        ];
+        let t = s.thumbnails(&ids, 64);
+        assert_eq!(t.len(), 4);
+        // the sample "BMP" is only a header: a bad picture is an error text, not a failure
+        assert!(t[0].data.is_none() && t[0].error.is_some());
+        assert!(t[1].data.is_some() && t[1].mime == "image/png");
+        assert!(t[2].data.is_none() && t[2].error.is_some());
+        assert_eq!(t[3].error.as_deref(), Some("no such entry"));
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -79,6 +79,10 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             let limit: usize = arg(a, "limit")?;
             to_json(s.page_view(arg(a, "view")?, arg(a, "offset")?, limit.min(500)))
         }),
+        "thumbnails" => with(state, |s| {
+            let entries: Vec<usize> = arg(a, "entries")?;
+            to_json(s.thumbnails(&entries, arg(a, "side")?))
+        }),
         "tree_toggle" => with(state, |s| {
             to_json(s.tree_toggle(arg(a, "view")?, &arg::<String>(a, "path")?)?)
         }),

@@ -712,6 +712,33 @@ enum ActCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Add in-between frames: offsets, scale, rotation, colour and anchors move in steps from one
+    /// frame to the next (writes a new file)
+    Interpolate {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long)]
+        action: usize,
+        /// Only between this frame and the next one (default: the whole action)
+        #[arg(long)]
+        frame: Option<usize>,
+        /// In-between frames per pair (1 to 20)
+        #[arg(long, default_value_t = 1)]
+        count: usize,
+        /// Slow at both ends instead of equal steps
+        #[arg(long)]
+        smooth: bool,
+        /// The last frame also blends back into the first (looping actions)
+        #[arg(long)]
+        wrap: bool,
+        /// Whole action only: shorten the frame time so that the animation takes as long as before
+        #[arg(long, conflicts_with = "frame")]
+        keep_speed: bool,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Change colour, scale, rotation or mirroring of layers (writes a new file)
     Layer {
         input: PathBuf,
@@ -1601,6 +1628,35 @@ fn run(cli: &Cli) -> Result<i32> {
                 entry.as_deref(),
                 *action,
                 *value,
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::Interpolate {
+                input,
+                entry,
+                action,
+                frame,
+                count,
+                smooth,
+                wrap,
+                keep_speed,
+                output,
+                overwrite,
+            } => edit_cmd::act_interpolate(
+                input,
+                entry.as_deref(),
+                &edit_cmd::Interpolation {
+                    action: *action,
+                    frame: *frame,
+                    count: *count,
+                    smooth: *smooth,
+                    wrap: *wrap,
+                    keep_speed: *keep_speed,
+                },
                 cli.names,
                 &edit_cmd::ActOut {
                     output,

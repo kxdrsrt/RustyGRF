@@ -151,6 +151,10 @@ Ergebnis der Vorabstimmung 2026-11-18: Bundle-ID `dev.rustygrf.app` bestätigt, 
 - **Verpackung:** macOS `.app`/`.dmg`, Windows `.msi` oder `.exe`-Installer, Linux AppImage/`.deb`. Signierung und Notarisierung (Apple Developer Account, Windows-Zertifikat) brauchen Konten und Geld; ohne sie warnen die Systeme beim ersten Start.
 - **Abnahme:** App startet auf macOS und Windows, öffnet `data.grf` in unter 2 s, Bauen/Merge liefern dieselben Ergebnisse wie die CLI (gleiche Hashes), App-Icon und Name erscheinen in Dock/Taskleiste/Installer.
 
+## Galerie und Zwischenbilder (2026-11-19)
+- **Galerie ✅:** fünfte Ansicht in der GUI (Vorschaubilder im Raster, siehe [apps/gui/README.md](../apps/gui/README.md)); Vorschaubilder erzeugt das Backend parallel (`thumb.rs`, Mittelwert-Verkleinerung, Magenta durchsichtig). **Gemessen:** 120 Bilder in 12 ms. Cache nur im Speicher.
+- **ACT-Zwischenbilder ✅:** `rgrf act interpolate` und „In-betweens…“ im ACT-Editor, Einzelheiten in der [Funktionsmatrix](10-feature-matrix.md). Keine Skriptsprache.
+
 ## Kleinster Client (2026-11-19)
 Ziel: alle GRFs eines Clients so klein wie möglich, **ohne spürbaren Qualitätsverlust**. Testclient `client-dev/test-smallest/` (Kopie von `test-lzma`, damit LZMA-`cps.dll`; `test-lzma` und `full` bleiben unverändert). Erzeugt mit der CLI:
 - `cdata`, `core`: `rgrf image reduce … --method lzma --recompress` (BMPs ab 40 dB als 8 Bit, alles andere neu mit LZMA);

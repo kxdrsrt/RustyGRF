@@ -414,6 +414,42 @@ pub fn act_interval(
     )
 }
 
+pub struct Interpolation {
+    pub action: usize,
+    pub frame: Option<usize>,
+    pub count: usize,
+    pub smooth: bool,
+    pub wrap: bool,
+    pub keep_speed: bool,
+}
+
+pub fn act_interpolate(
+    input: &Path,
+    entry: Option<&str>,
+    what: &Interpolation,
+    names: NameMode,
+    out: &ActOut<'_>,
+) -> Result<i32> {
+    let mut act = act_from(input, entry, names)?;
+    let ease = if what.smooth {
+        rgrf_formats::edit::Ease::Smooth
+    } else {
+        rgrf_formats::edit::Ease::Linear
+    };
+    let added = act.interpolate(what.action, what.frame, what.count, ease, what.wrap)?;
+    if what.keep_speed {
+        let a = &mut act.actions[what.action];
+        a.interval = (a.interval / (what.count + 1) as f32).max(1.0);
+    }
+    let frames = act.actions[what.action].frames.len();
+    save_act(
+        &act,
+        "act interpolate",
+        out,
+        serde_json::json!({"action": what.action, "added": added, "frames": frames}),
+    )
+}
+
 pub fn act_copy_action(
     input: &Path,
     entry: Option<&str>,

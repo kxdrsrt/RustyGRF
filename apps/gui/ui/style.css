@@ -190,6 +190,31 @@ main.pv-bottom #split-main { cursor: row-resize; width: auto; height: 6px; }
 .row .name { overflow: hidden; text-overflow: ellipsis; }
 .row .size { color: var(--muted); font-variant-numeric: tabular-nums; }
 .row .icon { text-align: center; opacity: 0.8; }
+.row.gcell {
+  right: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 6px 6px 4px;
+  box-sizing: border-box;
+  border-radius: 6px;
+}
+.gcell .gthumb {
+  height: 96px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 4px;
+  background: repeating-conic-gradient(var(--hover) 0% 25%, transparent 0% 50%) 0 0 / 12px 12px;
+}
+.gcell .gthumb img { max-width: 100%; max-height: 100%; display: block; }
+.gcell .gthumb .icon { opacity: 0.5; }
+.gcell .gthumb .icon .ic { width: 28px; height: 28px; }
+.gcell .gname { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.gcell .gsub { font-size: 11px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+.row.gcell.changed { box-shadow: inset 0 0 0 2px var(--accent); }
 
 #preview-pane { display: grid; grid-template-rows: auto 1fr; min-width: 0; min-height: 0; }
 #preview-head { padding: 10px 14px 6px; border-bottom: 1px solid var(--line); min-height: 46px; }
@@ -397,6 +422,7 @@ button.small.on { background: var(--accent); border-color: var(--accent); color:
 .settings .accents { display: flex; gap: 8px; }
 .settings .accents button { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
 .settings .accents button.on { border-color: var(--text); }
+#dlg-body label.check { display: flex; gap: 8px; align-items: center; cursor: pointer; margin: 6px 0; }
 .settings label.check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 #settings-dlg { width: min(680px, calc(100vw - 48px)); }
 #settings-body { max-height: calc(100vh - 210px); overflow: auto; padding-right: 4px; }

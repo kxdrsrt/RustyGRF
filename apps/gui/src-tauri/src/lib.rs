@@ -6,6 +6,7 @@ pub mod draft;
 pub mod gat_editor;
 pub mod pal_editor;
 pub mod spr_editor;
+pub mod thumb;
 pub mod view;
 
 use std::path::PathBuf;
@@ -102,6 +103,16 @@ async fn page_view(
         Ok(s.page_view(view, offset, limit.min(500)))
     })
     .await
+}
+
+/// Thumbnails of entries for the gallery view (the longer side is at most `side` pixels).
+#[tauri::command]
+async fn thumbnails(
+    state: State<'_, AppState>,
+    entries: Vec<usize>,
+    side: u32,
+) -> Res<Vec<backend::ThumbOut>> {
+    with_session(&state, move |s| Ok(s.thumbnails(&entries, side))).await
 }
 
 /// Opens or closes a folder of a tree list; returns the number of lines.
@@ -796,6 +807,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         item("layout-folders", "As Folders", Some("CmdOrCtrl+2"))?,
         item("layout-list", "As List", Some("CmdOrCtrl+3"))?,
         item("layout-details", "As Details", Some("CmdOrCtrl+4"))?,
+        item("layout-gallery", "As Gallery", Some("CmdOrCtrl+5"))?,
         sep()?,
         item("preview-right", "Preview on the Right", None)?,
         item("preview-bottom", "Preview at the Bottom", None)?,
@@ -880,6 +892,7 @@ pub fn run() {
             set_names,
             set_view,
             page_view,
+            thumbnails,
             tree_toggle,
             tree_set_all,
             locate,
