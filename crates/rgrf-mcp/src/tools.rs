@@ -75,8 +75,8 @@ const LEVEL: Param = opt(
 );
 const FORMAT: Param = opt(
     "format",
-    Ty::Enum(&["0x200", "0x300"]),
-    "Archive version: 0x200 (max 4 GiB, all clients) or 0x300 (newer clients).",
+    Ty::Enum(&["0x200", "0x300", "0x102", "0x103"]),
+    "Archive version: 0x200 (max 4 GiB, all clients), 0x300 (newer clients), or the old 0x102/0x103 (scrambled, for very old clients and tools).",
 );
 const DEDUPE: Param = opt(
     "dedupe",
@@ -735,6 +735,8 @@ fn format(a: &Args) -> Option<Format> {
     a.opt_str("format").and_then(|f| match f {
         "0x200" => Some(Format::V200),
         "0x300" => Some(Format::V300),
+        "0x102" => Some(Format::V102),
+        "0x103" => Some(Format::V103),
         _ => None,
     })
 }

@@ -230,3 +230,83 @@ fn des_entries_of_a_0x200_archive_are_readable_and_copied_unchanged() {
     assert!(g.entry(2).unwrap().needs_key());
     assert!(g.entries().iter().filter(|e| e.needs_key()).count() == 1);
 }
+
+#[test]
+fn repack_writes_0x102_and_0x103_that_read_back_identically() {
+    // a 0x200 source with a stored-uncompressed entry, shared content and a head-only extension
+    let (a, b) = (text(6000), text(2500));
+    let mut raw = file("data\\raw.bin", &b);
+    raw.stream = Stream::Literal(b.clone());
+    raw.flags = 0;
+    let src = open(&[
+        file("data\\a.txt", &a),
+        file("data\\b.gat", &b),
+        file("data\\copy.txt", &a),
+        raw,
+        file("data\\empty.txt", b""),
+    ]);
+    for format in [Format::V102, Format::V103] {
+        let dir = tmpdir("legacy-write");
+        let dst = dir.join("out.grf");
+        let o = RepackOptions {
+            format: Some(format),
+            ..RepackOptions::default()
+        };
+        let r = repack(&src, &dst, &o, &Control::default()).unwrap();
+        assert!(r.verified);
+        let out = Archive::open(&dst).unwrap();
+        assert!(out.header().is_legacy());
+        assert_eq!(out.header().version, format.version());
+        assert_eq!(out.len(), src.len());
+        for i in 0..src.len() {
+            let e = out.entry(i).unwrap();
+            assert_eq!(e.name, src.entry(i).unwrap().name);
+            assert!(e.is_des(), "entry {i} is scrambled");
+            assert_eq!(out.read(i).unwrap().data, src.read(i).unwrap().data, "{i}");
+        }
+        // head-only extensions use flags 5, the rest 3; stored-uncompressed keeps no FILE bit
+        let flags: Vec<u8> = out.entries().iter().map(|e| e.flags).collect();
+        assert_eq!(flags, [0x03, 0x05, 0x03, 0x02, 0x03]);
+        let rep = verify(&out, VerifyOptions::default(), &Control::default()).unwrap();
+        assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
+
+        // and back: legacy to 0x200 and to legacy again
+        let back = dir.join("back.grf");
+        let o = RepackOptions {
+            format: Some(Format::V200),
+            ..RepackOptions::default()
+        };
+        repack(&out, &back, &o, &Control::default()).unwrap();
+        let back = Archive::open(&back).unwrap();
+        for i in 0..src.len() {
+            assert_eq!(back.read(i).unwrap().data, src.read(i).unwrap().data);
+        }
+        let again = dir.join("again.grf");
+        let o = RepackOptions {
+            format: Some(format),
+            ..RepackOptions::default()
+        };
+        repack(&out, &again, &o, &Control::default()).unwrap();
+        let again = Archive::open(&again).unwrap();
+        assert_eq!(again.len(), src.len());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn a_key_encrypted_entry_cannot_go_into_a_legacy_archive() {
+    let a = text(3000);
+    let mut keyed = file("data\\k.txt", &a);
+    keyed.flags = flags::FILE | flags::GRF_EDITOR_CRYPT;
+    keyed.stream = Stream::Literal(vec![7; 16]);
+    let src = open(&[keyed]);
+    let dir = tmpdir("legacy-key");
+    let o = RepackOptions {
+        format: Some(Format::V103),
+        ..RepackOptions::default()
+    };
+    let e = repack(&src, &dir.join("o.grf"), &o, &Control::default()).unwrap_err();
+    assert!(matches!(e, Error::Unsupported(_)), "{e:?}");
+    assert!(!dir.join("o.grf").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -467,7 +467,7 @@ pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, 
         other => return Err(format!("unknown method '{other}'")),
     };
     let format = Format::parse(&req.format)
-        .ok_or_else(|| format!("unknown format '{}' (0x200 or 0x300)", req.format))?;
+        .ok_or_else(|| format!("unknown format '{}' (0x102, 0x103, 0x200 or 0x300)", req.format))?;
     let opts = BuildOptions {
         method,
         format,

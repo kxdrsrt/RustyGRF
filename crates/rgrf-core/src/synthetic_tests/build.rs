@@ -379,3 +379,34 @@ fn colliding_archive_paths_are_refused_on_every_file_system() {
     assert!(!dir.join("o.grf").exists());
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn builds_legacy_archives_that_read_back() {
+    for format in [Format::V102, Format::V103] {
+        let root = tree("b-legacy");
+        let dst = root.parent().unwrap().join("out.grf");
+        let r = build(
+            &root,
+            &dst,
+            &BuildOptions {
+                dedupe: true,
+                ..opts(Method::Zlib { level: 9 }, format)
+            },
+            &Control::default(),
+        )
+        .unwrap();
+        assert!(r.verified);
+        let g = Archive::open(&dst).unwrap();
+        assert_eq!(g.header().version, format.version());
+        assert_eq!(g.len(), 5);
+        assert_eq!(g.read(0).unwrap().data, text(4000, 1));
+        assert_eq!(g.read(1).unwrap().data, b"");
+        assert_eq!(g.read(4).unwrap().data, text(2500, 4));
+        // the .act file gets the head-only scrambling
+        assert_eq!(g.entry(3).unwrap().flags, 0x05);
+        assert_eq!(g.entry(0).unwrap().flags, 0x03);
+        let rep = verify(&g, VerifyOptions::default(), &Control::default()).unwrap();
+        assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
+        fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+}

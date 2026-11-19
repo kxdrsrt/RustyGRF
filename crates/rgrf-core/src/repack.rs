@@ -456,6 +456,17 @@ pub(crate) fn write_selection<R: ReadAt>(
         return Err(Error::TargetExists(dst.display().to_string()));
     }
 
+    // The scrambling of 0x102/0x103 depends on the name, so blocks cannot be shared.
+    let legacy_opts;
+    let opts = if format.is_legacy() && opts.dedupe != Dedupe::None {
+        legacy_opts = RepackOptions {
+            dedupe: Dedupe::None,
+            ..opts.clone()
+        };
+        &legacy_opts
+    } else {
+        opts
+    };
     let units = plan_units(s, opts, ctl)?;
     let mut markers = 0;
     for i in 0..s.len() {
@@ -526,6 +537,11 @@ fn write_all<R: ReadAt>(
         total,
         ctl,
         &|u| prepare(s, u, &units[u], opts),
+        &|u| {
+            s.name(units[u].members[0])
+                .expect("unit members are selected entries")
+                .clone()
+        },
         &mut |batch| {
             for p in batch {
                 match p.kind {

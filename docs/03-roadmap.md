@@ -122,7 +122,8 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 
 ## M6 – Verschlüsselung, 0x300, Thor
 - **Teilweise umgesetzt (2026-11-19):** GRF 0x102/0x103 und das alte DES (Flags 3/5) werden gelesen (`event.grf`, `rdata.grf`: CRC32 wie GRF Editor); Thor (0x30/0x21), RGZ und GPF werden gelesen und mit `thor create`/`rgz create` erzeugt (gegen Dateien von GRF Editors `GrfCL` geprüft, nicht gegen Dateien echter Patcher); Löschanweisungen von Patches wirken in `merge`. Details und Grenzen: [02-format-notes.md](02-format-notes.md).
-- **Offen:** 0x102/0x103 schreiben; GRF Editors Verschlüsselung (Flag 0x20) und Gravitys Schutz (Flag 0x80, Schlüsselblock von 0x300) – nur auf Wunsch, mit Tests an echten Archiven und unter Beachtung der einen `cps.dll` im Client.
+- **Umgesetzt (2026-11-19):** 0x102/0x103 schreiben (`--format 0x102|0x103`, von GrfCL gegengelesen).
+- **Offen:** GRF Editors Verschlüsselung (Flag 0x20) und Gravitys Schutz (Flag 0x80, Schlüsselblock von 0x300) – nur auf Wunsch, mit Tests an echten Archiven und unter Beachtung der einen `cps.dll` im Client.
 
 ## M7 – Formate und All-in-one (Entscheidung D16, 2026-11-18)
 **Ziel (von dir bestätigt):** ein Werkzeug statt GRF Editor + ACT Editor + Palette Editor + Einzelskripte. Reihenfolge nach Abhängigkeit; je Teil zuerst Bibliothek (`rgrf-core`/Format-Crates), dann CLI und MCP, die GUI (M8) setzt darauf auf.

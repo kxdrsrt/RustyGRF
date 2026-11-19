@@ -717,7 +717,7 @@ async function doBuild() {
   const src = await T.dialog.open({ directory: true, multiple: false, title: "Folder to pack (the folder that contains data\\ …)" });
   if (!src) return;
   const method = el("select", {}, el("option", { value: "zlib", text: "zlib (every client)", selected: true }), el("option", { value: "zopfli", text: "zopfli (smaller, slow, zlib-compatible)" }), el("option", { value: "lzma", text: "LZMA (only clients with LZMA support)" }));
-  const format = el("select", {}, el("option", { value: "0x200", text: "0x200 (every client)", selected: true }), el("option", { value: "0x300", text: "0x300 (64-bit offsets, for archives over 4 GB)" }));
+  const format = el("select", {}, el("option", { value: "0x200", text: "0x200 (every client)", selected: true }), el("option", { value: "0x300", text: "0x300 (64-bit offsets, for archives over 4 GB)" }), el("option", { value: "0x103", text: "0x103 (old format, scrambled, for very old clients)" }), el("option", { value: "0x102", text: "0x102 (old format, scrambled)" }));
   const dedupe = el("input", { type: "checkbox" });
   const body = [
     el("p", { text: `Pack ${src}` }),

@@ -276,7 +276,7 @@ pub fn parse_entries(table: &[u8], count: usize, tail_len: usize) -> Result<Vec<
 const LEGACY_FILE: u8 = 1;
 
 /// Extensions whose legacy entries only have their first 20 blocks scrambled.
-fn legacy_head_only(name: &[u8]) -> bool {
+pub(crate) fn legacy_head_only(name: &[u8]) -> bool {
     let n = name.len();
     n > 4
         && [&b".gnd"[..], b".gat", b".act", b".str"]

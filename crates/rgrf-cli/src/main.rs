@@ -121,7 +121,7 @@ enum Cmd {
         /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
         #[arg(long)]
         level: Option<u32>,
-        /// 0x200 (32-bit offsets, max 4 GiB) or 0x300 (default: same as the source)
+        /// 0x200 (32-bit offsets, max 4 GiB), 0x300, or the old 0x102/0x103 (default: 0x200 or 0x300 as the source)
         #[arg(long, value_parser = parse_format)]
         format: Option<Format>,
         /// Pad streams to a multiple of 8 (default: yes for 0x200, no for 0x300, as in real archives)
@@ -189,7 +189,7 @@ enum Cmd {
         /// zlib: 0-9 (default 9); zopfli: iterations (default 10); lzma: preset 0-9 (default 9)
         #[arg(long)]
         level: Option<u32>,
-        /// 0x200 (default, 32-bit offsets, max 4 GiB) or 0x300
+        /// 0x200 (default, 32-bit offsets, max 4 GiB), 0x300, or the old 0x102/0x103
         #[arg(long, value_parser = parse_format, default_value = "0x200")]
         format: Format,
         /// Pad streams to a multiple of 8 (default: yes for 0x200, no for 0x300)
@@ -584,7 +584,7 @@ enum SprCmd {
 }
 
 fn parse_format(s: &str) -> Result<Format, String> {
-    Format::parse(s).ok_or_else(|| format!("unknown format '{s}' (0x200 or 0x300)"))
+    Format::parse(s).ok_or_else(|| format!("unknown format '{s}' (0x102, 0x103, 0x200 or 0x300)"))
 }
 
 #[derive(Clone, Copy, ValueEnum)]

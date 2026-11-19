@@ -220,7 +220,8 @@ struct Unit {
 }
 
 fn plan_units(items: &[Item], opts: &BuildOptions, ctl: &Control) -> Result<Vec<Unit>> {
-    if !opts.dedupe {
+    // 0x102/0x103 scramble data depending on the name, so blocks cannot be shared
+    if !opts.dedupe || opts.format.is_legacy() {
         return Ok((0..items.len())
             .map(|i| Unit {
                 members: vec![i],
@@ -365,6 +366,7 @@ fn write_all(
         units.len() as u64,
         ctl,
         &|u| prepare(items, u, &units[u], opts),
+        &|u| items[units[u].members[0]].name.clone(),
         &mut |batch| stream_bytes += batch.iter().map(|p| p.stream.len() as u64).sum::<u64>(),
     )?;
     let mut placed: Vec<Option<Placed>> = vec![None; units.len()];

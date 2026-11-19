@@ -9,7 +9,10 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
-use crate::error::Result;
+use crate::container::{flags, legacy_head_only};
+use crate::des;
+use crate::error::{Error, Result};
+use crate::name::{GrfPath, NameMode};
 use crate::progress::Control;
 use crate::writer::{Placed, Writer};
 
@@ -86,6 +89,31 @@ pub(crate) fn batches(sizes: impl Iterator<Item = u64>) -> Vec<Range<usize>> {
     out
 }
 
+/// Scrambles a block for a 0x102/0x103 archive, as GRF Editor does: only the first 20 blocks for
+/// `.gnd .gat .act .str` (and short names), else a cycle derived from the stored size. Blocks that
+/// are already scrambled (copied DES entries) stay as they are. Returns the sizes to record.
+fn legacy_scramble(name: &GrfPath, p: &mut Prepared) -> Result<Option<(u32, u32)>> {
+    if p.flags & flags::ANY_CRYPT != 0 {
+        if p.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT) != 0 {
+            return Err(Error::Unsupported(format!(
+                "{} is encrypted with a key; the 0x102/0x103 format cannot hold it",
+                name.display(NameMode::Cp1252)
+            )));
+        }
+        return Ok(p.raw);
+    }
+    let zsize = p.raw.map_or(p.stream.len(), |r| r.0 as usize) as u32;
+    let name = name.as_bytes();
+    let cycle = if legacy_head_only(name) || name.len() <= 4 {
+        des::Cycle::Head
+    } else {
+        des::Cycle::for_size(zsize)
+    };
+    p.stream.resize(p.stream.len().div_ceil(8) * 8, 0);
+    des::encrypt_data(&mut p.stream, cycle);
+    Ok(Some((zsize, p.stream.len() as u32)))
+}
+
 /// Prepares every unit of every batch with `prepare` (in parallel inside a batch) and writes the
 /// results in order. `on_batch` sees each finished batch before it is written (for statistics).
 pub(crate) fn run(
@@ -94,6 +122,7 @@ pub(crate) fn run(
     total: u64,
     ctl: &Control,
     prepare: &(dyn Fn(usize) -> Result<Prepared> + Sync),
+    name_of: &(dyn Fn(usize) -> GrfPath + Sync),
     on_batch: &mut dyn FnMut(&[Prepared]),
 ) -> Result<(Sink, Vec<Written>)> {
     let (tx, rx) = mpsc::sync_channel::<Vec<Prepared>>(1);
@@ -102,7 +131,10 @@ pub(crate) fn run(
         let handle = scope.spawn(move || {
             let mut done = Vec::new();
             for batch in rx {
-                for p in batch {
+                for mut p in batch {
+                    if writer.is_legacy() {
+                        p.raw = legacy_scramble(&name_of(p.unit), &mut p)?;
+                    }
                     let pl = match p.raw {
                         Some((zsize, aligned)) => writer.put_raw(&p.stream, zsize, aligned)?,
                         None => writer.put_stream(&p.stream)?,

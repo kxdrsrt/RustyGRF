@@ -13,6 +13,10 @@ use crate::name::GrfPath;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
+    /// Old format of the first clients (and `event.grf`): scrambled names, plain file table, DES
+    /// scrambled file data. 0x102 and 0x103 differ only in the version number.
+    V102,
+    V103,
     /// 32-bit offsets, limit 4 GiB; the format `alpha.exe` and other older clients read.
     V200,
     /// 64-bit offsets ("Event Horizon"); read by current kRO clients and GRF Editor.
@@ -22,6 +26,8 @@ pub enum Format {
 impl Format {
     pub fn version(self) -> u32 {
         match self {
+            Self::V102 => 0x102,
+            Self::V103 => 0x103,
             Self::V200 => 0x200,
             Self::V300 => 0x300,
         }
@@ -29,6 +35,8 @@ impl Format {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().trim_start_matches("0x") {
+            "102" => Some(Self::V102),
+            "103" => Some(Self::V103),
             "200" | "2" => Some(Self::V200),
             "300" | "3" => Some(Self::V300),
             _ => None,
@@ -38,13 +46,18 @@ impl Format {
     /// Whether the stored compressed size is rounded up to a multiple of 8 by default. Measured:
     /// official 0x200 archives round up (and pad), the current kRO 0x300 archive does not.
     pub fn aligns_by_default(self) -> bool {
-        self == Self::V200
+        self != Self::V300
+    }
+
+    /// 0x102/0x103: file data is DES scrambled on writing, the table is plain.
+    pub fn is_legacy(self) -> bool {
+        matches!(self, Self::V102 | Self::V103)
     }
 
     /// Largest file size the format can address (the client uses 32-bit positions for 0x200).
     fn max_file_len(self) -> u64 {
         match self {
-            Self::V200 => u64::from(u32::MAX),
+            Self::V102 | Self::V103 | Self::V200 => u64::from(u32::MAX),
             Self::V300 => u64::MAX,
         }
     }
@@ -87,10 +100,15 @@ impl<W: Write + Seek> Writer<W> {
         Ok(Self {
             out,
             format,
-            align,
+            // the DES blocks of the legacy formats need the alignment
+            align: align || format.is_legacy(),
             max_file_len: max_file_len.unwrap_or_else(|| format.max_file_len()),
             data_len: 0,
         })
+    }
+
+    pub fn is_legacy(&self) -> bool {
+        self.format.is_legacy()
     }
 
     pub fn data_len(&self) -> u64 {
@@ -142,6 +160,9 @@ impl<W: Write + Seek> Writer<W> {
 
     /// Writes the file table and the header; returns the final file length and the output.
     pub fn finish(mut self, entries: &[OutEntry]) -> Result<(u64, W)> {
+        if self.format.is_legacy() {
+            return self.finish_legacy(entries);
+        }
         let tail = if self.format == Format::V300 { 21 } else { 17 };
         let mut table = Vec::with_capacity(entries.len() * (tail + 48));
         for e in entries {
@@ -153,7 +174,7 @@ impl<W: Write + Seek> Writer<W> {
             table.push(e.flags);
             match self.format {
                 Format::V300 => table.extend_from_slice(&e.placed.offset.to_le_bytes()),
-                Format::V200 => table.extend_from_slice(
+                _ => table.extend_from_slice(
                     &u32::try_from(e.placed.offset)
                         .map_err(|_| Error::TooLarge("entry offset does not fit 32 bits".into()))?
                         .to_le_bytes(),
@@ -192,21 +213,84 @@ impl<W: Write + Seek> Writer<W> {
             u32::try_from(entries.len()).map_err(|_| Error::TooLarge("too many entries".into()))?;
         let mut h = Vec::with_capacity(HEADER_LEN as usize);
         match self.format {
-            Format::V200 => h.extend_from_slice(b"Master of Magic\0"),
             Format::V300 => h.extend_from_slice(b"Event Horizon\0c\0"),
+            _ => h.extend_from_slice(b"Master of Magic\0"),
         }
         h.extend(1..=14u8);
         match self.format {
-            Format::V200 => {
-                h.extend_from_slice(&(self.data_len as u32).to_le_bytes());
-                h.extend_from_slice(&0u32.to_le_bytes());
-                h.extend_from_slice(&(count + 7).to_le_bytes());
-            }
             Format::V300 => {
                 h.extend_from_slice(&self.data_len.to_le_bytes());
                 h.extend_from_slice(&count.to_le_bytes());
             }
+            _ => {
+                h.extend_from_slice(&(self.data_len as u32).to_le_bytes());
+                h.extend_from_slice(&0u32.to_le_bytes());
+                h.extend_from_slice(&(count + 7).to_le_bytes());
+            }
         }
+        h.extend_from_slice(&self.format.version().to_le_bytes());
+        debug_assert_eq!(h.len() as u64, HEADER_LEN);
+        self.out.seek(SeekFrom::Start(0))?;
+        self.out.write_all(&h)?;
+        self.out.flush()?;
+        Ok((total, self.out))
+    }
+}
+
+impl<W: Write + Seek> Writer<W> {
+    /// 0x102/0x103: `[u32 len][u16 0][name, DES][u32 0][zsize+size+715][aligned+37579][size][type]
+    /// [u32 offset]` per entry, no compression and no size prefix. Empty markers are left out (the
+    /// format has no way to tell them from folders).
+    fn finish_legacy(mut self, entries: &[OutEntry]) -> Result<(u64, W)> {
+        let mut table = Vec::with_capacity(entries.len() * 64);
+        let mut count = 0u32;
+        for e in entries {
+            let marker =
+                e.flags & crate::container::flags::FILE == 0 && e.placed.zsize == 0 && e.size == 0;
+            if marker || e.flags & crate::container::flags::REMOVE != 0 {
+                continue;
+            }
+            count += 1;
+            let name = crate::des::encode_name(e.name.as_bytes());
+            let too_large = |what: &str| Error::TooLarge(format!("{what} does not fit 32 bits"));
+            let name_len = u32::try_from(name.len() + 6).map_err(|_| too_large("name"))?;
+            let packed = e
+                .placed
+                .zsize
+                .checked_add(e.size)
+                .and_then(|v| v.checked_add(715))
+                .ok_or_else(|| too_large("the sum of the sizes"))?;
+            let aligned = e
+                .placed
+                .aligned
+                .checked_add(37579)
+                .ok_or_else(|| too_large("the aligned size"))?;
+            let offset =
+                u32::try_from(e.placed.offset).map_err(|_| too_large("an entry offset"))?;
+            table.extend_from_slice(&name_len.to_le_bytes());
+            table.extend_from_slice(&0u16.to_le_bytes());
+            table.extend_from_slice(&name);
+            table.extend_from_slice(&0u32.to_le_bytes());
+            table.extend_from_slice(&packed.to_le_bytes());
+            table.extend_from_slice(&aligned.to_le_bytes());
+            table.extend_from_slice(&e.size.to_le_bytes());
+            table.push(u8::from(e.flags & crate::container::flags::FILE != 0));
+            table.extend_from_slice(&offset.to_le_bytes());
+        }
+        let total = HEADER_LEN + self.data_len + table.len() as u64;
+        if total > self.max_file_len {
+            return Err(Error::TooLarge(format!(
+                "the archive would be {total} bytes, over the limit of {} bytes for this format",
+                self.max_file_len
+            )));
+        }
+        self.out.write_all(&table)?;
+        let mut h = Vec::with_capacity(HEADER_LEN as usize);
+        h.extend_from_slice(b"Master of Magic\0");
+        h.extend(1..=14u8);
+        h.extend_from_slice(&(self.data_len as u32).to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h.extend_from_slice(&(count + 7).to_le_bytes());
         h.extend_from_slice(&self.format.version().to_le_bytes());
         debug_assert_eq!(h.len() as u64, HEADER_LEN);
         self.out.seek(SeekFrom::Start(0))?;
@@ -374,7 +458,9 @@ mod tests {
     fn format_parsing() {
         assert_eq!(Format::parse("0x200"), Some(Format::V200));
         assert_eq!(Format::parse("300"), Some(Format::V300));
-        assert_eq!(Format::parse("0x103"), None);
+        assert_eq!(Format::parse("0x103"), Some(Format::V103));
+        assert_eq!(Format::parse("0x102"), Some(Format::V102));
+        assert_eq!(Format::parse("0x104"), None);
         assert!(Format::V200.aligns_by_default() && !Format::V300.aligns_by_default());
     }
 }
