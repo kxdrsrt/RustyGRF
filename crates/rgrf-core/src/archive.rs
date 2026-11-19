@@ -6,6 +6,7 @@ use crate::codec::{self, Decoded};
 use crate::container::{self, Entry, Header, TableInfo};
 use crate::des;
 use crate::error::{Error, Result};
+use crate::gravity;
 use crate::grfcrypt::{self, Key};
 use crate::io::{ReadAt, Source};
 use crate::name::{GrfPath, NameMode, glob_match};
@@ -24,6 +25,16 @@ pub struct Archive<R: ReadAt = Source> {
     file_len: u64,
     max_entry_size: u64,
     crypt: Option<Crypt>,
+    protected: Protected,
+}
+
+/// The key block of a 0x300 archive (Gravity's protected entries) and what could be read from it.
+#[derive(Default)]
+struct Protected {
+    block: Vec<u8>,
+    keys: gravity::ArchiveKeys,
+    /// Why the block could not be read (its entries that need an archive key then fail).
+    error: Option<String>,
 }
 
 /// State of an archive with GRF Editor's encryption (it has the hidden `__encryption.info` entry).
@@ -98,9 +109,43 @@ impl<R: ReadAt> Archive<R> {
             file_len: c.file_len,
             max_entry_size: DEFAULT_MAX_ENTRY_SIZE,
             crypt: None,
+            protected: Protected::default(),
         };
+        a.read_key_block();
         a.detect_encryption();
         a
+    }
+
+    /// Reads the key block behind the file table of a 0x300 archive (none in older versions).
+    fn read_key_block(&mut self) {
+        let t = self.table;
+        if t.key_block == 0 {
+            return;
+        }
+        let at = t.abs_offset + u64::from(t.prefix_len) + u64::from(t.zsize);
+        let mut block = vec![0u8; t.key_block as usize];
+        if let Err(e) = self.src.read_exact_at(&mut block, at) {
+            self.protected.error = Some(format!("key block cannot be read: {e}"));
+            return;
+        }
+        match gravity::decode_archive_keys(&block) {
+            Ok(keys) => self.protected.keys = keys,
+            Err(e) => self.protected.error = Some(e.to_string()),
+        }
+        self.protected.block = block;
+    }
+
+    /// The raw key block behind the file table (empty when there is none).
+    pub fn key_block(&self) -> &[u8] {
+        &self.protected.block
+    }
+
+    /// How many archive keys the key block holds, or why it could not be read.
+    pub fn protected_keys(&self) -> std::result::Result<usize, &str> {
+        match &self.protected.error {
+            Some(e) => Err(e),
+            None => Ok(self.protected.keys.len()),
+        }
     }
 
     /// Looks for the hidden entry of GRF Editor's encryption and, if it is there, for the entries
@@ -309,6 +354,34 @@ impl<R: ReadAt> Archive<R> {
                     e.size, e.zsize, self.max_entry_size
                 )),
             });
+        }
+        if e.is_protected() {
+            let raw = self.read_raw(index)?;
+            return Ok(
+                match gravity::decode(
+                    &raw,
+                    e.name.as_bytes(),
+                    e.size as usize,
+                    &self.protected.keys,
+                ) {
+                    Ok(data) => Decoded {
+                        data,
+                        status: codec::DecodeStatus::Ok,
+                    },
+                    // a variant that is not ported (jRO): readable for GRF Editor, not here
+                    Err(gravity::GravityError::Unsupported(_)) => Decoded {
+                        data: Vec::new(),
+                        status: codec::DecodeStatus::Encrypted,
+                    },
+                    Err(gravity::GravityError::Invalid(m)) => Decoded {
+                        data: Vec::new(),
+                        status: codec::DecodeStatus::Corrupt(match &self.protected.error {
+                            Some(k) => format!("protected entry: {m} ({k})"),
+                            None => format!("protected entry: {m}"),
+                        }),
+                    },
+                },
+            );
         }
         if let Some(cycle) = e.des_cycle() {
             // the scrambling covers the stored bytes including the alignment padding

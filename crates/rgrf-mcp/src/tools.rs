@@ -474,6 +474,8 @@ fn kind(e: &Entry) -> &'static str {
         "marker"
     } else if e.is_raw() {
         "raw"
+    } else if e.is_protected() {
+        "protected"
     } else if e.needs_key() {
         "encrypted"
     } else if e.is_des() {
@@ -534,6 +536,8 @@ fn info(ctx: &Ctx, a: &Args) -> Out {
         "stored_uncompressed": es.iter().filter(|e| e.is_raw()).count(),
         "encrypted": es.iter().filter(|e| e.needs_key()).count(),
         "des_scrambled": es.iter().filter(|e| e.is_des()).count(),
+        "gravity_protected": es.iter().filter(|e| e.is_protected()).count(),
+        "archive_keys": arc.protected_keys().ok(),
         "entries_sharing_data": shared,
         "packed_bytes": es.iter().map(|e| u64::from(e.zsize)).sum::<u64>(),
         "unpacked_bytes": es.iter().map(|e| u64::from(e.size)).sum::<u64>(),
@@ -853,6 +857,7 @@ fn repack_json(r: &RepackReport, output: &std::path::Path) -> Value {
         "kept_original_streams": r.kept_original, "re_encoded": r.recompressed,
         "copied_unchanged": {
             "stored_uncompressed": r.stored_blocks, "encrypted": r.encrypted_blocks,
+            "protected_decoded": r.unprotected,
             "damaged": r.damaged.len(),
         },
         "input_file_bytes": r.source_file_len, "output_file_bytes": r.output_file_len,

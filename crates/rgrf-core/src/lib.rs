@@ -10,6 +10,7 @@ pub mod edit;
 pub mod encode;
 pub mod error;
 pub mod extract;
+pub mod gravity;
 pub mod grfcrypt;
 pub mod hash;
 pub mod io;

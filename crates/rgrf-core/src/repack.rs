@@ -17,7 +17,7 @@ use crate::container::{Entry, flags};
 use crate::encode::{Method, encode};
 use crate::error::{Error, Result};
 use crate::io::ReadAt;
-use crate::name::GrfPath;
+use crate::name::{GrfPath, NameMode};
 use crate::pipeline::{self, Expected, Kind, Prepared, sha, status_class};
 use crate::progress::Control;
 use crate::writer::{Format, OutEntry, Placed, Writer};
@@ -96,6 +96,10 @@ pub struct RepackReport {
     pub damaged: Vec<usize>,
     /// Blocks whose original stream was kept (same codec, not larger).
     pub kept_original: usize,
+    /// Gravity's protected entries that were decoded and stored as ordinary files (the output is
+    /// not 0x300, sources with different key blocks, or a merge renamed them). Those copied as
+    /// they are count as `encrypted_blocks`.
+    pub unprotected: usize,
     pub recompressed: usize,
     pub source_file_len: u64,
     /// Sum of the stored sizes of the source blocks that are written (without sharing).
@@ -196,6 +200,7 @@ struct Stats {
     recompressed: usize,
     encrypted: usize,
     stored: usize,
+    unprotected: usize,
     stream_bytes: u64,
     damaged: Vec<usize>,
 }
@@ -277,9 +282,33 @@ pub(crate) fn prepare<R: ReadAt>(
     unit_id: usize,
     unit: &Unit,
     opts: &RepackOptions,
+    keep_protected: bool,
 ) -> Result<Prepared> {
     let rep = unit.members[0];
     let e = s.entry(rep)?;
+    // the protection is bound to the raw name: a renamed entry cannot keep it
+    if e.is_protected() && !(keep_protected && s.name(rep)?.as_bytes() == e.name.as_bytes()) {
+        let d = s.read(rep)?;
+        if !d.status.is_ok() {
+            return Err(Error::Unsupported(format!(
+                "{}: protected entry that cannot be decoded ({:?}); write a 0x300 archive to keep it as it is",
+                e.name.display(NameMode::Cp1252),
+                d.status
+            )));
+        }
+        return Ok(Prepared {
+            unit: unit_id,
+            kind: Kind::Unprotected,
+            expected: if opts.verify {
+                Expected::Data(sha(&d.data), status_class(&d.status))
+            } else {
+                Expected::Nothing
+            },
+            stream: encode(opts.method, &d.data),
+            raw: None,
+            flags: flags::FILE,
+        });
+    }
     let legacy_des = s.is_legacy_des(rep);
     if legacy_des {
         let d = s.read(rep)?;
@@ -487,11 +516,6 @@ pub(crate) fn write_selection<R: ReadAt>(
     } else {
         s
     };
-    if s.sources.iter().any(|a| a.table_info().key_block > 0) {
-        return Err(Error::Unsupported(
-            "a source has a protected-archive key block (not supported yet)".into(),
-        ));
-    }
     let align = opts.align.unwrap_or_else(|| format.aligns_by_default()) || opts.encrypt.is_some();
     if !opts.dry_run && dst.exists() && !opts.overwrite {
         return Err(Error::TargetExists(dst.display().to_string()));
@@ -531,8 +555,36 @@ pub(crate) fn write_selection<R: ReadAt>(
         return Ok(report);
     }
 
+    // Gravity's protected entries stay as they are in a 0x300 output that carries their key
+    // block (one block for all of them); otherwise they are decoded and stored as plain files.
+    let mut blocks: Vec<&[u8]> = Vec::new();
+    for i in 0..s.len() {
+        if s.entry(i)?.is_protected() {
+            let b = s.archive(i).key_block();
+            if !blocks.contains(&b) {
+                blocks.push(b);
+            }
+        }
+    }
+    let keep_protected = format == Format::V300 && blocks.len() <= 1 && opts.encrypt.is_none();
+    let key_block = if keep_protected {
+        blocks.first().map(|b| b.to_vec()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let tmp = pipeline::temp_path(dst);
-    let result = write_all(s, &units, &tmp, format, align, opts, ctl, &mut report);
+    let result = write_all(
+        s,
+        &units,
+        &tmp,
+        format,
+        align,
+        opts,
+        ctl,
+        &mut report,
+        (keep_protected, key_block),
+    );
     match result {
         Ok(()) => {
             pipeline::commit(&tmp, dst, opts.overwrite)?;
@@ -555,14 +607,16 @@ fn write_all<R: ReadAt>(
     opts: &RepackOptions,
     ctl: &Control,
     report: &mut RepackReport,
+    (keep_protected, key_block): (bool, Vec<u8>),
 ) -> Result<()> {
     let file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
-    let writer = Writer::new(
+    let mut writer = Writer::new(
         BufWriter::with_capacity(1 << 20, file),
         format,
         align,
         opts.max_file_len,
     )?;
+    writer.set_key_block(key_block)?;
     let mut placed: Vec<Option<Placed>> = vec![None; units.len()];
     let mut out_flags: Vec<u8> = vec![flags::FILE; units.len()];
     let mut expected: Vec<Expected> = vec![Expected::Nothing; units.len()];
@@ -577,7 +631,7 @@ fn write_all<R: ReadAt>(
         })),
         total,
         ctl,
-        &|u| prepare(s, u, &units[u], opts),
+        &|u| prepare(s, u, &units[u], opts, keep_protected),
         &|u| {
             let m = units[u].members[0];
             (
@@ -595,6 +649,7 @@ fn write_all<R: ReadAt>(
                     Kind::KeptOriginal => stats.kept += 1,
                     Kind::Encrypted => stats.encrypted += 1,
                     Kind::Stored => stats.stored += 1,
+                    Kind::Unprotected => stats.unprotected += 1,
                     Kind::Damaged => stats.damaged.push(units[p.unit].members[0]),
                 }
                 stats.stream_bytes += p.stream.len() as u64;
@@ -649,6 +704,7 @@ fn write_all<R: ReadAt>(
     report.recompressed = stats.recompressed;
     report.encrypted_blocks = stats.encrypted;
     report.stored_blocks = stats.stored;
+    report.unprotected = stats.unprotected;
     report.output_stream_bytes = stats.stream_bytes;
     report.damaged = stats.damaged;
     report.output_file_len = len;

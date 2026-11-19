@@ -135,14 +135,33 @@ pub fn verify<R: ReadAt>(
     }
 
     if a.table_info().key_block > 0 {
+        let protected = a.entries().iter().filter(|e| e.is_protected()).count();
+        let (severity, message) = match a.protected_keys() {
+            Ok(n) => (
+                Severity::Info,
+                format!(
+                    "protected archive: key block of {} bytes with {n} archive keys, {protected} protected entries",
+                    a.table_info().key_block
+                ),
+            ),
+            // only a problem when entries need it
+            Err(e) => (
+                if protected > 0 {
+                    Severity::Warning
+                } else {
+                    Severity::Info
+                },
+                format!(
+                    "protected archive: key block of {} bytes cannot be used ({e}), {protected} protected entries",
+                    a.table_info().key_block
+                ),
+            ),
+        };
         rep.issues.push(Issue {
-            severity: Severity::Info,
+            severity,
             kind: IssueKind::KeyBlock,
             entry: None,
-            message: format!(
-                "protected archive: key block of {} bytes behind the file table (entries with flag 0x80 cannot be decoded yet)",
-                a.table_info().key_block
-            ),
+            message,
         });
     }
 

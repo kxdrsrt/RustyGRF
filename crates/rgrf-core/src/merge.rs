@@ -40,10 +40,16 @@ fn last_by_key<R: ReadAt>(a: &Archive<R>) -> (Vec<usize>, usize) {
 
 /// SHA-256 of what the client would read; of the stored bytes for entries that need a key.
 fn fingerprint<R: ReadAt>(a: &Archive<R>, i: usize) -> Result<[u8; 32]> {
-    if a.entry(i)?.needs_key() {
+    let e = a.entry(i)?;
+    if e.needs_key() {
         return Ok(sha(&a.read_raw_aligned(i)?));
     }
-    Ok(sha(&a.read(i)?.data))
+    let d = a.read(i)?;
+    // a protected entry that cannot be decoded is compared by its stored bytes
+    if e.is_protected() && !d.status.is_ok() {
+        return Ok(sha(&a.read_raw_aligned(i)?));
+    }
+    Ok(sha(&d.data))
 }
 
 #[derive(Debug, Clone, Default)]

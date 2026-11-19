@@ -1791,6 +1791,7 @@ impl Session {
         let codec = match self.arc.sniff_codec(index) {
             Ok(Some(rgrf_core::codec::Codec::Zlib)) => "zlib",
             Ok(Some(rgrf_core::codec::Codec::Lzma)) => "LZMA",
+            _ if e.is_protected() => "Gravity-protected",
             _ => "none",
         };
         Ok(Details {

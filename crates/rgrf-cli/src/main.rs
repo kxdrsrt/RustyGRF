@@ -1033,6 +1033,8 @@ fn entry_json(i: usize, e: &Entry, mode: NameMode) -> Value {
         "marker"
     } else if e.is_raw() {
         "raw"
+    } else if e.is_protected() {
+        "protected"
     } else if e.needs_key() {
         "encrypted"
     } else if e.is_des() {
@@ -1802,6 +1804,7 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
     let raw = es.iter().filter(|e| e.is_raw()).count();
     let encrypted = es.iter().filter(|e| e.needs_key()).count();
     let des = es.iter().filter(|e| e.is_des()).count();
+    let protected = es.iter().filter(|e| e.is_protected()).count();
     let packed: u64 = es.iter().map(|e| u64::from(e.zsize)).sum();
     let unpacked: u64 = es.iter().map(|e| u64::from(e.size)).sum();
     let mut seen = HashSet::new();
@@ -1838,6 +1841,13 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
         });
         if let Some((z, l)) = counts {
             v["codecs"] = json!({"zlib": z, "lzma": l});
+        }
+        if protected > 0 || t.key_block > 0 {
+            v["gravity_protection"] = json!({
+                "protected_entries": protected,
+                "archive_keys": a.protected_keys().ok(),
+                "key_block_error": a.protected_keys().err(),
+            });
         }
         if let Some(e) = a.encryption() {
             v["grf_editor_encryption"] = json!({
@@ -1890,6 +1900,16 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             println!("Key block:  {} bytes (protected archive)", t.key_block);
         }
         println!("Encrypted:  {encrypted}");
+        if protected > 0 || t.key_block > 0 {
+            println!(
+                "Protected:  {protected} entries with Gravity's protection (readable), key block {} bytes: {}",
+                t.key_block,
+                match a.protected_keys() {
+                    Ok(n) => format!("{n} archive keys"),
+                    Err(e) => format!("not usable ({e})"),
+                }
+            );
+        }
         if let Some(e) = a.encryption() {
             println!(
                 "GRF Editor encryption: key CRC32 {}, {} entries encrypted, {}",
@@ -2236,7 +2256,7 @@ fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Res
             "entries": r.entries, "files": r.files, "markers": r.markers,
             "blocks": r.blocks, "shared_files": r.shared_files,
             "encrypted_blocks": r.encrypted_blocks, "damaged_blocks": r.damaged.len(),
-            "stored_blocks": r.stored_blocks,
+            "stored_blocks": r.stored_blocks, "unprotected": r.unprotected,
             "kept_original": r.kept_original, "recompressed": r.recompressed,
             "source_file_bytes": r.source_file_len, "source_stream_bytes": r.source_stream_bytes,
             "output_file_bytes": r.output_file_len, "output_stream_bytes": r.output_stream_bytes,
@@ -2264,6 +2284,12 @@ fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Res
                 r.encrypted_blocks,
                 r.damaged.len()
             );
+            if r.unprotected > 0 {
+                println!(
+                    "Protected: {} entries with Gravity's protection decoded and stored as ordinary files (the output cannot keep it: not 0x300, several key blocks, or renamed)",
+                    r.unprotected
+                );
+            }
             println!(
                 "Size:     file {} -> {} bytes ({:+.1}%), streams {} -> {} bytes ({:+.1}%)",
                 r.source_file_len,
@@ -2376,6 +2402,12 @@ fn write_summary(r: &rgrf_core::repack::RepackReport, output: &Path, secs: f64) 
             r.encrypted_blocks,
             r.damaged.len()
         );
+        if r.unprotected > 0 {
+            println!(
+                "Protected: {} entries with Gravity's protection decoded and stored as ordinary files (the output cannot keep it: not 0x300, several key blocks, or renamed)",
+                r.unprotected
+            );
+        }
         println!(
             "Size:     {} bytes (inputs together {} bytes)",
             r.output_file_len, r.source_file_len

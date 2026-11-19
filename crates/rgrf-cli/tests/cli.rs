@@ -453,7 +453,7 @@ fn diff_merge_and_patch_on_small_archives() {
 
 #[test]
 fn edit_replaces_adds_and_removes_without_touching_the_original() {
-    let dir = tmpdir("edit");
+    let dir = tmpdir("archive-edit");
     let put = |name: &str, data: &str| {
         let p = dir.join("src").join(name);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();

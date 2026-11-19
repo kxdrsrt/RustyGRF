@@ -11,7 +11,7 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 
 | Befehl | Zweck |
 |---|---|
-| `rgrf info <grf>` | Version, Größe, Anzahl Einträge, Kompressionsmethoden, Warnungen |
+| `rgrf info <grf>` | Version, Größe, Anzahl Einträge, Kompressionsmethoden, Warnungen; bei 0x300 mit Schlüsselblock auch Gravitys Schutz (`gravity_protection`: geschützte Einträge, Zahl der Archivschlüssel oder warum der Block nicht nutzbar ist). `ls` zeigt geschützte Einträge als `protected`, `cat`/`extract` entschlüsseln sie; Schreibberichte zählen entschlüsselt gespeicherte als `unprotected` (MCP: `protected_decoded`) |
 | `rgrf ls <grf> [pattern] [--long]` | Einträge auflisten (Glob oder Teilzeichenkette, Größen, Flags, Offset) |
 | `rgrf find <grf> [pattern] [--ext spr,act]` | Suchen (Name, Endung), Ausgabe wie `ls --long` |
 | `rgrf cat <grf> <pfad>` | Eintrag auf stdout |

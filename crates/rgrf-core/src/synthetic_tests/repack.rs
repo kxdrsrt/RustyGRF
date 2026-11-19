@@ -323,21 +323,26 @@ fn dry_run_writes_nothing_and_reports_the_plan() {
 }
 
 #[test]
-fn archives_with_a_key_block_are_refused() {
+fn a_key_block_without_protected_entries_is_dropped() {
     let src = Archive::from_source(build_with(
         &[file("data\\a", &text(100, 1))],
         Layout::V300 { key_block: 32 },
     ))
     .unwrap();
     let dir = tmpdir("keyblock");
-    let err = repack(
+    let r = repack(
         &src,
         &dir.join("o.grf"),
-        &RepackOptions::default(),
+        &opts(Method::Zlib { level: 9 }, Format::V300),
         &Control::default(),
     )
-    .unwrap_err();
-    assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+    .unwrap();
+    assert!(r.verified);
+    let a = Archive::open(dir.join("o.grf")).unwrap();
+    assert_eq!(
+        (a.table_info().key_block, a.read(0).unwrap().data),
+        (0, text(100, 1))
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -361,7 +366,7 @@ fn the_output_check_detects_a_damaged_result() {
     let expected: Vec<_> = units
         .iter()
         .enumerate()
-        .map(|(u, unit)| prepare(&sel, u, unit, &o).unwrap().expected)
+        .map(|(u, unit)| prepare(&sel, u, unit, &o, false).unwrap().expected)
         .collect();
     let (_, out, dir) = run(&src, "tamper", &o);
     let path = dir.join("out.grf");

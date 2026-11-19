@@ -65,12 +65,80 @@ fn key_block_is_accounted_for_and_bounded() {
 }
 
 #[test]
-fn entries_with_the_gravity_flag_are_reported_as_encrypted() {
+fn the_gravity_flag_combined_with_others_stays_unreadable() {
     let mut e = file("data\\protected.lub", &sample());
     e.flags = flags::FILE | flags::GRAVITY_CRYPT;
     let g = open300(&[e], 16);
-    assert!(g.entry(0).unwrap().is_encrypted());
+    let e = g.entry(0).unwrap();
+    assert!(e.is_encrypted() && e.needs_key() && !e.is_protected());
     assert_eq!(g.read(0).unwrap().status, DecodeStatus::Encrypted);
+}
+
+/// A 0x300 archive like GRF Editor's archive test: one protected entry of the vector bundle (raw
+/// CP949 name, archive key block behind the table) and an ordinary entry.
+pub(super) fn protected_archive(
+    tag: &str,
+    with_keys: bool,
+) -> (Vec<u8>, crate::gravity::tests::Vector) {
+    let v = crate::gravity::tests::read_vectors()
+        .into_iter()
+        .find(|v| v.tag == tag)
+        .unwrap();
+    let protected = T {
+        name: v.name.clone(),
+        size: v.size as u32,
+        stream: Stream::Literal(v.payload.clone()),
+        flags: flags::GRAVITY_CRYPT,
+        share_with: None,
+        offset: None,
+        aligned: None,
+    };
+    let keys = if with_keys {
+        v.keys.clone()
+    } else {
+        Vec::new()
+    };
+    let entries = [
+        protected,
+        file("data\\ordinary.txt", b"ordinary GRF contents"),
+    ];
+    let (header, data, mut tail) = build_parts(
+        &entries,
+        Layout::V300 {
+            key_block: keys.len(),
+        },
+    );
+    let n = tail.len();
+    tail[n - keys.len()..].copy_from_slice(&keys);
+    ([header, data, tail].concat(), v)
+}
+
+#[test]
+fn protected_entries_are_read_with_the_archive_key_block() {
+    let (bytes, v) = protected_archive("zlib-rc6-footer", true);
+    let g = Archive::from_source(bytes).unwrap();
+    let e = g.entry(0).unwrap();
+    assert!(e.is_protected() && e.is_encrypted() && !e.needs_key());
+    assert_eq!(g.key_block(), &v.keys[..]);
+    assert_eq!(g.protected_keys(), Ok(1));
+    let d = g.read(0).unwrap();
+    assert_eq!((d.status, d.data), (DecodeStatus::Ok, v.output.clone()));
+    assert_eq!(g.read(1).unwrap().data, b"ordinary GRF contents");
+    let rep = verify(&g, VerifyOptions::default(), &Control::default()).unwrap();
+    assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
+
+    // the same entry without its key block: an error for that entry, the rest reads
+    let (bytes, _) = protected_archive("zlib-rc6-footer", false);
+    let g = Archive::from_source(bytes).unwrap();
+    assert!(
+        matches!(g.read(0).unwrap().status, DecodeStatus::Corrupt(m) if m.contains("missing archive key"))
+    );
+    assert_eq!(g.read(1).unwrap().data, b"ordinary GRF contents");
+
+    // an entry whose key material is in its own header needs no key block
+    let (bytes, v) = protected_archive("boundary-1-1153", false);
+    let g = Archive::from_source(bytes).unwrap();
+    assert_eq!(g.read(0).unwrap().data, v.output);
 }
 
 #[test]
@@ -158,4 +226,92 @@ fn absurd_64_bit_table_offset_is_rejected_without_panic() {
         Archive::from_source(bytes),
         Err(Error::CorruptTable(_))
     ));
+}
+
+#[test]
+fn protected_entries_keep_their_protection_in_0x300_and_are_decoded_for_other_formats() {
+    use crate::repack::{RepackOptions, repack};
+    use crate::writer::Format;
+    let (bytes, v) = protected_archive("zlib-rc6-footer", true);
+    let src = Archive::from_source(bytes).unwrap();
+    let dir = tmpdir("protected-repack");
+    let o = |f| RepackOptions {
+        format: Some(f),
+        ..RepackOptions::default()
+    };
+
+    // 0x300: stored bytes, flag and key block stay; the copy reads like the source
+    let kept = dir.join("kept.grf");
+    let r = repack(&src, &kept, &o(Format::V300), &Control::default()).unwrap();
+    assert_eq!(
+        (r.encrypted_blocks, r.unprotected, r.verified),
+        (1, 0, true)
+    );
+    let a = Archive::open(&kept).unwrap();
+    assert!(a.entry(0).unwrap().is_protected());
+    assert_eq!(a.key_block(), &v.keys[..]);
+    assert_eq!(a.read(0).unwrap().data, v.output);
+    assert_eq!(a.read_raw(0).unwrap(), src.read_raw(0).unwrap());
+
+    // 0x200 cannot hold the protection: the entry is decoded and stored as an ordinary file
+    let plain = dir.join("plain.grf");
+    let r = repack(&src, &plain, &o(Format::V200), &Control::default()).unwrap();
+    assert_eq!(
+        (r.encrypted_blocks, r.unprotected, r.verified),
+        (0, 1, true)
+    );
+    let a = Archive::open(&plain).unwrap();
+    let e = a.entry(0).unwrap();
+    assert_eq!((e.flags, e.name.as_bytes()), (flags::FILE, &v.name[..]));
+    assert_eq!(a.read(0).unwrap().data, v.output);
+    assert_eq!(a.read(1).unwrap().data, b"ordinary GRF contents");
+
+    // without its key the entry can only be kept as it is, not decoded
+    let (bytes, _) = protected_archive("zlib-rc6-footer", false);
+    let nokey = Archive::from_source(bytes).unwrap();
+    let err = repack(
+        &nokey,
+        &dir.join("x.grf"),
+        &o(Format::V200),
+        &Control::default(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("protected entry"), "{err}");
+    assert!(!dir.join("x.grf").exists());
+    let r = repack(
+        &nokey,
+        &dir.join("y.grf"),
+        &o(Format::V300),
+        &Control::default(),
+    )
+    .unwrap();
+    assert_eq!(r.encrypted_blocks, 1);
+
+    // an edit of a 0x300 archive keeps the protected entry and its key block
+    let src_path = dir.join("src.grf");
+    std::fs::write(&src_path, protected_archive("zlib-rc6-footer", true).0).unwrap();
+    let src = Archive::open(&src_path).unwrap();
+    let edited = dir.join("edited.grf");
+    let rep = crate::edit::apply(
+        &src,
+        &src_path,
+        &edited,
+        &[crate::edit::Edit::Put {
+            name: GrfPath::new(b"data\\new.txt".to_vec()),
+            data: b"new".to_vec(),
+        }],
+        &RepackOptions {
+            copy_streams: true,
+            ..RepackOptions::default()
+        },
+        &Control::default(),
+    )
+    .unwrap();
+    assert_eq!(rep.added, 1);
+    let a = Archive::open(&edited).unwrap();
+    assert_eq!(a.header().version, 0x300);
+    assert_eq!(a.key_block(), &v.keys[..]);
+    let i = a.find(&GrfPath::new(v.name.clone())).unwrap();
+    assert_eq!(a.read(i).unwrap().data, v.output);
+    std::fs::remove_dir_all(dir).unwrap();
 }

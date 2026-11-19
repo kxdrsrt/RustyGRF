@@ -19,6 +19,11 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 | `anyhow` | 1.0.104 | MIT OR Apache-2.0 | Fehlerbehandlung in der CLI | M1 |
 | `png` | 0.18.1 | MIT OR Apache-2.0 | PNG lesen/schreiben (SPR-Frames exportieren/importieren) | M7a |
 | `gif` | 0.14.2 | MIT OR Apache-2.0 | animiertes GIF aus gerenderten Frames (`act render --gif`); bringt `color_quant` (MIT) und `weezl` (MIT OR Apache-2.0) mit | M7b |
+| `aes` | 0.9.4 | MIT OR Apache-2.0 | AES-128 für Gravitys geschützte Einträge (`gravity.rs`); bringt `cipher`, `inout`, `cpubits` (MIT OR Apache-2.0) mit | M6 (2026-11-19) |
+| `twox-hash` | 2.1.5 | MIT | XXH32 und XXH3-128 für Gravitys geschützte Einträge (`xxhash-rust` wäre BSL-1.0 gewesen, nicht in `deny.toml`) | M6 (2026-11-19) |
+| `lz4_flex` | 0.14.2 | MIT | LZ4-Blöcke in Gravitys geschützten Einträgen (nur Entpacken, `safe-decode`) | M6 (2026-11-19) |
+
+**Testdaten aus GRF Editor:** `crates/rgrf-core/tests/fixtures/protected-grf.bin` (59.280 Byte, SHA-256 `e6d1ff95…1c4f`) ist GRF Editors `Tests/fixtures/protected-grf.bin` unverändert: laut dessen `Tests/README.md` nur erzeugte Bytes, keine Client-Dateien; übernommen mit Tokeiburus Erlaubnis (siehe `docs/05-licensing.md`).
 
 Stand 2026-11-16: `cargo deny check` (Lizenzen, Verbote, Quellen, Advisories) ohne Befund. Transitive Abhängigkeiten stehen in `Cargo.lock`; erlaubte Lizenzen in `deny.toml`.
 

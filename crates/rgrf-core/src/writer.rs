@@ -87,6 +87,8 @@ pub struct Writer<W: Write + Seek> {
     max_file_len: u64,
     /// Bytes written after the header.
     data_len: u64,
+    /// 0x300: the key block written behind the file table (Gravity's protected entries).
+    key_block: Vec<u8>,
 }
 
 fn ceil8(n: u32) -> u32 {
@@ -104,7 +106,19 @@ impl<W: Write + Seek> Writer<W> {
             align: align || format.is_legacy(),
             max_file_len: max_file_len.unwrap_or_else(|| format.max_file_len()),
             data_len: 0,
+            key_block: Vec::new(),
         })
+    }
+
+    /// The key block to write behind the file table; only the 0x300 format has one.
+    pub fn set_key_block(&mut self, block: Vec<u8>) -> Result<()> {
+        if !block.is_empty() && self.format != Format::V300 {
+            return Err(Error::Unsupported(
+                "only the 0x300 format holds a key block".into(),
+            ));
+        }
+        self.key_block = block;
+        Ok(())
     }
 
     pub fn is_legacy(&self) -> bool {
@@ -195,7 +209,11 @@ impl<W: Write + Seek> Writer<W> {
         );
 
         let prefix_len = if self.format == Format::V300 { 12 } else { 8 };
-        let total = HEADER_LEN + self.data_len + prefix_len + u64::from(zsize);
+        let total = HEADER_LEN
+            + self.data_len
+            + prefix_len
+            + u64::from(zsize)
+            + self.key_block.len() as u64;
         if total > self.max_file_len {
             return Err(Error::TooLarge(format!(
                 "the archive would be {total} bytes, over the limit of {} bytes for this format",
@@ -203,11 +221,13 @@ impl<W: Write + Seek> Writer<W> {
             )));
         }
         if self.format == Format::V300 {
-            self.out.write_all(&0u32.to_le_bytes())?; // key block size: none
+            self.out
+                .write_all(&(self.key_block.len() as u32).to_le_bytes())?;
         }
         self.out.write_all(&zsize.to_le_bytes())?;
         self.out.write_all(&size.to_le_bytes())?;
         self.out.write_all(&packed)?;
+        self.out.write_all(&self.key_block)?;
 
         let count =
             u32::try_from(entries.len()).map_err(|_| Error::TooLarge("too many entries".into()))?;

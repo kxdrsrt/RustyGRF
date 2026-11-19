@@ -179,9 +179,10 @@ impl Entry {
     }
 
     /// Content stored without a zlib/LZMA stream (flags without the file bit and with data),
-    /// whether or not the old DES scrambling is applied on top.
+    /// whether or not the old DES scrambling is applied on top. Not Gravity's protected entries
+    /// (no file bit either, but their own compressed body).
     pub fn stores_uncompressed(&self) -> bool {
-        self.flags & flags::FILE == 0 && (self.zsize != 0 || self.size != 0)
+        self.flags & flags::FILE == 0 && !self.is_protected() && (self.zsize != 0 || self.size != 0)
     }
 
     pub fn is_encrypted(&self) -> bool {
@@ -195,9 +196,20 @@ impl Entry {
                 == 0
     }
 
-    /// Encrypted in a way that needs a key we do not have (GRF Editor's scheme, Gravity's).
+    /// Encrypted in a way that needs a key we do not have (GRF Editor's scheme without its key,
+    /// unknown combinations). Gravity's protected entries ([`Entry::is_protected`]) are not counted:
+    /// they are read with the archive's key block.
     pub fn needs_key(&self) -> bool {
-        self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT | flags::DETECTED_CRYPT) != 0
+        !self.is_protected()
+            && self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT | flags::DETECTED_CRYPT)
+                != 0
+    }
+
+    /// Protected by Gravity (flags exactly `0x80`, newer 0x300 archives): readable through
+    /// [`crate::gravity`] with the archive's key block, but only kept as it is in a 0x300 archive
+    /// that carries the same key block.
+    pub fn is_protected(&self) -> bool {
+        self.flags == flags::GRAVITY_CRYPT
     }
 
     /// How the data of a DES entry is scrambled.

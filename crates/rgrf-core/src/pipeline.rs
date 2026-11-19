@@ -37,6 +37,8 @@ pub(crate) enum Kind {
     Encrypted,
     Damaged,
     Stored,
+    /// A protected entry decoded and stored like any other file.
+    Unprotected,
 }
 
 pub(crate) struct Prepared {
