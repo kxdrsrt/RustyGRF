@@ -5,6 +5,7 @@
 use crate::act::{Act, Action};
 use crate::pal::Pal;
 use crate::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr};
+use crate::version::Version;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EditError {
@@ -20,6 +21,22 @@ pub enum EditError {
     NoAction { index: usize, count: usize },
     #[error("too many actions (at most 65535)")]
     TooManyActions,
+    #[error("action {action} has no frame {frame} ({count} frames)")]
+    NoFrame {
+        action: usize,
+        frame: usize,
+        count: usize,
+    },
+    #[error("nothing selected: no layer matches")]
+    NoLayerSelected,
+    #[error("{what} needs ACT version {need} or newer (this file is {have})")]
+    NeedsVersion {
+        what: &'static str,
+        need: &'static str,
+        have: Version,
+    },
+    #[error("the sound name must be at most 39 Latin-1 characters")]
+    BadSound,
     #[error("the ACT is older than version 2.0 and cannot refer to true-colour images")]
     ActTooOld,
     #[error("the sprite has no true-colour images")]
@@ -346,6 +363,27 @@ fn median_cut(colours: Vec<([u8; 3], u64)>, target: usize) -> Vec<[u8; 3]> {
         .collect()
 }
 
+/// Which layers an edit applies to; `None` means all.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayerSelect {
+    pub action: Option<usize>,
+    pub frame: Option<usize>,
+    pub layer: Option<usize>,
+}
+
+/// New values for the layers selected by [`LayerSelect`]; `None` leaves a property alone.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayerEdit {
+    /// R, G, B, A mask (255 each is unchanged colour).
+    pub color: Option<[u8; 4]>,
+    /// Horizontal and vertical scale.
+    pub scale: Option<(f32, f32)>,
+    pub rotation: Option<i32>,
+    pub mirror: Option<bool>,
+    /// Toggles the mirror flag (after `mirror`).
+    pub flip: bool,
+}
+
 impl Act {
     /// Adjusts the layers after image `index` of `kind` was removed from the SPR.
     pub fn sprite_removed(&mut self, kind: Kind, index: usize) {
@@ -398,6 +436,128 @@ impl Act {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Changes the properties of every selected layer; returns how many layers matched.
+    /// Colour, scale and rotation exist from ACT 2.0, a separate vertical scale from 2.4.
+    pub fn edit_layers(&mut self, sel: &LayerSelect, edit: &LayerEdit) -> Result<usize, EditError> {
+        if let Some(a) = sel.action {
+            self.check_action(a)?;
+            if let Some(f) = sel.frame {
+                let count = self.actions[a].frames.len();
+                if f >= count {
+                    return Err(EditError::NoFrame {
+                        action: a,
+                        frame: f,
+                        count,
+                    });
+                }
+            }
+        }
+        let v = self.version;
+        let need = |what, min: Version, name| {
+            if v < min {
+                Err(EditError::NeedsVersion {
+                    what,
+                    need: name,
+                    have: v,
+                })
+            } else {
+                Ok(())
+            }
+        };
+        if edit.color.is_some() {
+            need("a colour", crate::act::V2_0, "2.0")?;
+        }
+        if edit.rotation.is_some() {
+            need("a rotation", crate::act::V2_0, "2.0")?;
+        }
+        if edit.scale.is_some_and(|(sx, sy)| sx != 1.0 || sy != 1.0) {
+            need("a scale", crate::act::V2_0, "2.0")?;
+        }
+        if edit.scale.is_some_and(|(sx, sy)| sx != sy) {
+            need("a different vertical scale", crate::act::V2_4, "2.4")?;
+        }
+        let mut n = 0;
+        for (ai, a) in self.actions.iter_mut().enumerate() {
+            if sel.action.is_some_and(|x| x != ai) {
+                continue;
+            }
+            for (fi, f) in a.frames.iter_mut().enumerate() {
+                if sel.frame.is_some_and(|x| x != fi) {
+                    continue;
+                }
+                for (li, l) in f.layers.iter_mut().enumerate() {
+                    if sel.layer.is_some_and(|x| x != li) {
+                        continue;
+                    }
+                    n += 1;
+                    if let Some(c) = edit.color {
+                        l.color = c;
+                    }
+                    if let Some((sx, sy)) = edit.scale {
+                        l.scale_x = sx;
+                        l.scale_y = sy;
+                    }
+                    if let Some(r) = edit.rotation {
+                        l.rotation = r;
+                    }
+                    if let Some(m) = edit.mirror {
+                        l.mirror = m;
+                    }
+                    if edit.flip {
+                        l.mirror = !l.mirror;
+                    }
+                }
+            }
+        }
+        if n == 0 {
+            return Err(EditError::NoLayerSelected);
+        }
+        Ok(n)
+    }
+
+    /// Plays `sound` (a file name below `data\wav`, Latin-1) with one frame, or
+    /// no sound with `None`. The name is added to the sound table when it is new. Sounds exist
+    /// from ACT 2.0 (the table from 2.1).
+    pub fn set_frame_sound(
+        &mut self,
+        action: usize,
+        frame: usize,
+        sound: Option<&str>,
+    ) -> Result<(), EditError> {
+        self.check_action(action)?;
+        let count = self.actions[action].frames.len();
+        if frame >= count {
+            return Err(EditError::NoFrame {
+                action,
+                frame,
+                count,
+            });
+        }
+        if self.version < crate::act::V2_1 {
+            return Err(EditError::NeedsVersion {
+                what: "a sound",
+                need: "2.1",
+                have: self.version,
+            });
+        }
+        let id = match sound {
+            None => -1,
+            Some(name) => {
+                let raw = crate::act::sound_from_name(name).ok_or(EditError::BadSound)?;
+                let at = match self.sounds.iter().position(|s| *s == raw) {
+                    Some(i) => i,
+                    None => {
+                        self.sounds.push(raw);
+                        self.sounds.len() - 1
+                    }
+                };
+                at as i32
+            }
+        };
+        self.actions[action].frames[frame].sound_id = id;
         Ok(())
     }
 
@@ -665,5 +825,84 @@ mod tests {
         // the edited ACT still writes and reads back
         let bytes = a.to_bytes(V2_5).unwrap();
         assert_eq!(Act::parse(&bytes).unwrap().actions, a.actions);
+    }
+
+    #[test]
+    fn layers_are_selected_and_edited_and_sounds_added() {
+        let mut a = act();
+        let all = LayerSelect::default();
+        let red = LayerEdit {
+            color: Some([255, 0, 0, 128]),
+            scale: Some((2.0, 3.0)),
+            rotation: Some(90),
+            flip: true,
+            ..LayerEdit::default()
+        };
+        // one layer only
+        let one = LayerSelect {
+            action: Some(0),
+            frame: Some(0),
+            layer: Some(1),
+        };
+        assert_eq!(a.edit_layers(&one, &red).unwrap(), 1);
+        let ls = &a.actions[0].frames[0].layers;
+        assert_eq!(ls[1].color, [255, 0, 0, 128]);
+        assert_eq!(
+            (ls[1].scale_x, ls[1].scale_y, ls[1].rotation),
+            (2.0, 3.0, 90)
+        );
+        assert!(ls[1].mirror && !ls[0].mirror && ls[0].color == [255; 4]);
+        // all layers, mirror set explicitly
+        let m = LayerEdit {
+            mirror: Some(false),
+            ..LayerEdit::default()
+        };
+        assert_eq!(a.edit_layers(&all, &m).unwrap(), 3);
+        assert!(!a.actions[0].frames[0].layers[1].mirror);
+        // nothing there / out of range
+        let none = LayerSelect {
+            action: Some(1),
+            ..LayerSelect::default()
+        };
+        assert!(matches!(
+            a.edit_layers(&none, &m),
+            Err(EditError::NoLayerSelected)
+        ));
+        let bad_frame = LayerSelect {
+            action: Some(0),
+            frame: Some(5),
+            layer: None,
+        };
+        assert!(matches!(
+            a.edit_layers(&bad_frame, &m),
+            Err(EditError::NoFrame { .. })
+        ));
+        // a version without separate vertical scale refuses
+        let mut old = act();
+        old.version = crate::act::V2_3;
+        assert!(matches!(
+            old.edit_layers(&all, &red),
+            Err(EditError::NeedsVersion { .. })
+        ));
+        let mut v1 = act();
+        v1.version = Version::new(1, 5);
+        assert!(v1.edit_layers(&all, &red).is_err());
+
+        // sounds: the table grows once, `None` clears
+        a.set_frame_sound(0, 0, Some("effect\\hit.wav")).unwrap();
+        a.set_frame_sound(0, 0, Some("effect\\hit.wav")).unwrap();
+        assert_eq!(a.sounds.len(), 1);
+        assert_eq!(a.actions[0].frames[0].sound_id, 0);
+        a.set_frame_sound(0, 0, None).unwrap();
+        assert_eq!(a.actions[0].frames[0].sound_id, -1);
+        assert!(a.set_frame_sound(0, 3, None).is_err());
+        assert!(a.set_frame_sound(0, 0, Some(&"x".repeat(40))).is_err());
+        let bytes = {
+            a.set_frame_sound(0, 0, Some("a.wav")).unwrap();
+            a.to_bytes(V2_5).unwrap()
+        };
+        let back = Act::parse(&bytes).unwrap();
+        assert_eq!(back.actions, a.actions);
+        assert_eq!(back.sounds, a.sounds);
     }
 }

@@ -30,6 +30,8 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 | `rgrf spr convert <spr> --to rgba\|indexed [--act <act> --act-output <act>] -o <spr>` | **2026-11-19:** Paletten- in True-Colour-Bilder umwandeln und zurück; die Ebenen der ACT folgen. Zurück ist verlustfrei bei höchstens 255 Farben und ohne halbtransparente Pixel, sonst wird reduziert und die Ausgabe sagt es |
 | `rgrf act translate <act> --dx X --dy Y [--action N] -o <act>` | **M7b:** alle Layer und Anker verschieben |
 | `rgrf act interval <act> --action N --value V -o <act>` | **M7b:** Frame-Zeit (Einheit 25 ms) |
+| `rgrf act layer <act> [--action N [--frame F [--layer L]]] [--color RRGGBB[AA]] [--scale S \| --scale-x X --scale-y Y] [--rotation GRAD] [--mirror true\|false] [--flip] -o <act>` | Layer-Feinbearbeitung: Farbmaske (Alpha = durchscheinend), Skalierung, Drehung, Spiegeln; Farbe/Skalierung/Drehung ab ACT 2.0, getrennte Y-Skalierung ab 2.4 (sonst Fehler) |
+| `rgrf act sound <act> --action N --frame F --sound <name.wav\|none> -o <act>` | Sound je Frame setzen oder entfernen (Name wird in die Tabelle eingetragen; ab ACT 2.1) |
 | `rgrf act copy-action <act> --from N --to M -o <act>` / `remove-action --action N` | **M7b:** Aktion kopieren/entfernen |
 
 | `rgrf lua check <datei \| ordner \| grf> [muster]` | **umgesetzt (M7c):** Lua-5.1-Syntaxprüfung von `.lub`/`.lua` (Datei, Ordner rekursiv oder Dateien eines GRF) mit Zeilennummer; kompilierte Dateien werden gezählt, nicht geprüft. Exit 0 ok, 3 Fehler |

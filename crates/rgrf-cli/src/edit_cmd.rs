@@ -358,6 +358,44 @@ pub fn act_translate(
     )
 }
 
+pub fn act_layer(
+    input: &Path,
+    entry: Option<&str>,
+    select: rgrf_formats::edit::LayerSelect,
+    edit: rgrf_formats::edit::LayerEdit,
+    names: NameMode,
+    out: &ActOut<'_>,
+) -> Result<i32> {
+    let mut act = act_from(input, entry, names)?;
+    let n = act.edit_layers(&select, &edit)?;
+    save_act(
+        &act,
+        "act layer",
+        out,
+        serde_json::json!({"layers": n, "color": edit.color, "scale": edit.scale,
+            "rotation": edit.rotation, "mirror": edit.mirror, "flip": edit.flip}),
+    )
+}
+
+pub fn act_sound(
+    input: &Path,
+    entry: Option<&str>,
+    action: usize,
+    frame: usize,
+    sound: Option<&str>,
+    names: NameMode,
+    out: &ActOut<'_>,
+) -> Result<i32> {
+    let mut act = act_from(input, entry, names)?;
+    act.set_frame_sound(action, frame, sound)?;
+    save_act(
+        &act,
+        "act sound",
+        out,
+        serde_json::json!({"action": action, "frame": frame, "sound": sound}),
+    )
+}
+
 pub fn act_interval(
     input: &Path,
     entry: Option<&str>,

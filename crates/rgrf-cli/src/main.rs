@@ -478,6 +478,16 @@ enum EncodingArg {
     Latin1,
 }
 
+/// `RRGGBB` or `RRGGBBAA` (hex, optional `#`).
+fn parse_color(s: &str) -> Result<[u8; 4], String> {
+    let h = s.trim_start_matches('#');
+    if !(h.len() == 6 || h.len() == 8) || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("expected RRGGBB or RRGGBBAA in hex".into());
+    }
+    let b = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(255);
+    Ok([b(0), b(2), b(4), if h.len() == 8 { b(6) } else { 255 }])
+}
+
 #[derive(Subcommand)]
 enum ActCmd {
     /// Version, actions, frames, layers, sounds (a loose .act file, or a GRF and the entry path)
@@ -540,6 +550,60 @@ enum ActCmd {
         action: usize,
         #[arg(long)]
         value: f32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Change colour, scale, rotation or mirroring of layers (writes a new file)
+    Layer {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Only this action (default: all)
+        #[arg(long)]
+        action: Option<usize>,
+        /// Only this frame of the action (needs --action)
+        #[arg(long, requires = "action")]
+        frame: Option<usize>,
+        /// Only this layer of the frame (needs --frame)
+        #[arg(long, requires = "frame")]
+        layer: Option<usize>,
+        /// Colour mask: RRGGBB or RRGGBBAA in hex (FFFFFF is unchanged; the alpha makes it translucent)
+        #[arg(long, value_parser = parse_color)]
+        color: Option<[u8; 4]>,
+        /// Scale of both axes, e.g. 1.5
+        #[arg(long)]
+        scale: Option<f32>,
+        /// Horizontal scale (with --scale-y; vertical scale needs ACT 2.4)
+        #[arg(long, requires = "scale_y", conflicts_with = "scale")]
+        scale_x: Option<f32>,
+        #[arg(long, requires = "scale_x", conflicts_with = "scale")]
+        scale_y: Option<f32>,
+        /// Rotation in degrees
+        #[arg(long, allow_hyphen_values = true)]
+        rotation: Option<i32>,
+        /// Set the mirror flag (true or false)
+        #[arg(long)]
+        mirror: Option<bool>,
+        /// Toggle the mirror flag of every selected layer
+        #[arg(long)]
+        flip: bool,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Play a sound with a frame (`--sound none` removes it); the name is added to the sound table
+    Sound {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(long)]
+        action: usize,
+        #[arg(long)]
+        frame: usize,
+        /// File name below data\wav, e.g. "effect\\hit.wav", or `none`
+        #[arg(long)]
+        sound: String,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long)]
@@ -1133,6 +1197,64 @@ fn run(cli: &Cli) -> Result<i32> {
                 *action,
                 *dx,
                 *dy,
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::Layer {
+                input,
+                entry,
+                action,
+                frame,
+                layer,
+                color,
+                scale,
+                scale_x,
+                scale_y,
+                rotation,
+                mirror,
+                flip,
+                output,
+                overwrite,
+            } => edit_cmd::act_layer(
+                input,
+                entry.as_deref(),
+                rgrf_formats::edit::LayerSelect {
+                    action: *action,
+                    frame: *frame,
+                    layer: *layer,
+                },
+                rgrf_formats::edit::LayerEdit {
+                    color: *color,
+                    scale: scale.map(|s| (s, s)).or(scale_x.zip(*scale_y)),
+                    rotation: *rotation,
+                    mirror: *mirror,
+                    flip: *flip,
+                },
+                cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::Sound {
+                input,
+                entry,
+                action,
+                frame,
+                sound,
+                output,
+                overwrite,
+            } => edit_cmd::act_sound(
+                input,
+                entry.as_deref(),
+                *action,
+                *frame,
+                (!sound.eq_ignore_ascii_case("none")).then_some(sound.as_str()),
                 cli.names,
                 &edit_cmd::ActOut {
                     output,

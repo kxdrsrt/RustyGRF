@@ -32,11 +32,11 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 
 | Funktion (laut README, Changelog, Ordner) | RustyGRF | Stand |
 |---|---|---|
-| Aktionen, Frames, Layer, Anker lesen/schreiben | Bibliothek `rgrf-formats` | ✅ Versatz, Intervall, Aktion kopieren/entfernen; Layer-Feinbearbeitung 🔨 |
+| Aktionen, Frames, Layer, Anker lesen/schreiben | Bibliothek `rgrf-formats` | ✅ Versatz, Intervall, Aktion kopieren/entfernen; Layer-Feinbearbeitung ✅ (`act layer`: Farbe, Skalierung, Drehung, Spiegeln, wählbar je Aktion/Frame/Layer; an einer echten ACT gerendert) |
 | Referenz-Sprite wählen (auch aus GRF) | – | 🔨 M7b |
 | Interpolation (auch „erweitert“), Skripte (C#-Skript-Engine, `doc/ScriptGuide`) | – | ❓ Skripte: andere Sprache nötig (Frage) |
 | GIF-Export | `act render --gif` | ✅ (Hintergrund wählen ❓) |
-| Sound-Effekte je Frame | – | 🔨 M7b |
+| Sound-Effekte je Frame | `act sound` | ✅ (setzen/entfernen, Tabelle wächst; Abspielen im GUI 🔨) |
 | Palette Editor (`PaletteEditorTool`, `PaletteSheetGenerator`) | – | 🔨 M7b |
 | Sprite von indiziert nach BGRA konvertieren (und zurück) | `spr convert --to rgba|indexed [--act … --act-output …]` | ✅ (2026-11-19; ACT-Ebenen folgen; zurück verlustfrei bei höchstens 255 Farben, sonst Median-Cut mit Meldung; echter Sprite `C_Surf_Board_Poring` hin und zurück: gleiche Größe, 9 Bilder) |
 | `GrfShellExplorer` (Windows-Explorer-Integration) | – | ❓ nur Windows |
