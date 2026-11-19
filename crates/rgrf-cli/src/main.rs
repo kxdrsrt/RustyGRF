@@ -3,6 +3,7 @@
 //! Exit codes: 0 ok, 1 error, 2 warnings (e.g. a damaged entry was tolerated), 3 verification failed.
 
 use std::collections::HashSet;
+use std::fs;
 use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -457,6 +458,26 @@ enum ClientCmd {
         /// List every animation without a sprite instead of counting them per folder
         #[arg(long)]
         files: bool,
+    },
+    /// Make a smaller copy of a client folder: every GRF next to it gets its 24-bit BMPs stored as
+    /// 8 bits where the picture stays at least --min-psnr dB close (see `image reduce`), the other
+    /// files of the folder are copied as they are. With --method new pictures use it; with
+    /// --recompress everything is compressed again (e.g. zlib archives to lzma, needs the
+    /// LZMA-capable cps.dll). The client folder itself is never changed
+    Optimize {
+        /// The client folder
+        folder: PathBuf,
+        /// The new client folder (must not exist; with --overwrite archives in it are replaced)
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Lowest PSNR in dB a reduced picture may have (higher keeps more detail)
+        #[arg(long, default_value_t = 40.0)]
+        min_psnr: f64,
+        /// Compress every entry again with --method instead of copying unchanged ones (needs --method)
+        #[arg(long, requires = "method")]
+        recompress: bool,
+        #[command(flatten)]
+        write: WriteArgs,
     },
     /// Report what could go wrong before the client is started (exit 0 ok, 2 warnings, 3 errors)
     Check {
@@ -1388,6 +1409,17 @@ fn run(cli: &Cli) -> Result<i32> {
                 limit,
                 files,
             } => refs_cmd::check(input, only.as_deref(), *limit, *files, cli.names, cli.json),
+            ClientCmd::Optimize {
+                folder,
+                output,
+                min_psnr,
+                recompress,
+                write,
+            } => {
+                let mut opts = write.options(encrypt_key(cli)?)?;
+                opts.copy_streams = !*recompress;
+                optimize_client(cli, folder, output, *min_psnr, &opts)
+            }
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)
             }
@@ -2440,6 +2472,119 @@ fn same_file(a: &Path, b: &Path) -> bool {
         (Ok(x), Ok(y)) => x == y,
         _ => false,
     }
+}
+
+/// `client optimize`: a smaller copy of a client folder (see [`ClientCmd::Optimize`]).
+fn optimize_client(
+    cli: &Cli,
+    folder: &Path,
+    output: &Path,
+    min_psnr: f64,
+    opts: &RepackOptions,
+) -> Result<i32> {
+    let src = folder
+        .canonicalize()
+        .with_context(|| format!("{} is not a folder", folder.display()))?;
+    if !src.is_dir() {
+        bail!("{} is not a folder", folder.display());
+    }
+    if output.exists() && !opts.overwrite && !opts.dry_run {
+        bail!("{} exists (use --overwrite)", output.display());
+    }
+    // resolve links in the part that exists (/tmp is a link on macOS), then add the new names
+    let wanted = std::env::current_dir()?.join(output);
+    let mut tail = Vec::new();
+    let mut base = wanted.as_path();
+    while !base.exists() {
+        tail.push(base.file_name().context("bad output path")?.to_owned());
+        base = base.parent().context("bad output path")?;
+    }
+    let mut out_abs = base.canonicalize()?;
+    out_abs.extend(tail.iter().rev());
+    if out_abs.starts_with(&src) {
+        bail!("the output folder must not be inside the client folder");
+    }
+    let is_grf = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("grf"));
+    let mut grfs = Vec::new();
+    let mut copied = 0usize;
+    if !opts.dry_run {
+        fs::create_dir_all(&out_abs)?;
+    }
+    let mut stack = vec![src.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let rel = path.strip_prefix(&src)?.to_path_buf();
+            if path.is_dir() {
+                stack.push(path);
+            } else if dir == src && is_grf(&path) {
+                grfs.push(rel);
+            } else if !opts.dry_run {
+                let to = out_abs.join(&rel);
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&path, &to)?;
+                copied += 1;
+            }
+        }
+    }
+    grfs.sort();
+    let (mut before, mut after) = (0u64, 0u64);
+    let mut worst = 0;
+    for rel in &grfs {
+        let from = src.join(rel);
+        let to = out_abs.join(rel);
+        if !cli.json {
+            println!("== {}", rel.display());
+        }
+        let mut o = opts.clone();
+        o.overwrite = true;
+        let meter = Meter::new(cli);
+        let cb = meter.callback();
+        let ctl = Control {
+            cancel: None,
+            progress: Some(&cb),
+        };
+        let code = image_cmd::reduce(
+            &from,
+            &to,
+            &image_cmd::ReduceArgs {
+                only: "*.bmp",
+                min_psnr,
+                report: None,
+            },
+            &o,
+            cli.names,
+            cli.json,
+            &ctl,
+        )?;
+        meter.done();
+        worst = worst.max(code);
+        if !to.exists() && !opts.dry_run {
+            // no picture to reduce: compress again if asked, else copy
+            if o.copy_streams {
+                fs::copy(&from, &to)?;
+            } else {
+                let mut r = o.clone();
+                r.copy_streams = false;
+                worst = worst.max(repack_cmd(cli, &from, &to, &r)?);
+            }
+        }
+        before += fs::metadata(&from)?.len();
+        after += fs::metadata(&to).map_or(0, |m| m.len());
+    }
+    if !cli.json && !opts.dry_run {
+        println!(
+            "\nClient copy: {} archives, {} other files copied; archives {:.1} -> {:.1} MiB ({:+.1} %)",
+            grfs.len(),
+            copied,
+            before as f64 / 1048576.0,
+            after as f64 / 1048576.0,
+            100.0 * (after as f64 - before as f64) / before.max(1) as f64
+        );
+    }
+    Ok(worst)
 }
 
 fn repack_cmd(cli: &Cli, grf: &Path, output: &Path, opts: &RepackOptions) -> Result<i32> {

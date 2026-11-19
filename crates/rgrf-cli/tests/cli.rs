@@ -575,6 +575,73 @@ fn bmp24(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
 }
 
 #[test]
+fn client_optimize_copies_the_folder_and_reduces_every_archive() {
+    let dir = tmpdir("client-optimize");
+    let src = dir.join("src/data");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("flat.bmp"),
+        bmp24(128, 128, |x, y| [(x % 7) as u8 * 30, (y % 5) as u8 * 40, 9]),
+    )
+    .unwrap();
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir.join("client/System")).unwrap();
+    std::fs::write(dir.join("client/System/a.txt"), "loose").unwrap();
+    std::fs::write(dir.join("client/DATA.INI"), "1=base.grf\n").unwrap();
+    assert_eq!(
+        rgrf(&["build", &p("src"), "-o", &p("client/base.grf"), "--quiet"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let (client, small) = (p("client"), p("small"));
+    let run = |extra: &[&str]| {
+        let mut a = vec!["client", "optimize", &client[..], "-o", &small[..]];
+        a.extend(extra);
+        rgrf(&a)
+    };
+    let o = run(&["--quiet"]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(
+        std::fs::read(dir.join("small/System/a.txt")).unwrap(),
+        b"loose"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("small/DATA.INI")).unwrap(),
+        b"1=base.grf\n"
+    );
+    let info = json(&rgrf(&[
+        "image",
+        "info",
+        &p("small/base.grf"),
+        "data/flat.bmp",
+        "--json",
+    ]));
+    assert_eq!(info["bits"].as_u64(), Some(8));
+    assert!(!dir.join("client/small").exists());
+    assert_eq!(
+        run(&["--quiet"]).status.code(),
+        Some(1),
+        "an existing output is kept"
+    );
+    let inside = rgrf(&[
+        "client",
+        "optimize",
+        &p("client"),
+        "-o",
+        &p("client/new"),
+        "--quiet",
+    ]);
+    assert_eq!(inside.status.code(), Some(1));
+    assert!(!dir.join("client/new").exists());
+}
+
+#[test]
 fn image_reduce_shrinks_true_colour_bmps_and_keeps_magenta() {
     let dir = tmpdir("image-reduce");
     let src = dir.join("src/data");
