@@ -157,6 +157,20 @@ async fn preview(state: State<'_, AppState>, index: usize, action: Option<usize>
 }
 
 /// Extracts the given entries, or everything in the current search when `indices` is empty.
+/// Writes the map of an entry with every file it needs below `dest`.
+#[tauri::command]
+async fn extract_map(
+    state: State<'_, AppState>,
+    index: usize,
+    dest: String,
+    rename: bool,
+) -> Res<backend::MapExtractSummary> {
+    with_session(&state, move |s| {
+        s.extract_map(index, &PathBuf::from(dest), rename)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn extract(
     state: State<'_, AppState>,
@@ -728,6 +742,7 @@ pub fn run() {
             details,
             preview,
             extract,
+            extract_map,
             verify,
             build_archive,
             merge_archives,

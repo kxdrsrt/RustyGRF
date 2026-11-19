@@ -333,6 +333,19 @@ pub struct ArchiveInfo {
 }
 
 #[derive(Serialize, Debug)]
+pub struct MapExtractSummary {
+    pub map: String,
+    /// Files written.
+    pub files: usize,
+    pub damaged: usize,
+    /// Files the map names that are not in the archive.
+    pub missing: Vec<String>,
+    /// Files that exist but could not be read to follow what they name.
+    pub problems: Vec<String>,
+    pub dest: String,
+}
+
+#[derive(Serialize, Debug)]
 pub struct DraftRestored {
     pub restored: usize,
     /// Changes left out because their file or stored content is gone.
@@ -2679,6 +2692,61 @@ impl Session {
             files: indices.len(),
             damaged: rep.damaged.len(),
             dest: dest.display().to_string(),
+        })
+    }
+
+    /// Extracts the map of entry `index` (its RSW, GAT or GND) with every file it needs, see
+    /// [`rgrf_formats::map_files`]. Files the map names but the archive lacks are listed.
+    pub fn extract_map(
+        &self,
+        index: usize,
+        dest: &Path,
+        rename: bool,
+    ) -> Result<MapExtractSummary, String> {
+        struct Src<'a>(&'a Session);
+        impl rgrf_formats::map_files::MapSource for Src<'_> {
+            fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+                let &i = self.0.key_index().get(&GrfPath::new(path.to_vec()).key())?;
+                self.0.read(i).ok()
+            }
+            fn exists(&self, path: &[u8]) -> bool {
+                self.0
+                    .key_index()
+                    .contains_key(&GrfPath::new(path.to_vec()).key())
+            }
+        }
+        let name = self
+            .arc
+            .entry(index)
+            .map_err(|e| e.to_string())?
+            .name
+            .display(NameMode::Cp1252);
+        let files = rgrf_formats::map_files::resolve(&name, &Src(self))?;
+        let keys = self.key_index();
+        let mut indices = Vec::new();
+        let mut missing = Vec::new();
+        for f in &files {
+            match keys.get(&GrfPath::new(f.path.clone()).key()) {
+                Some(&i) => indices.push(i),
+                None => missing.push(self.shown_bytes(&f.path)),
+            }
+        }
+        let problems = files
+            .iter()
+            .filter_map(|f| {
+                f.problem
+                    .as_ref()
+                    .map(|p| format!("{}: {p}", self.shown_bytes(&f.path)))
+            })
+            .collect();
+        let rep = self.extract(&indices, dest, rename)?;
+        Ok(MapExtractSummary {
+            map: rgrf_formats::map_files::map_base(&name).to_string(),
+            files: rep.files,
+            damaged: rep.damaged,
+            missing,
+            problems,
+            dest: rep.dest,
         })
     }
 

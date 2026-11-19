@@ -390,6 +390,20 @@ enum MapCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// One map with every file it needs (world, ground and its textures, altitude, models and
+    /// their textures, sounds, water pictures, minimap, effect script and its textures); without
+    /// -o only the list. Exit code 3 when files are missing
+    Extract {
+        /// A client folder (with DATA.INI) or a .grf
+        input: PathBuf,
+        /// The map: `prontera`, `prontera.rsw` or `data\prontera.rsw`
+        map: String,
+        /// Folder to write the files to (below it as in the archive: data\...)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Check that every file the maps name exists: ground, altitude, textures, models, sounds
     Check {
         /// A client folder (with DATA.INI) or a .grf
@@ -1239,6 +1253,19 @@ fn run(cli: &Cli) -> Result<i32> {
                 cli.json,
             ),
             MapCmd::Check { input, maps } => map_cmd::check(input, maps, cli.names, cli.json),
+            MapCmd::Extract {
+                input,
+                map,
+                output,
+                overwrite,
+            } => map_cmd::extract(
+                input,
+                map,
+                output.as_deref(),
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
         },
         Cmd::Client { action } => match action {
             ClientCmd::Encrypt {

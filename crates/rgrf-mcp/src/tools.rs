@@ -1,7 +1,7 @@
 //! The tools of the server. Every tool is one row: name, description, parameter table, handler.
 //! Results are JSON objects; errors are plain messages (reported as `isError` to the client).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use rayon::prelude::*;
@@ -198,6 +198,23 @@ pub const TOOLS: &[Tool] = &[
         ],
         writes: false,
         run: crate::inspect::inspect,
+    },
+    Tool {
+        name: "grf_map_files",
+        title: "List the files a map needs",
+        description: "Every file one map needs, starting from data\\<map>.rsw: world, ground and its textures, altitude, models and their textures, sounds, water pictures, minimap, effect script and its textures; each with `found` and the file that names it. To copy a map, give the found paths to `grf_extract`.",
+        params: &[
+            req("path", Ty::Str, "Path of the .grf file."),
+            req(
+                "map",
+                Ty::Str,
+                "The map: `prontera`, `prontera.rsw` or `data\\prontera.rsw`.",
+            ),
+            NAMES,
+            LIMIT,
+        ],
+        writes: false,
+        run: map_files_tool,
     },
     Tool {
         name: "grf_lua_decompile",
@@ -1017,6 +1034,37 @@ fn edit_tool(ctx: &Ctx, a: &Args) -> Out {
     v["replaced"] = r.replaced.into();
     v["removed"] = r.removed.into();
     Ok(v)
+}
+
+fn map_files_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::map_files::{MapSource, resolve};
+    struct Src<'a>(&'a Archive, HashMap<Vec<u8>, Vec<usize>>);
+    impl MapSource for Src<'_> {
+        fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+            let &i = self.1.get(&GrfPath::new(path.to_vec()).key())?.last()?;
+            let d = self.0.read(i).ok()?;
+            d.status.is_ok().then_some(d.data)
+        }
+        fn exists(&self, path: &[u8]) -> bool {
+            self.1.contains_key(&GrfPath::new(path.to_vec()).key())
+        }
+    }
+    let arc = open(ctx, a.str("path"))?;
+    let mode = names_mode(a);
+    let files = resolve(a.str("map"), &Src(&arc, arc.index_by_key()))?;
+    let limit = a.opt_u64("limit").map_or(usize::MAX, |n| n as usize);
+    let missing = files.iter().filter(|f| !f.found).count();
+    let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(mode);
+    Ok(json!({
+        "map": rgrf_formats::map_files::map_base(a.str("map")),
+        "count": files.len(),
+        "missing": missing,
+        "truncated": files.len() > limit,
+        "files": files.iter().take(limit).map(|f| json!({
+            "path": show(&f.path), "kind": f.kind.name(), "found": f.found,
+            "named_by": f.named_by.as_deref().map(show), "problem": f.problem,
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 fn patch_tool(ctx: &Ctx, a: &Args) -> Out {

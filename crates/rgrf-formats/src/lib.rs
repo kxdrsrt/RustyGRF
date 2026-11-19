@@ -13,6 +13,7 @@ pub mod luac50;
 pub mod luacomp;
 pub mod luacomp50;
 pub mod luadec;
+pub mod map_files;
 pub mod pal;
 pub mod png_io;
 pub mod render;

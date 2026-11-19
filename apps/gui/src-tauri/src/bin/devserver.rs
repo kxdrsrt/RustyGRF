@@ -103,6 +103,13 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
         "preview" => with(state, |s| {
             to_json(s.preview(arg(a, "index")?, arg(a, "action")?)?)
         }),
+        "extract_map" => with(state, |s| {
+            to_json(s.extract_map(
+                arg(a, "index")?,
+                &PathBuf::from(arg::<String>(a, "dest")?),
+                arg(a, "rename")?,
+            )?)
+        }),
         "extract" => with(state, |s| {
             let indices: Vec<usize> = arg(a, "indices")?;
             let list = if indices.is_empty() {

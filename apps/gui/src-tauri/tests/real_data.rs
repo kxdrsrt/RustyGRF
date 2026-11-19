@@ -458,3 +458,19 @@ fn a_map_with_moving_textures_sends_their_transforms() {
     eprintln!("ba_maison: {seen} parts with moving textures");
     assert!(seen > 0);
 }
+
+#[test]
+fn a_map_is_extracted_with_everything_it_needs() {
+    let Some(mut s) = open() else { return };
+    let i = find(&mut s, r"data\prontera.rsw");
+    let dest = std::env::temp_dir().join(format!("rgrf-gui-map-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dest);
+    let r = s.extract_map(i, &dest, false).unwrap();
+    assert_eq!((r.map.as_str(), r.files, r.damaged), ("prontera", 323, 0));
+    assert!(r.missing.is_empty() && r.problems.is_empty(), "{r:?}");
+    assert!(dest.join("data/prontera.gat").exists());
+    // a second time the files exist: refused, or kept both
+    assert!(s.extract_map(i, &dest, false).is_err());
+    assert_eq!(s.extract_map(i, &dest, true).unwrap().files, 323);
+    std::fs::remove_dir_all(dest).unwrap();
+}

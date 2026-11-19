@@ -765,7 +765,7 @@ function renderPreview(p, row, meta) {
         return el("label", {}, c, ` ${label}`);
       };
       return [
-        el("div", { class: "controls" }, el("span", { class: "muted", text: "drag = turn, right/shift-drag or arrows = move, wheel = zoom, double-click = reset" }), toggle("Lighting", "lit"), toggle("Lightmaps", "lightmap"), toggle("Models", "models"), toggle("Water", "water"), p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle("Animate", "animate") : null),
+        el("div", { class: "controls" }, el("span", { class: "muted", text: "drag = turn, right/shift-drag or arrows = move, wheel = zoom, double-click = reset" }), toggle("Lighting", "lit"), toggle("Lightmaps", "lightmap"), toggle("Models", "models"), toggle("Water", "water"), p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle("Animate", "animate") : null, el("button", { type: "button", class: "small", icon: "extract", text: "Extract map…", title: "Write this map with every file it needs (ground, altitude, textures, models, sounds, water, minimap, effects) into a folder", onclick: () => doExtractMap(row) })),
         host,
         infoBlock(p.info),
       ];
@@ -789,6 +789,33 @@ function renderPreview(p, row, meta) {
 /** The entries a selected line stands for: the file itself, or everything below a folder. */
 async function entriesOf(row) {
   return row.folder ? invoke("folder_entries", { view: 0, path: row.name }) : [row.index];
+}
+
+/** Writes the map of `row` (RSW, GAT or GND) with all its files into a folder. */
+async function doExtractMap(row) {
+  const dest = await T.dialog.open({ directory: true, multiple: false, title: "Folder for the map (the files go below it as data\\...)" });
+  if (!dest) return;
+  setStatus("Extracting the map …");
+  try {
+    let r;
+    try {
+      r = await invoke("extract_map", { index: row.index, dest, rename: false });
+    } catch (e) {
+      if (!/exists/i.test(errText(e))) throw e;
+      const go = await ask("Files exist already", el("p", { text: `${errText(e)}. Keep both, with a number added to the new file names?` }), [{ label: "Keep both", value: true, primary: true }, { label: "Cancel", value: null }]);
+      if (!go) return setStatus("Nothing extracted");
+      r = await invoke("extract_map", { index: row.index, dest, rename: true });
+    }
+    setStatus(`Map ${r.map}: ${fmtNum(r.files)} files written to ${r.dest}`);
+    const body = [el("p", { text: `${fmtNum(r.files)} files of ${r.map} written to ${r.dest}.` })];
+    if (r.missing.length) body.push(el("p", { text: `${fmtNum(r.missing.length)} file(s) the map names are not in this archive (they may be in another GRF of the client):` }), el("ul", { class: "pending" }, ...r.missing.slice(0, 50).map((m) => el("li", { text: m }))));
+    if (r.problems.length) body.push(el("p", { class: "error", text: r.problems.slice(0, 10).join("\n") }));
+    if (r.damaged) body.push(el("p", { class: "error", text: `${fmtNum(r.damaged)} file(s) are damaged and were written as far as they could be read.` }));
+    await ask(r.missing.length || r.problems.length ? "Map extracted, with gaps" : "Map extracted", body, [{ label: "OK", value: true, primary: true }], r.missing.length || r.problems.length ? "warning" : "success");
+  } catch (e) {
+    setStatus("Could not extract the map");
+    await note("Could not extract the map", errText(e), true);
+  }
 }
 
 async function doExtract() {

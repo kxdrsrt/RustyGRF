@@ -636,3 +636,57 @@ fn texture_animations_of_rsm2_are_measured() {
         sample.into_inner().unwrap()
     );
 }
+
+#[test]
+fn every_map_of_the_archive_resolves_its_files() {
+    use rgrf_formats::map_files::{Kind, MapSource, resolve};
+    struct Src<'a>(&'a Archive, std::collections::HashMap<Vec<u8>, Vec<usize>>);
+    impl MapSource for Src<'_> {
+        fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+            let &i = self.1.get(&GrfPath::new(path.to_vec()).key())?.last()?;
+            Some(self.0.read(i).ok()?.data)
+        }
+        fn exists(&self, path: &[u8]) -> bool {
+            self.1.contains_key(&GrfPath::new(path.to_vec()).key())
+        }
+    }
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let src = Src(&arc, arc.index_by_key());
+    let maps: Vec<String> = arc
+        .select(Some("data\\*.rsw"), NameMode::Cp1252)
+        .into_iter()
+        .map(|i| arc.entries()[i].name.display(NameMode::Cp1252))
+        .filter(|n| n.matches('\\').count() == 1)
+        .collect();
+    assert!(maps.len() > 500);
+    let t = std::time::Instant::now();
+    let stats = Mutex::new(BTreeMap::<String, (usize, usize)>::new());
+    let failures: Vec<String> = maps
+        .par_iter()
+        .filter_map(|m| match resolve(m, &src) {
+            Err(e) => Some(format!("{m}: {e}")),
+            Ok(files) => {
+                assert_eq!(files[0].kind, Kind::World, "{m}");
+                let mut s = stats.lock().unwrap();
+                for f in files {
+                    let e = s.entry(f.kind.name().to_string()).or_default();
+                    e.0 += 1;
+                    e.1 += usize::from(!f.found);
+                }
+                None
+            }
+        })
+        .collect();
+    eprintln!(
+        "{} maps in {:?}; files per kind (total, missing): {:?}",
+        maps.len(),
+        t.elapsed(),
+        stats.into_inner().unwrap()
+    );
+    assert!(
+        failures.is_empty(),
+        "{:?}",
+        &failures[..failures.len().min(5)]
+    );
+}

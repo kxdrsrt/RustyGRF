@@ -1,5 +1,6 @@
-//! `rgrf map`: GAT/GND/RSW files of a map: info, a picture of the walkability grid, and a check
-//! that every file a map names (ground, altitude, textures, models, sounds) exists.
+//! `rgrf map`: GAT/GND/RSW files of a map: info, a picture of the walkability grid, a check
+//! that every file a map names (ground, altitude, textures, models, sounds) exists, and the
+//! extraction of one map with everything it needs.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -318,6 +319,141 @@ impl Vfs {
     fn read(&self, at: (usize, usize)) -> Result<Vec<u8>> {
         Ok(self.archives[at.0].1.read(at.1)?.data)
     }
+}
+
+impl rgrf_formats::map_files::MapSource for Vfs {
+    fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+        let at = self.find(&GrfPath::new(path.to_vec()).key())?;
+        Vfs::read(self, at).ok()
+    }
+
+    fn exists(&self, path: &[u8]) -> bool {
+        Vfs::exists(self, &GrfPath::new(path.to_vec()).key())
+    }
+}
+
+/// `rgrf map extract`: one map and every file it needs (GRF Editor's map extractor, plus sounds,
+/// water pictures and the minimap) into a folder, or only the list without `-o`.
+pub fn extract(
+    input: &Path,
+    map: &str,
+    output: Option<&Path>,
+    overwrite: bool,
+    names: NameMode,
+    json: bool,
+) -> Result<i32> {
+    use rgrf_formats::map_files::resolve;
+    let vfs = Vfs::open(input)?;
+    let files = resolve(map, &vfs).map_err(|e| anyhow::anyhow!(e))?;
+    let mut rows = Vec::new();
+    let (mut written, mut bytes, mut missing, mut loose_only, mut failed) = (0, 0u64, 0, 0, 0);
+    for f in &files {
+        let at = vfs.find(&GrfPath::new(f.path.clone()).key());
+        // the name as the archive spells it
+        let name = at.map_or_else(
+            || GrfPath::new(f.path.clone()),
+            |(n, i)| vfs.archives[n].1.entries()[i].name.clone(),
+        );
+        let mut state = if !f.found {
+            missing += 1;
+            "missing".to_string()
+        } else if at.is_none() {
+            loose_only += 1;
+            "loose file in the client folder (not copied)".to_string()
+        } else {
+            "found".to_string()
+        };
+        if let (Some(out), Some(at)) = (output, at) {
+            let res = (|| -> Result<u64> {
+                let rel = rgrf_core::extract::safe_relative_path(&name, names)?;
+                let dst = out.join(rel);
+                if dst.exists() && !overwrite {
+                    bail!("{} exists already (use --overwrite)", dst.display());
+                }
+                let d = vfs.archives[at.0].1.read(at.1)?;
+                if !d.status.is_ok() {
+                    bail!("cannot be decoded: {:?}", d.status);
+                }
+                if let Some(p) = dst.parent() {
+                    fs::create_dir_all(p)?;
+                }
+                fs::write(&dst, &d.data)
+                    .with_context(|| format!("cannot write {}", dst.display()))?;
+                Ok(d.data.len() as u64)
+            })();
+            match res {
+                Ok(n) => {
+                    written += 1;
+                    bytes += n;
+                    state = "written".into();
+                }
+                Err(e) => {
+                    failed += 1;
+                    state = e.to_string();
+                }
+            }
+        }
+        rows.push((name.display(names), f, state));
+    }
+    if json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": crate::SCHEMA_VERSION,
+                "map": rgrf_formats::map_files::map_base(map),
+                "files": rows.iter().map(|(n, f, s)| json!({
+                    "path": n, "kind": f.kind.name(), "found": f.found, "state": s,
+                    "named_by": f.named_by.as_ref().map(|b| GrfPath::new(b.clone()).display(names)),
+                    "problem": f.problem,
+                })).collect::<Vec<_>>(),
+                "written": written, "bytes": bytes, "missing": missing,
+                "loose_only": loose_only, "failed": failed,
+                "output": output.map(|o| o.display().to_string()),
+            })
+        );
+    } else {
+        let mut last = None;
+        for (n, f, s) in &rows {
+            if last != Some(f.kind) {
+                println!("{}:", f.kind.name());
+                last = Some(f.kind);
+            }
+            let note = f
+                .problem
+                .as_deref()
+                .map(|p| format!(" ({p})"))
+                .unwrap_or_default();
+            if s == "found" || s == "written" {
+                println!("  {n}{note}");
+            } else {
+                println!("  {n}: {s}{note}");
+            }
+        }
+        println!(
+            "{} files: {} found, {missing} missing{}{}",
+            rows.len(),
+            rows.len() - missing,
+            if loose_only > 0 {
+                format!(", {loose_only} only as loose files")
+            } else {
+                String::new()
+            },
+            match output {
+                Some(o) => format!(
+                    "; {written} written to {} ({bytes} bytes), {failed} failed",
+                    o.display()
+                ),
+                None => String::new(),
+            }
+        );
+    }
+    Ok(if failed > 0 {
+        1
+    } else if missing > 0 {
+        3
+    } else {
+        0
+    })
 }
 
 fn key_of(prefix: &str, raw: &[u8]) -> Vec<u8> {

@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 8);
+    assert_eq!(ro.len(), 9);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 14);
+    assert_eq!(names(&rw).len(), 15);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -294,6 +294,9 @@ fn inspect_reads_the_format_and_lua_decompile_refuses_plain_text() {
     assert_eq!(v["colors"], 256);
     let msg = fails(&s, "grf_inspect", json!({"path": p, "entry": "data/a.bin"}));
     assert!(msg.contains("no format reader"), "{msg}");
+    // a map is resolved from its world file; here there is only the altitude file
+    let msg = fails(&s, "grf_map_files", json!({"path": p, "map": "map"}));
+    assert!(msg.contains("not in the archive"), "{msg}");
     let msg = fails(
         &s,
         "grf_lua_decompile",
