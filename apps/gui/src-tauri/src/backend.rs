@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::act_editor::{self, ActEdit, ActFrameView};
+use crate::pal_editor::{self, PalEdit};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_core::build::{BuildOptions, build};
@@ -943,6 +944,15 @@ impl Session {
         self.transact(|s| s.stage_act_interval_impl(index, action, ms))
     }
 
+    pub fn pal_colors(&self, index: usize) -> Result<Vec<String>, String> {
+        let (_, data, _) = self.working_bytes(index)?;
+        pal_editor::colors(&data)
+    }
+
+    pub fn stage_pal_edit(&mut self, index: usize, edit: &PalEdit) -> Result<(), String> {
+        self.transact(|s| s.stage_pal_edit_impl(index, edit))
+    }
+
     pub fn stage_text_edit(&mut self, index: usize, text: &str) -> Result<(), String> {
         self.transact(|s| s.stage_text_edit_impl(index, text))
     }
@@ -1183,6 +1193,23 @@ impl Session {
             .transpose()?
             .map(|t| t.1);
         act_editor::view(&act, spr.as_deref(), action, frame)
+    }
+
+    /// Changes colours of a palette file.
+    fn stage_pal_edit_impl(&mut self, index: usize, edit: &PalEdit) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let out = pal_editor::apply(&data, edit)?;
+        let note = match edit {
+            PalEdit::Set { index, .. } => format!("colour {index} set"),
+            PalEdit::Adjust { from, to, .. } => format!("colours {from} to {to} adjusted"),
+        };
+        what.push(note);
+        self.stage(Change::PutBytes {
+            name,
+            data: Arc::new(out),
+            what,
+        });
+        Ok(())
     }
 
     /// Changes a layer, anchor or frame of an animation.

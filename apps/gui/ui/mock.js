@@ -104,6 +104,11 @@ if (!window.__TAURI__) {
           case "stage_spr_image":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `image ${a.frame} from x.png` });
             return pendingRows;
+          case "pal_colors":
+            return Array.from({ length: 256 }, (_, i) => (i * 65793).toString(16).padStart(6, "0").slice(-6));
+          case "stage_pal_edit":
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: `palette: ${a.edit.op}` });
+            return pendingRows;
           case "stage_spr_add":
           case "stage_spr_remove":
           case "stage_spr_palette":

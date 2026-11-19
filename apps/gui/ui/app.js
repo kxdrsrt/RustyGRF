@@ -313,6 +313,14 @@ function renderPreview(p, row, meta) {
     }
     case "frames":
       return [
+        row.name.toLowerCase().endsWith(".pal")
+          ? el(
+              "div",
+              { class: "controls" },
+              el("button", { type: "button", class: "small", text: "Adjust…", title: "Shift hue, scale saturation and brightness of a range of colours (staged)", onclick: () => adjustPalette(row) }),
+              el("span", { class: "muted", text: "Click a colour to change it." }),
+            )
+          : null,
         row.name.toLowerCase().endsWith(".spr")
           ? el(
               "div",
@@ -328,7 +336,7 @@ function renderPreview(p, row, meta) {
             el(
               "figure",
               {},
-              el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", f.png), alt: f.label })),
+              el("div", { class: "checker" }, palImage(row, f)),
               el("figcaption", { text: f.label }),
               row.name.toLowerCase().endsWith(".spr")
                 ? el(
@@ -508,6 +516,59 @@ async function removeImage(row, frame) {
     refreshPreview();
   } catch (e) {
     await note("Could not remove the image", errText(e), true);
+  }
+}
+
+// ---------- palette editing ----------
+
+function palImage(row, f) {
+  const img = el("img", { src: dataUrl("image/png", f.png), alt: f.label });
+  if (row.name.toLowerCase().endsWith(".pal")) {
+    img.style.cursor = "crosshair";
+    img.style.width = "256px";
+    img.style.maxWidth = "none";
+    img.title = "Click a colour to change it";
+    img.addEventListener("click", (e) => {
+      const r = img.getBoundingClientRect();
+      const cx = Math.min(15, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * 16)));
+      const cy = Math.min(15, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * 16)));
+      pickColour(row, cy * 16 + cx);
+    });
+  }
+  return img;
+}
+
+async function pickColour(row, index) {
+  let current;
+  try {
+    current = (await invoke("pal_colors", { index: row.index }))[index];
+  } catch (e) {
+    await note("Could not read the palette", errText(e), true);
+    return;
+  }
+  const input = el("input", { type: "color", value: `#${current}` });
+  const go = await ask(`Colour ${index}`, [el("p", { text: index === 0 ? "Index 0 is the transparent colour in the client; its colour is rarely seen." : `Colour number ${index} of 255:` }), input], [{ label: "Set", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const h = input.value.slice(1);
+  await stagePal(row, { op: "set", index, rgb: [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }, `Colour ${index} of ${row.name} changed (staged); save with Changes….`);
+}
+
+async function adjustPalette(row) {
+  const f = (label, value, step) => el("label", { class: "muted", text: `${label} ` }, el("input", { type: "number", value: String(value), step: String(step), class: "narrow" }));
+  const [from, to, hue, sat, bri] = [f("From colour", 1, 1), f("to", 255, 1), f("Hue shift (°)", 0, 5), f("Saturation ×", 1, 0.05), f("Brightness ×", 1, 0.05)];
+  const v = (l) => Number(l.querySelector("input").value);
+  const go = await ask(`Adjust colours of ${row.name}`, [el("p", { text: "Colour 0 is the transparent one, so the range starts at 1." }), el("div", { class: "bar" }, from, to), el("div", { class: "bar" }, hue, sat, bri)], [{ label: "Apply", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  await stagePal(row, { op: "adjust", from: v(from), to: v(to), hue: v(hue), saturation: v(sat), brightness: v(bri) }, `Colours of ${row.name} adjusted (staged); save with Changes….`);
+}
+
+async function stagePal(row, edit, message) {
+  try {
+    setPending(await invoke("stage_pal_edit", { index: row.index, edit }));
+    setStatus(message);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not change the palette", errText(e), true);
   }
 }
 

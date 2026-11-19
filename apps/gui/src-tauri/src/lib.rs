@@ -2,6 +2,7 @@
 
 pub mod act_editor;
 pub mod backend;
+pub mod pal_editor;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -298,6 +299,26 @@ async fn stage_act_edit(
     .await
 }
 
+/// The 256 colours (`rrggbb`) of the palette `index`, with staged changes applied.
+#[tauri::command]
+async fn pal_colors(state: State<'_, AppState>, index: usize) -> Res<Vec<String>> {
+    with_session(&state, move |s| s.pal_colors(index)).await
+}
+
+/// Changes a colour or a range of colours of the palette `index` (staged).
+#[tauri::command]
+async fn stage_pal_edit(
+    state: State<'_, AppState>,
+    index: usize,
+    edit: pal_editor::PalEdit,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_pal_edit(index, &edit)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// The whole content of a text or Lua entry as editable text.
 #[tauri::command]
 async fn text_for_edit(state: State<'_, AppState>, index: usize) -> Res<backend::TextForEdit> {
@@ -487,6 +508,8 @@ pub fn run() {
             stage_spr_remove,
             stage_spr_palette,
             stage_act_interval,
+            pal_colors,
+            stage_pal_edit,
             act_frame,
             stage_act_edit,
             text_for_edit,

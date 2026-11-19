@@ -139,6 +139,12 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_act_edit(arg(a, "index")?, arg(a, "action")?, arg(a, "frame")?, &edit)?;
             to_json(s.pending())
         }),
+        "pal_colors" => with(state, |s| to_json(s.pal_colors(arg(a, "index")?)?)),
+        "stage_pal_edit" => with(state, |s| {
+            let edit: rustygrf_gui_lib::pal_editor::PalEdit = arg(a, "edit")?;
+            s.stage_pal_edit(arg(a, "index")?, &edit)?;
+            to_json(s.pending())
+        }),
         "text_for_edit" => with(state, |s| to_json(s.text_for_edit(arg(a, "index")?)?)),
         "stage_text_edit" => with(state, |s| {
             s.stage_text_edit(arg(a, "index")?, &arg::<String>(a, "text")?)?;
