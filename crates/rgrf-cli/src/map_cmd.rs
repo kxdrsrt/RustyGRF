@@ -164,6 +164,44 @@ pub fn info(input: &Path, entry: Option<&str>, names: NameMode, json: bool) -> R
     Ok(0)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn gat_set(
+    input: &Path,
+    entry: Option<&str>,
+    (from, to): ((u32, u32), (u32, u32)),
+    (kind, height): (Option<i32>, Option<f32>),
+    output: &Path,
+    overwrite: bool,
+    names: NameMode,
+    json: bool,
+) -> Result<i32> {
+    if kind.is_none() && height.is_none() {
+        bail!("nothing to change: give --type and/or --height");
+    }
+    let (data, what) = load(input, entry, names)?;
+    let mut g = Gat::parse(&data).with_context(|| format!("{what} is not a readable GAT"))?;
+    let changed = g.set_cells(from, to, kind, height)?;
+    if output.exists() && !overwrite {
+        bail!("{} exists already (use --overwrite)", output.display());
+    }
+    fs::write(output, g.to_bytes())
+        .with_context(|| format!("cannot write {}", output.display()))?;
+    if json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": crate::SCHEMA_VERSION,
+                "operation": "map gat-set",
+                "output": output.display().to_string(),
+                "details": {"cells_changed": changed},
+            })
+        );
+    } else {
+        println!("{changed} cells changed, written to {}", output.display());
+    }
+    Ok(0)
+}
+
 pub fn png(
     input: &Path,
     entry: Option<&str>,

@@ -319,6 +319,28 @@ enum MapCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Change the type and/or height of GAT cells in a rectangle (writes a new file)
+    GatSet {
+        input: PathBuf,
+        entry: Option<String>,
+        /// One corner of the rectangle `x,y` (x east, y north, origin south-west)
+        #[arg(long, value_parser = parse_cell)]
+        from: (u32, u32),
+        /// The opposite corner (default: the same cell)
+        #[arg(long, value_parser = parse_cell)]
+        to: Option<(u32, u32)>,
+        /// Cell type: 0 walkable, 1 not walkable, 2 not walkable and not snipable, 3 water, 5 not
+        /// walkable but snipable, 6 walkable
+        #[arg(long = "type")]
+        kind: Option<i32>,
+        /// Height for all four corners of every cell
+        #[arg(long)]
+        height: Option<f32>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Check that every file the maps name exists: ground, altitude, textures, models, sounds
     Check {
         /// A client folder (with DATA.INI) or a .grf
@@ -611,6 +633,14 @@ enum SprCmd {
         #[arg(long)]
         overwrite: bool,
     },
+}
+
+fn parse_cell(s: &str) -> Result<(u32, u32), String> {
+    let (x, y) = s
+        .split_once(',')
+        .ok_or_else(|| format!("'{s}': expected x,y"))?;
+    let n = |v: &str| v.trim().parse::<u32>().map_err(|e| format!("'{v}': {e}"));
+    Ok((n(x)?, n(y)?))
 }
 
 fn parse_format(s: &str) -> Result<Format, String> {
@@ -927,6 +957,25 @@ fn run(cli: &Cli) -> Result<i32> {
                 entry.as_deref(),
                 output,
                 *scale,
+                *overwrite,
+                cli.names,
+                cli.json,
+            ),
+            MapCmd::GatSet {
+                input,
+                entry,
+                from,
+                to,
+                kind,
+                height,
+                output,
+                overwrite,
+            } => map_cmd::gat_set(
+                input,
+                entry.as_deref(),
+                (*from, to.unwrap_or(*from)),
+                (*kind, *height),
+                output,
                 *overwrite,
                 cli.names,
                 cli.json,

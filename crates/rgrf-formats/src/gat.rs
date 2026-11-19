@@ -25,6 +25,13 @@ pub enum GatError {
     BadSize(i32, i32),
     #[error("{0} bytes of unused data after the cells")]
     Trailing(usize),
+    #[error("cell ({x}, {y}) is outside the {width} x {height} map")]
+    OutOfMap {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,6 +132,43 @@ impl Gat {
         (x < self.width && y < self.height).then(|| &self.cells[(y * self.width + x) as usize])
     }
 
+    /// Sets the type and/or the four corner heights of the cells in the rectangle `x0..=x1`,
+    /// `y0..=y1` (game coordinates, corners in any order). Returns how many cells changed. A
+    /// rectangle outside the map is an error; one that sticks out is cut to the map.
+    pub fn set_cells(
+        &mut self,
+        (x0, y0): (u32, u32),
+        (x1, y1): (u32, u32),
+        kind: Option<i32>,
+        height: Option<f32>,
+    ) -> Result<usize, GatError> {
+        let (xa, xb) = (x0.min(x1), x0.max(x1));
+        let (ya, yb) = (y0.min(y1), y0.max(y1));
+        if xa >= self.width || ya >= self.height {
+            return Err(GatError::OutOfMap {
+                x: xa,
+                y: ya,
+                width: self.width,
+                height: self.height,
+            });
+        }
+        let mut changed = 0;
+        for y in ya..=yb.min(self.height - 1) {
+            for x in xa..=xb.min(self.width - 1) {
+                let c = &mut self.cells[(y * self.width + x) as usize];
+                let before = *c;
+                if let Some(k) = kind {
+                    c.kind = k;
+                }
+                if let Some(h) = height {
+                    c.heights = [h; 4];
+                }
+                changed += usize::from(*c != before);
+            }
+        }
+        Ok(changed)
+    }
+
     /// Counts of each cell type, sorted by type.
     pub fn type_counts(&self) -> Vec<(i32, usize)> {
         let mut m = std::collections::BTreeMap::new();
@@ -204,6 +248,26 @@ mod tests {
                 cell(5.0, -2147483648),
             ],
         }
+    }
+
+    #[test]
+    fn set_cells_changes_a_rectangle_and_cuts_it_to_the_map() {
+        let mut g = sample();
+        // corners in any order, sticking out of the map
+        assert_eq!(g.set_cells((2, 1), (1, 5), Some(1), None), Ok(2));
+        assert_eq!(
+            g.cells.iter().map(|c| c.kind).collect::<Vec<_>>(),
+            [0, 1, 3, 5, 1, 1]
+        );
+        assert_eq!(g.set_cells((0, 0), (0, 0), None, Some(9.0)), Ok(1));
+        assert_eq!(g.cells[0].heights, [9.0; 4]);
+        // nothing differs: nothing counted
+        assert_eq!(g.set_cells((0, 0), (0, 0), None, Some(9.0)), Ok(0));
+        assert!(matches!(
+            g.set_cells((3, 0), (4, 0), Some(0), None),
+            Err(GatError::OutOfMap { .. })
+        ));
+        assert_eq!(Gat::parse(&g.to_bytes()).unwrap(), g);
     }
 
     #[test]

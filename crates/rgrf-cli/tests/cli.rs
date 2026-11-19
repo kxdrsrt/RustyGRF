@@ -1524,6 +1524,42 @@ fn map_info_png_and_check() {
         (Some(2), Some(2))
     );
     assert_eq!(v["types"].as_array().unwrap().len(), 4);
+    // change cells: the whole 2 x 2 map to water at height 7, in a new file
+    let o = rgrf(&[
+        "--json",
+        "map",
+        "gat-set",
+        &grf,
+        r"data\town.gat",
+        "--from",
+        "0,0",
+        "--to",
+        "1,1",
+        "--type",
+        "3",
+        "--height",
+        "7",
+        "-o",
+        &p("set.gat"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(json(&o)["details"]["cells_changed"].as_u64().unwrap() >= 1);
+    let v = json(&rgrf(&["--json", "map", "info", &p("set.gat")]));
+    assert_eq!(v["types"].as_array().unwrap().len(), 1);
+    assert_eq!(v["height_min"], 7.0);
+    // outside the map, and nothing to change, are usage errors
+    for args in [vec!["--from", "9,9", "--type", "0"], vec!["--from", "0,0"]] {
+        let mut a = vec![
+            "map",
+            "gat-set",
+            &grf,
+            r"data\town.gat",
+            "-o",
+            "/tmp/never.gat",
+        ];
+        a.extend(args);
+        assert_eq!(rgrf(&a).status.code(), Some(1));
+    }
     let v = json(&rgrf(&["--json", "map", "info", &grf, r"data\town.rsw"]));
     assert_eq!(v["objects"]["models"], 2);
     assert_eq!(v["ground"], "town.gnd");
@@ -1848,7 +1884,8 @@ fn lua_compile_version_5_0_writes_the_older_format() {
         b"\x1bLua\x50\x01\x04\x04\x04\x06\x08\x09\x09\x08"
     );
     assert_eq!(rgrf(&["lua", "check", &o]).status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&rgrf(&["lua", "decompile", &o]).stdout).contains("for"));
+    let listing = rgrf(&["lua", "decompile", &o, "--listing"]);
+    assert!(String::from_utf8_lossy(&listing.stdout).contains("FORLOOP"));
     // 5.0 grammar: no `#` operator
     std::fs::write(&src, "x = #t\n").unwrap();
     let r = rgrf(&[

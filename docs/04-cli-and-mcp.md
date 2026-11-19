@@ -38,6 +38,7 @@ Befehle: `info`, `ls`, `find`, `cat`, `extract`, `verify`, `hash`. Muster ohne `
 
 | `rgrf map info <datei \| grf pfad>` | **umgesetzt (M7e):** GAT (Größe, Höhen, Zelltypen), GND (Größe, Texturen) oder RSW (Dateien, Objekte, Wasser) oder RSM/RSM2 (Meshes, Texturen); `--json` |
 | `rgrf map png <gat> -o <png> [--scale N]` | **M7e:** Bild der Karte (grün begehbar, blau Wasser, grau nicht begehbar, Norden oben) |
+| `rgrf map gat-set <gat> --from x,y [--to x,y] [--type N] [--height H] -o <gat>` | **2026-11-19:** Typ und/oder Höhe der Zellen in einem Rechteck ändern (x Osten, y Norden, Ursprung Südwest); eine neue Datei |
 | `rgrf map check <client-ordner \| grf> [karte…]` | **M7e:** prüft, ob jede Datei existiert, die eine Karte nennt: Boden (GND), Höhen (GAT), Texturen, Modelle (RSM), die **Texturen in den Modellen** und Sounds. Bei einem Client-Ordner zählen `DATA.INI`-Reihenfolge und lose Dateien. Exit 0 ok, 3 Probleme |
 
 Die Bearbeiten-Befehle lesen eine lose Datei (oder `<grf> <pfad>`) und schreiben **immer eine neue Datei**; sie ändern nie die Eingabe und überschreiben nichts ohne `--overwrite`. Zurück ins GRF kommt das Ergebnis mit `rgrf build`, `merge` oder `patch`.
