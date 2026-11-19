@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
 use rgrf_formats::gif_io::upscale;
 use rgrf_formats::png_io::rgba_to_png;
-use rgrf_formats::render::{Bounds, Part, bounds_of_parts, render_parts};
+use rgrf_formats::render::{Bounds, Part, bounds_of_parts, layer_at, layer_bounds, render_parts};
 use rgrf_formats::spr::{RgbaImage, Spr};
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,9 @@ pub struct LayerView {
     pub scale_y: f32,
     pub rotation: i32,
     pub color: [u8; 4],
+    /// Where the layer lies in the picture (left, top, right, bottom in picture pixels); `None`
+    /// when it draws nothing.
+    pub bounds: Option<[i32; 4]>,
 }
 
 #[derive(Serialize, Debug)]
@@ -394,6 +397,7 @@ pub fn view_with(
                 scale_y: l.scale_y,
                 rotation: l.rotation,
                 color: l.color,
+                bounds: None,
             })
             .collect(),
         anchors: f
@@ -502,7 +506,36 @@ pub fn view_with(
     v.scale = scale as u32;
     v.origin_x = -bounds.min_x * scale as i32;
     v.origin_y = -bounds.min_y * scale as i32;
+    let k = scale as i32;
+    for (l, b) in v
+        .layers
+        .iter_mut()
+        .zip(layer_bounds(&act, &spr, action, frame))
+    {
+        l.bounds = b.map(|b| {
+            [
+                (b.min_x - bounds.min_x) * k,
+                (b.min_y - bounds.min_y) * k,
+                (b.max_x - bounds.min_x) * k,
+                (b.max_y - bounds.min_y) * k,
+            ]
+        });
+    }
     Ok(v)
+}
+
+/// The topmost layer with a visible pixel at a point of the frame (frame coordinates, origin 0).
+pub fn layer_at_point(
+    act_data: &[u8],
+    spr_data: &[u8],
+    action: usize,
+    frame: usize,
+    x: f64,
+    y: f64,
+) -> Result<Option<usize>, String> {
+    let act = Act::parse(act_data).map_err(|e| e.to_string())?;
+    let spr = Spr::parse(spr_data).map_err(|e| e.to_string())?;
+    Ok(layer_at(&act, &spr, action, frame, x, y))
 }
 
 #[cfg(test)]
@@ -565,6 +598,13 @@ mod tests {
         assert_eq!((v.layers.len(), v.frames, v.scale), (1, 1, 4));
         assert!(v.png.is_some() && v.error.is_none());
         assert!(v.anchors_supported && v.separate_scale);
+        // the only layer fills the picture (picture pixels, scaled like the picture)
+        assert_eq!(
+            v.layers[0].bounds,
+            Some([0, 0, v.width as i32, v.height as i32])
+        );
+        assert_eq!(layer_at_point(&act, &spr, 0, 0, 0.0, 0.0).unwrap(), Some(0));
+        assert_eq!(layer_at_point(&act, &spr, 0, 0, 99.0, 0.0).unwrap(), None);
 
         // fields that are not given stay as they are; rotation wraps into 0..360
         let a = apply(

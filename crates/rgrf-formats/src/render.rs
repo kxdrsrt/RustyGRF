@@ -303,6 +303,43 @@ pub fn render_parts(
     })
 }
 
+/// The frame area of each layer of `frame` (`None` for a layer that draws nothing).
+pub fn layer_bounds(act: &Act, spr: &Spr, action: usize, frame: usize) -> Vec<Option<Bounds>> {
+    act.actions
+        .get(action)
+        .and_then(|a| a.frames.get(frame))
+        .map(|f| {
+            f.layers
+                .iter()
+                .map(|l| prepare(l, spr).map(|p| p.bounds()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The topmost layer of `frame` with a visible pixel at the frame point (`x`, `y`).
+pub fn layer_at(
+    act: &Act,
+    spr: &Spr,
+    action: usize,
+    frame: usize,
+    x: f64,
+    y: f64,
+) -> Option<usize> {
+    let f = act.actions.get(action)?.frames.get(frame)?;
+    f.layers.iter().enumerate().rev().find_map(|(i, l)| {
+        let p = prepare(l, spr)?;
+        let (u, v) = p.inverse(x, y);
+        let (iu, iv) = (u.floor() as i64, v.floor() as i64);
+        let (w, h) = (i64::from(p.image.width), i64::from(p.image.height));
+        if iu < 0 || iv < 0 || iu >= w || iv >= h {
+            return None;
+        }
+        let at = 4 * (iv as usize * w as usize + iu as usize);
+        (p.image.pixels[at + 3] > 0 && p.color[3] > 0).then_some(i)
+    })
+}
+
 /// [`render_parts`] for a single ACT.
 pub fn render_frame(
     act: &Act,
@@ -531,6 +568,38 @@ mod tests {
         };
         assert_eq!(top(false), [0, 255, 0, 255], "on top of the base");
         assert_eq!(top(true), [255, 0, 0, 255], "below the base");
+    }
+
+    #[test]
+    fn the_layer_under_a_point_is_the_topmost_visible_one() {
+        // 2 x 2 images: 0 all red, 1 red only at the top left (index 0 is transparent)
+        let s = spr(vec![
+            IndexedImage {
+                width: 2,
+                height: 2,
+                pixels: vec![1; 4],
+            },
+            IndexedImage {
+                width: 2,
+                height: 2,
+                pixels: vec![1, 0, 0, 0],
+            },
+        ]);
+        let mut top = layer(1);
+        top.offset_x = 0.0;
+        let a = act(vec![layer(0), top]);
+        // a 2 x 2 image covers -1..1; the top layer is opaque only in its top left pixel
+        assert_eq!(layer_at(&a, &s, 0, 0, -0.5, -0.5), Some(1));
+        assert_eq!(
+            layer_at(&a, &s, 0, 0, 0.5, 0.5),
+            Some(0),
+            "transparent there: the one below"
+        );
+        assert_eq!(layer_at(&a, &s, 0, 0, 5.0, 5.0), None);
+        assert_eq!(layer_at(&a, &s, 9, 0, 0.0, 0.0), None);
+        let b = layer_bounds(&a, &s, 0, 0);
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[0].map(|b| (b.min_x, b.max_x)), Some((-1, 1)));
     }
 
     #[test]

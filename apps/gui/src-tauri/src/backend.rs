@@ -1697,6 +1697,23 @@ impl Session {
         self.act_view_with(index, action, frame, &[])
     }
 
+    /// The topmost layer of the animation `index` with a visible pixel at a frame point.
+    pub fn act_layer_at(
+        &self,
+        index: usize,
+        action: usize,
+        frame: usize,
+        x: f64,
+        y: f64,
+    ) -> Result<Option<usize>, String> {
+        let act = self.working_bytes(index)?.1;
+        let spr = self
+            .sibling(index, "spr")
+            .ok_or("the matching .spr is not in this archive")?;
+        let spr = self.working_bytes(spr)?.1;
+        act_editor::layer_at_point(&act, &spr, action, frame, x, y)
+    }
+
     /// [`Self::act_view`] with reference animations of this archive drawn in the picture.
     pub fn act_view_with(
         &self,

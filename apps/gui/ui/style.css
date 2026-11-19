@@ -277,6 +277,11 @@ dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
 .acted .soundfield { display: inline-flex; align-items: center; gap: 6px; }
 .acted .stage { position: relative; display: inline-block; line-height: 0; min-width: 120px; min-height: 120px; }
 .acted .stage img { image-rendering: pixelated; display: block; }
+.acted .stage { cursor: grab; touch-action: none; user-select: none; }
+.acted .stage:active { cursor: grabbing; }
+.acted .stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.acted .layerbox { position: absolute; border: 1px dashed var(--accent); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35); pointer-events: none; }
+.acted tr.sel td { background: var(--select); }
 .acted .cross-h, .acted .cross-v { position: absolute; background: var(--accent); opacity: 0.55; pointer-events: none; }
 .acted .cross-h { height: 1px; left: 0; right: 0; }
 .acted .cross-v { width: 1px; top: 0; bottom: 0; }

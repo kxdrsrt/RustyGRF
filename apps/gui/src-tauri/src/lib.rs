@@ -359,6 +359,19 @@ async fn act_frame(
     .await
 }
 
+/// The topmost layer with a visible pixel at a point of the frame (frame coordinates).
+#[tauri::command]
+async fn act_layer_at(
+    state: State<'_, AppState>,
+    index: usize,
+    action: usize,
+    frame: usize,
+    x: f64,
+    y: f64,
+) -> Res<Option<usize>> {
+    with_session(&state, move |s| s.act_layer_at(index, action, frame, x, y)).await
+}
+
 /// Changes a layer, an anchor or a frame of the animation `index` (staged).
 #[tauri::command]
 async fn stage_act_edit(
@@ -833,6 +846,7 @@ pub fn run() {
             merge_archives,
             reduce_preview,
             act_sound,
+            act_layer_at,
             stage_reduce,
             reduce_images,
             stage_replace,

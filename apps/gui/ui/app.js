@@ -1351,7 +1351,7 @@ async function setPalette(row) {
 
 // reference animations (a body or head to fit headgear on) stay chosen between sessions
 const ACT_REFS_KEY = "rustygrf.actReferences";
-const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map(), refs: loadActRefs() };
+const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map(), refs: loadActRefs(), layer: null };
 
 function loadActRefs() {
   try {
@@ -1569,6 +1569,69 @@ function soundField(v) {
   return el("span", { class: "soundfield" }, el("label", { class: "muted", text: "Sound " }, input, list), hear, note);
 }
 
+/** Picks, drags and nudges layers on the frame picture; each finished move is one staged change. */
+function wireStage(stage, v) {
+  // picture pixels per screen pixel (the picture may be shown smaller than it is)
+  const ratio = () => v.width / stage.querySelector("img").getBoundingClientRect().width;
+  const move = (i, dx, dy) => {
+    const l = v.layers[i];
+    if (l && (dx || dy)) actEdit({ op: "set_layer", layer: i, offset_x: Math.round(l.offset_x + dx), offset_y: Math.round(l.offset_y + dy) });
+  };
+  let drag = null;
+  stage.addEventListener("pointerdown", async (e) => {
+    if (e.button !== 0) return;
+    stopActPlay();
+    stage.setPointerCapture(e.pointerId);
+    const r = stage.querySelector("img").getBoundingClientRect();
+    const px = (e.clientX - r.left) * ratio();
+    const py = (e.clientY - r.top) * ratio();
+    drag = { x: e.clientX, y: e.clientY, dx: 0, dy: 0, layer: undefined };
+    const d = drag;
+    const hit = await invoke("act_layer_at", { index: E.row.index, action: E.action, frame: E.frame, x: (px - v.origin_x) / v.scale, y: (py - v.origin_y) / v.scale }).catch(() => null);
+    d.layer = hit ?? null;
+    if (d.layer !== E.layer) {
+      E.layer = d.layer;
+      if (drag !== d) return drawActEditor();
+      // show the new selection without losing the pointer: only the box and the table change
+      const b = d.layer != null ? v.layers[d.layer]?.bounds : null;
+      stage.querySelector(".layerbox")?.remove();
+      if (b) stage.append(el("div", { class: "layerbox", style: `left:${b[0]}px;top:${b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px` }));
+    }
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    drag.dx = e.clientX - drag.x;
+    drag.dy = e.clientY - drag.y;
+    // the box follows the pointer 1:1; the picture is drawn again when the move is staged
+    const box = stage.querySelector(".layerbox");
+    if (box && drag.layer != null) box.style.transform = `translate(${drag.dx}px, ${drag.dy}px)`;
+  });
+  const end = (e) => {
+    const d = drag;
+    drag = null;
+    if (!d) return;
+    stage.releasePointerCapture?.(e.pointerId);
+    const k = ratio() / v.scale;
+    const [fx, fy] = [Math.round(d.dx * k), Math.round(d.dy * k)];
+    // a click (or a tiny slip) only selects
+    if (d.layer != null && Math.hypot(d.dx, d.dy) >= 3 && (fx || fy)) move(d.layer, fx, fy);
+    else drawActEditor();
+  };
+  stage.addEventListener("pointerup", end);
+  stage.addEventListener("pointercancel", () => {
+    drag = null;
+    drawActEditor();
+  });
+  stage.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 10 : 1;
+    const dir = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (!dir) return;
+    e.preventDefault();
+    if (E.layer == null) E.layer = v.layers.length - 1;
+    move(E.layer, ...dir);
+  });
+}
+
 function drawActEditor() {
   const v = E.view;
   const num = (value, onset, opts = {}) => {
@@ -1601,10 +1664,14 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", text: "Remove action", disabled: v.actions <= 1, onclick: () => removeAction(v.action) }),
     el("button", { type: "button", class: "small", text: "Remove frame", disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
   );
-  const stage = el("div", { class: "stage checker" });
+  if (E.layer != null && E.layer >= v.layers.length) E.layer = null;
+  const stage = el("div", { class: "stage checker", tabindex: "0", "data-act-stage": "", role: "group", "aria-roledescription": "frame editor", "aria-label": `Frame ${v.frame + 1}. Click a layer to select it and drag it to move it; the arrow keys move the selected layer by 1 pixel, with Shift by 10.${E.layer != null ? ` Layer ${E.layer} is selected.` : ""}` });
   if (v.png) {
-    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width, height: v.height, alt: "frame" }), el("div", { class: "cross-h", style: `top:${v.origin_y}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x}px` }));
+    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width, height: v.height, alt: "", draggable: "false" }), el("div", { class: "cross-h", style: `top:${v.origin_y}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x}px` }));
     v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: `anchor ${i}`, style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
+    const b = E.layer != null ? v.layers[E.layer]?.bounds : null;
+    if (b) stage.append(el("div", { class: "layerbox", style: `left:${b[0]}px;top:${b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px` }));
+    wireStage(stage, v);
   }
   const left = el("div", {}, stage, v.error ? el("p", { class: "muted", text: `No picture: ${v.error}` }) : null, el("p", { class: "muted", text: "The lines mark the origin; red dots are anchors. Layers are drawn in order, the last one on top." }));
   const head = ["#", "Type", "Image", "x", "y", "Mirror", v.separate_scale ? "Scale x / y" : "Scale", "Rot", "Colour", "α", ""];
@@ -1615,8 +1682,8 @@ function drawActEditor() {
     colour.addEventListener("change", () => setL(i, { color: [parseInt(colour.value.slice(1, 3), 16), parseInt(colour.value.slice(3, 5), 16), parseInt(colour.value.slice(5, 7), 16), l.color[3]] }));
     return el(
       "tr",
-      {},
-      el("td", { text: String(i) }),
+      { class: i === E.layer ? "sel" : "" },
+      el("td", {}, el("button", { type: "button", class: "small", text: String(i), title: "Select this layer (drag it on the picture or use the arrow keys there)", "aria-pressed": String(i === E.layer), onclick: () => { E.layer = i === E.layer ? null : i; drawActEditor(); } })),
       el("td", {}, typeSel),
       el("td", {}, num(l.sprite_index, (n) => setL(i, { sprite_index: n }), { narrow: true })),
       el("td", {}, num(l.offset_x, (n) => setL(i, { offset_x: n }), { narrow: true })),
@@ -1641,8 +1708,10 @@ function drawActEditor() {
     : el("p", { class: "muted", text: `ACT ${v.version} has no anchors.` });
   // every frame is drawn anew: keep the keyboard on Play/Stop while it plays
   const keepPlay = document.activeElement?.hasAttribute("data-act-play");
+  const keepStage = document.activeElement?.hasAttribute("data-act-stage");
   $("act-body").replaceChildren(el("div", { class: "acted" }, bar, referenceRow(v), left, el("div", {}, layers, anchors)));
   if (keepPlay) $("act-body").querySelector("[data-act-play]")?.focus();
+  if (keepStage) $("act-body").querySelector("[data-act-stage]")?.focus();
   updateEditBar();
 }
 
