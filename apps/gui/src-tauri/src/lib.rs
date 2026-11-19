@@ -623,91 +623,124 @@ fn startup_select() -> Option<String> {
 const SETTINGS_MENU_ID: &str = "settings";
 const COMMAND_PREFIX: &str = "cmd:";
 
-/// The system's default menu bar plus every toolbar command (so the toolbar is never the only
-/// place for a command), the list layouts and the preview position, and "Settings..." (in the
-/// application menu on macOS, in Edit elsewhere). The page runs the commands; a command whose
-/// button is disabled at that moment does nothing.
+/// The menu bar: the platform's usual menus plus every toolbar command (so the toolbar is never
+/// the only place for a command), the list layouts and the preview position, and "Settings..."
+/// (in the application menu on macOS, in Edit elsewhere). The page runs the commands; a command
+/// whose button is disabled at that moment does nothing.
+///
+/// Built in one go from filled submenus, like Tauri's own default menu: on Windows a submenu
+/// inserted into a finished menu bar does not show up, and Linux has no File menu by default.
 fn build_menu(app: &AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-    let menu = Menu::default(app)?;
-    let item = |id: &str, text: &str, accel: Option<&str>| {
-        MenuItem::with_id(app, format!("{COMMAND_PREFIX}{id}"), text, true, accel)
+    use tauri::menu::{AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+    type Item = Box<dyn IsMenuItem<tauri::Wry>>;
+    let item = |id: &str, text: &str, accel: Option<&str>| -> tauri::Result<Item> {
+        Ok(Box::new(MenuItem::with_id(
+            app,
+            format!("{COMMAND_PREFIX}{id}"),
+            text,
+            true,
+            accel,
+        )?))
     };
-    let sep = || PredefinedMenuItem::separator(app);
-    let find = |name: &str| -> tauri::Result<Option<Submenu<tauri::Wry>>> {
-        for kind in menu.items()? {
-            if let Some(sub) = kind.as_submenu()
-                && sub.text()? == name
-            {
-                return Ok(Some(sub.clone()));
-            }
-        }
-        Ok(None)
+    let sep = || -> tauri::Result<Item> { Ok(Box::new(PredefinedMenuItem::separator(app)?)) };
+    let submenu = |name: &str, items: &[Item]| {
+        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|i| i.as_ref()).collect();
+        Submenu::with_items(app, name, true, &refs)
     };
-
-    if let Some(file) = find("File")? {
-        let entries = [
-            item("open", "Open...", None)?,
-            item("build", "Build...", None)?,
-            item("merge", "Merge...", None)?,
-            item("extract", "Extract...", None)?,
-            item("verify", "Verify", None)?,
-            item("changes", "Save Changes as New Archive...", None)?,
-        ];
-        file.insert(&entries[0], 0)?;
-        file.insert(&sep()?, 1)?;
-        for (k, e) in entries[1..].iter().enumerate() {
-            file.insert(e, 2 + k)?;
-        }
-        file.insert(&sep()?, 2 + entries.len() - 1)?;
-    }
-    if let Some(edit) = find("Edit")? {
-        edit.append(&sep()?)?;
-        edit.append(&item("add", "Add File...", None)?)?;
-        edit.append(&item("replace", "Replace...", None)?)?;
-        edit.append(&item("remove", "Remove", None)?)?;
-        edit.append(&item("changes", "Review Changes...", None)?)?;
-    }
-    if let Some(view) = find("View")? {
-        let entries = [
-            item("layout-list", "As List", Some("CmdOrCtrl+1"))?,
-            item("layout-details", "As Details", Some("CmdOrCtrl+2"))?,
-            item("layout-tree", "As Tree", Some("CmdOrCtrl+3"))?,
-            item("layout-folders", "As Folders", Some("CmdOrCtrl+4"))?,
-        ];
-        for (k, e) in entries.iter().enumerate() {
-            view.insert(e, k)?;
-        }
-        view.insert(&sep()?, 4)?;
-        view.insert(&item("preview-right", "Preview on the Right", None)?, 5)?;
-        view.insert(&item("preview-bottom", "Preview at the Bottom", None)?, 6)?;
-        view.insert(&item("preview-off", "Hide Preview", None)?, 7)?;
-        view.insert(&sep()?, 8)?;
-    }
-
-    let settings = MenuItem::with_id(
+    let settings: Item = Box::new(MenuItem::with_id(
         app,
         SETTINGS_MENU_ID,
         "Settings...",
         true,
         Some("CmdOrCtrl+,"),
-    )?;
-    let home = if cfg!(target_os = "macos") {
-        find(&app.package_info().name)?
-    } else {
-        find("Edit")?
+    )?);
+    let info = app.package_info();
+    let about = AboutMetadata {
+        name: Some(info.name.clone()),
+        version: Some(info.version.to_string()),
+        copyright: app.config().bundle.copyright.clone(),
+        authors: app.config().bundle.publisher.clone().map(|p| vec![p]),
+        ..Default::default()
     };
-    if let Some(sub) = home {
-        // after "About" on macOS, at the end of Edit elsewhere
-        let at = if cfg!(target_os = "macos") {
-            1
-        } else {
-            sub.items()?.len()
-        };
-        sub.insert(&sep()?, at)?;
-        sub.insert(&settings, at + 1)?;
+    let about: Item = Box::new(PredefinedMenuItem::about(app, None, Some(about))?);
+
+    let mut file = vec![
+        item("open", "Open...", Some("CmdOrCtrl+O"))?,
+        sep()?,
+        item("build", "Build...", None)?,
+        item("merge", "Merge...", None)?,
+        item("extract", "Extract...", None)?,
+        item("verify", "Verify", None)?,
+        item("changes", "Save Changes as New Archive...", None)?,
+        sep()?,
+        Box::new(PredefinedMenuItem::close_window(app, None)?),
+    ];
+    let mut edit: Vec<Item> = vec![
+        Box::new(PredefinedMenuItem::undo(app, None)?),
+        Box::new(PredefinedMenuItem::redo(app, None)?),
+        sep()?,
+        Box::new(PredefinedMenuItem::cut(app, None)?),
+        Box::new(PredefinedMenuItem::copy(app, None)?),
+        Box::new(PredefinedMenuItem::paste(app, None)?),
+        Box::new(PredefinedMenuItem::select_all(app, None)?),
+        sep()?,
+        item("add", "Add File...", None)?,
+        item("replace", "Replace...", None)?,
+        item("remove", "Remove", None)?,
+        item("changes", "Review Changes...", None)?,
+    ];
+    let mut view = vec![
+        item("layout-list", "As List", Some("CmdOrCtrl+1"))?,
+        item("layout-details", "As Details", Some("CmdOrCtrl+2"))?,
+        item("layout-tree", "As Tree", Some("CmdOrCtrl+3"))?,
+        item("layout-folders", "As Folders", Some("CmdOrCtrl+4"))?,
+        sep()?,
+        item("preview-right", "Preview on the Right", None)?,
+        item("preview-bottom", "Preview at the Bottom", None)?,
+        item("preview-off", "Hide Preview", None)?,
+    ];
+    let mut window: Vec<Item> = vec![
+        Box::new(PredefinedMenuItem::minimize(app, None)?),
+        Box::new(PredefinedMenuItem::maximize(app, None)?),
+    ];
+    let mut menus = Vec::new();
+    let mut help = None;
+    if cfg!(target_os = "macos") {
+        menus.push(submenu(
+            &info.name,
+            &[
+                about,
+                sep()?,
+                settings,
+                sep()?,
+                Box::new(PredefinedMenuItem::services(app, None)?),
+                sep()?,
+                Box::new(PredefinedMenuItem::hide(app, None)?),
+                Box::new(PredefinedMenuItem::hide_others(app, None)?),
+                sep()?,
+                Box::new(PredefinedMenuItem::quit(app, None)?),
+            ],
+        )?);
+        view.push(sep()?);
+        view.push(Box::new(PredefinedMenuItem::fullscreen(app, None)?));
+        window.push(sep()?);
+        window.push(Box::new(PredefinedMenuItem::close_window(app, None)?));
+    } else {
+        file.push(Box::new(PredefinedMenuItem::quit(app, None)?));
+        edit.push(sep()?);
+        edit.push(settings);
+        help = Some(submenu("Help", &[about])?);
     }
-    app.set_menu(menu)?;
+    menus.push(submenu("File", &file)?);
+    menus.push(submenu("Edit", &edit)?);
+    menus.push(submenu("View", &view)?);
+    menus.push(submenu("Window", &window)?);
+    menus.extend(help);
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = menus
+        .iter()
+        .map(|m| m as &dyn IsMenuItem<tauri::Wry>)
+        .collect();
+    app.set_menu(Menu::with_items(app, &refs)?)?;
     Ok(())
 }
 

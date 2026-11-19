@@ -161,7 +161,6 @@ async function openPath(path, force = false) {
     await note("Could not open", errText(e), true);
     return;
   }
-  document.title = `${S.info.file_name} - RustyGRF`;
   $("empty").hidden = true;
   $("lists").hidden = false;
   for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes", "sort", "sort-dir", "size-filter"]) $(id).disabled = false;
@@ -170,6 +169,7 @@ async function openPath(path, force = false) {
   syncViewBar();
   S.changes = [];
   S.changed = new Map();
+  updateTitle();
   updateEditBar();
   $("search").value = "";
   $("names").value = SET.names;
@@ -876,9 +876,23 @@ function updateEditBar() {
 
 const changeKey = (name) => name.toLowerCase().replace(/\//g, "\\");
 
+/** The window title: the archive, marked while it has unsaved changes (the platform's way). */
+function updateTitle() {
+  const name = S.info?.file_name;
+  const edited = (S.changes?.length ?? 0) > 0;
+  const mac = /Mac/.test(navigator.platform);
+  let title = "RustyGRF";
+  if (name) title = mac ? `${name}${edited ? " — Edited" : ""}` : `${edited ? "*" : ""}${name} - RustyGRF`;
+  if (document.title === title) return;
+  document.title = title;
+  // the native title bar does not follow document.title by itself
+  T.window?.getCurrentWindow?.().setTitle(title).catch(() => {});
+}
+
 function setPending(rows) {
   S.changes = rows;
   S.changed = new Map(rows.map((r) => [changeKey(r.name), r.kind]));
+  updateTitle();
   updateEditBar();
   render();
 }
@@ -1882,7 +1896,11 @@ function openSettings() {
     } }),
     el("button", { type: "button", class: "primary", icon: "success", text: "Done", onclick: () => dlg.close() }),
   );
-  if (!dlg.open) dlg.showModal();
+  if (!dlg.open) {
+    dlg.showModal();
+    // showModal focuses the first focusable element, which is the scrolling body itself
+    $("settings-body").querySelector("select, input, button")?.focus();
+  }
 }
 
 // ---------- wiring ----------
