@@ -256,14 +256,14 @@ pub fn png(
 }
 
 /// The files of a client or of one GRF: first archive wins; loose `data` files count too.
-struct Vfs {
-    archives: Vec<(String, Archive)>,
-    keymaps: Vec<HashMap<Vec<u8>, Vec<usize>>>,
+pub(crate) struct Vfs {
+    pub(crate) archives: Vec<(String, Archive)>,
+    pub(crate) keymaps: Vec<HashMap<Vec<u8>, Vec<usize>>>,
     loose: BTreeSet<Vec<u8>>,
 }
 
 impl Vfs {
-    fn open(input: &Path) -> Result<Self> {
+    pub(crate) fn open(input: &Path) -> Result<Self> {
         let mut archives = Vec::new();
         let mut loose = BTreeSet::new();
         if input.is_dir() {
@@ -305,18 +305,18 @@ impl Vfs {
     }
 
     /// (archive, entry) of the file that wins for `key`.
-    fn find(&self, key: &[u8]) -> Option<(usize, usize)> {
+    pub(crate) fn find(&self, key: &[u8]) -> Option<(usize, usize)> {
         self.keymaps
             .iter()
             .enumerate()
             .find_map(|(n, m)| m.get(key).and_then(|v| v.last()).map(|&i| (n, i)))
     }
 
-    fn exists(&self, key: &[u8]) -> bool {
+    pub(crate) fn exists(&self, key: &[u8]) -> bool {
         self.find(key).is_some() || self.loose.contains(key)
     }
 
-    fn read(&self, at: (usize, usize)) -> Result<Vec<u8>> {
+    pub(crate) fn read(&self, at: (usize, usize)) -> Result<Vec<u8>> {
         Ok(self.archives[at.0].1.read(at.1)?.data)
     }
 }

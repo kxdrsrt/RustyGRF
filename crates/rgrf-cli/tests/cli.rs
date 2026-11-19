@@ -734,6 +734,111 @@ fn image_reduce_shrinks_true_colour_bmps_and_keeps_magenta() {
 }
 
 #[test]
+fn client_refs_finds_what_animations_name_and_do_not_have() {
+    use rgrf_formats::act::{Act, Action, Frame, Layer, V2_5, sound_from_name};
+    use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, Spr, Version};
+
+    let spr = Spr {
+        version: Version::V2_1,
+        indexed: vec![IndexedImage {
+            width: 2,
+            height: 2,
+            pixels: vec![1; 4],
+        }],
+        rgba: vec![],
+        palette: Some(Box::new([0u8; PALETTE_LEN])),
+        warnings: vec![],
+    };
+    let act = |image: i32, sounds: &[&str], plays: &[i32]| {
+        let frame = |sound_id: i32| Frame {
+            layers: vec![Layer {
+                sprite_index: image,
+                ..Layer::default()
+            }],
+            sound_id,
+            ..Frame::default()
+        };
+        Act {
+            version: V2_5,
+            reserved: [0; 10],
+            actions: vec![Action {
+                frames: plays.iter().map(|&p| frame(p)).collect(),
+                interval: 4.0,
+            }],
+            sounds: sounds.iter().map(|n| sound_from_name(n).unwrap()).collect(),
+            trailing: vec![],
+            warnings: vec![],
+        }
+        .to_bytes(V2_5)
+        .unwrap()
+    };
+    let dir = tmpdir("refs");
+    let sprite = dir.join("src/data/sprite");
+    std::fs::create_dir_all(&sprite).unwrap();
+    std::fs::create_dir_all(dir.join("src/data/wav")).unwrap();
+    let spr_bytes = spr.to_bytes(Version::V2_1).unwrap();
+    for n in ["good", "badimage", "sound"] {
+        std::fs::write(sprite.join(format!("{n}.spr")), &spr_bytes).unwrap();
+    }
+    std::fs::write(sprite.join("good.act"), act(0, &[], &[-1])).unwrap();
+    std::fs::write(sprite.join("nospr.act"), act(0, &[], &[-1])).unwrap();
+    std::fs::write(sprite.join("badimage.act"), act(3, &[], &[-1])).unwrap();
+    // sound 0 has no file, sound 1 is the hit marker, sound 2 is there, 5 is outside the table
+    std::fs::write(
+        sprite.join("sound.act"),
+        act(0, &["gone.wav", "atk", "here.wav"], &[0, 1, 2, 5]),
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/data/wav/here.wav"), b"RIFF").unwrap();
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    assert_eq!(
+        rgrf(&["build", &p("src"), "-o", &p("a.grf"), "--quiet"])
+            .status
+            .code(),
+        Some(0)
+    );
+
+    let o = rgrf(&["client", "refs", &p("a.grf"), "--json"]);
+    assert_eq!(
+        o.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(v["animations_checked"], 4);
+    let by = &v["by_kind"];
+    assert_eq!(
+        (
+            by["missing_sprite"].as_u64(),
+            by["image_out_of_range"].as_u64(),
+            by["missing_sound"].as_u64(),
+            by["sound_out_of_range"].as_u64()
+        ),
+        (Some(1), Some(1), Some(1), Some(1)),
+        "{v}"
+    );
+    assert_eq!(v["problems"], 4);
+    // a folder without the problem files is clean
+    std::fs::remove_file(sprite.join("nospr.act")).unwrap();
+    std::fs::remove_file(sprite.join("badimage.act")).unwrap();
+    std::fs::remove_file(sprite.join("sound.act")).unwrap();
+    assert_eq!(
+        rgrf(&["build", &p("src"), "-o", &p("b.grf"), "--quiet"])
+            .status
+            .code(),
+        Some(0)
+    );
+    assert_eq!(
+        rgrf(&["client", "refs", &p("b.grf"), "--quiet"])
+            .status
+            .code(),
+        Some(0)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn spr_info_export_build_round_trip() {
     use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};
 

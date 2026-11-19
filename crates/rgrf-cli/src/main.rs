@@ -33,6 +33,7 @@ mod lua_cmd;
 mod map_cmd;
 mod pal_cmd;
 mod patch_cmd;
+mod refs_cmd;
 mod spr_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -440,6 +441,22 @@ enum ClientCmd {
         skip_resource_check: bool,
         #[arg(long)]
         overwrite: bool,
+    },
+    /// The files animations (.act) and effects (.str) name, checked against the archives: the
+    /// sprite next to each animation, the images its layers use, the sounds its frames play, the
+    /// textures of an effect (exit 0 nothing missing, 3 problems)
+    Refs {
+        /// A client folder (with DATA.INI, the first archive wins) or one archive
+        input: PathBuf,
+        /// Only animations (act) or only effects (str)
+        #[arg(long, value_parser = ["act", "str"])]
+        only: Option<String>,
+        /// How many problems or folders to list (the counts are always complete)
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// List every animation without a sprite instead of counting them per folder
+        #[arg(long)]
+        files: bool,
     },
     /// Report what could go wrong before the client is started (exit 0 ok, 2 warnings, 3 errors)
     Check {
@@ -1329,6 +1346,12 @@ fn run(cli: &Cli) -> Result<i32> {
                 *overwrite,
                 cli.json,
             ),
+            ClientCmd::Refs {
+                input,
+                only,
+                limit,
+                files,
+            } => refs_cmd::check(input, only.as_deref(), *limit, *files, cli.names, cli.json),
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)
             }
