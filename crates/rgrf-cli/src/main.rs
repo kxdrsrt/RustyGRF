@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 
 mod act_cmd;
 mod client_cmd;
+mod crypt_cmd;
 mod edit_cmd;
 mod lua_cmd;
 mod map_cmd;
@@ -53,6 +54,17 @@ struct Cli {
     /// Worker threads (default: all cores)
     #[arg(long, global = true)]
     threads: Option<usize>,
+    /// Password of GRF Editor's encryption (at least 4 characters; also read from RGRF_PASSWORD):
+    /// opens encrypted archives, and encrypts with --encrypt
+    #[arg(long, global = true)]
+    password: Option<String>,
+    /// A .grfkey file (as GRF Editor saves it) instead of --password
+    #[arg(long, global = true)]
+    key_file: Option<PathBuf>,
+    /// Encrypt the output of build, repack, merge and patch with the password or key file (0x200
+    /// only). A repack with a key but without --encrypt writes the archive decrypted
+    #[arg(long, global = true)]
+    encrypt: bool,
     #[command(subcommand)]
     command: Cmd,
 }
@@ -62,7 +74,23 @@ fn parse_names(s: &str) -> Result<NameMode, String> {
 }
 
 #[derive(Subcommand)]
+enum KeyCmd {
+    /// Write a .grfkey file for the --password (GRF Editor and --key-file read it)
+    Create {
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
+    /// Keys for GRF Editor's encryption
+    Key {
+        #[command(subcommand)]
+        action: KeyCmd,
+    },
     /// Version, size, entry counts
     Info {
         grf: PathBuf,
@@ -352,6 +380,26 @@ enum MapCmd {
 
 #[derive(Subcommand)]
 enum ClientCmd {
+    /// Make a client read GRFs that are encrypted with the --password or --key-file: writes a
+    /// patched executable and the key-carrying DLL (GRF Editor's scheme; needs its cps.dll)
+    Encrypt {
+        /// The client executable (it is not changed; the patched copy goes to the output folder)
+        exe: PathBuf,
+        /// GRF Editor's template cps.dll (its source tree has it as GRFEditor/Files/cps.dll)
+        #[arg(long)]
+        cps_dll: PathBuf,
+        /// Output folder for the patched executable and the DLL
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Keep the DLL name cps.dll instead of a name made from the key
+        #[arg(long)]
+        no_rename: bool,
+        /// Do not fail when the client lacks the names the patch looks for
+        #[arg(long)]
+        skip_resource_check: bool,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Report what could go wrong before the client is started (exit 0 ok, 2 warnings, 3 errors)
     Check {
         /// The client folder (with DATA.INI)
@@ -691,8 +739,9 @@ struct WriteArgs {
 }
 
 impl WriteArgs {
-    fn options(&self) -> Result<RepackOptions> {
+    fn options(&self, encrypt: Option<rgrf_core::grfcrypt::Key>) -> Result<RepackOptions> {
         Ok(RepackOptions {
+            encrypt,
             method: match self.method {
                 Some(m) => method_from(m, self.level)?,
                 None => Method::DEFAULT,
@@ -763,7 +812,8 @@ fn main() {
 
 fn open(path: &Path) -> Result<(Archive, u128)> {
     let t = Instant::now();
-    let a = Archive::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let a =
+        crypt_cmd::open_archive(path).with_context(|| format!("cannot open {}", path.display()))?;
     Ok((a, t.elapsed().as_millis()))
 }
 
@@ -882,8 +932,29 @@ impl Meter {
     }
 }
 
+/// The key to encrypt the output with (`--encrypt`).
+fn encrypt_key(cli: &Cli) -> Result<Option<rgrf_core::grfcrypt::Key>> {
+    if !cli.encrypt {
+        return Ok(None);
+    }
+    crypt_cmd::key()
+        .copied()
+        .map(Some)
+        .ok_or_else(|| anyhow!("--encrypt needs --password or --key-file"))
+}
+
 fn run(cli: &Cli) -> Result<i32> {
+    crypt_cmd::init(cli.password.as_deref(), cli.key_file.as_deref())?;
     match &cli.command {
+        Cmd::Key { action } => match action {
+            KeyCmd::Create { output, overwrite } => {
+                let password = cli
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("give the password with --password"))?;
+                crypt_cmd::create(password, output, *overwrite, cli.json)
+            }
+        },
         Cmd::Info { grf, codecs } => info(cli, grf, *codecs),
         Cmd::Ls { grf, pattern, long } => list(cli, grf, pattern.as_deref(), &[], *long),
         Cmd::Find { grf, pattern, ext } => list(cli, grf, pattern.as_deref(), ext, true),
@@ -983,6 +1054,22 @@ fn run(cli: &Cli) -> Result<i32> {
             MapCmd::Check { input, maps } => map_cmd::check(input, maps, cli.names, cli.json),
         },
         Cmd::Client { action } => match action {
+            ClientCmd::Encrypt {
+                exe,
+                cps_dll,
+                output,
+                no_rename,
+                skip_resource_check,
+                overwrite,
+            } => client_cmd::encrypt(
+                exe,
+                cps_dll,
+                output,
+                !*no_rename,
+                *skip_resource_check,
+                *overwrite,
+                cli.json,
+            ),
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)
             }
@@ -1282,6 +1369,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 overwrite: *overwrite,
                 dry_run: *dry_run,
                 max_file_len: None,
+                encrypt: encrypt_key(cli)?,
             };
             build_cmd(cli, folder, output, &opts)
         }
@@ -1291,13 +1379,19 @@ fn run(cli: &Cli) -> Result<i32> {
             output,
             replace_only,
             write,
-        } => merge_cmd(cli, grfs, output, *replace_only, &write.options()?),
+        } => merge_cmd(
+            cli,
+            grfs,
+            output,
+            *replace_only,
+            &write.options(encrypt_key(cli)?)?,
+        ),
         Cmd::Patch {
             old,
             new,
             output,
             write,
-        } => patch_cmd(cli, old, new, output, &write.options()?),
+        } => patch_cmd(cli, old, new, output, &write.options(encrypt_key(cli)?)?),
         Cmd::Repack {
             grf,
             output,
@@ -1334,6 +1428,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 dry_run: *dry_run,
                 copy_streams: false,
                 max_file_len: None,
+                encrypt: encrypt_key(cli)?,
             };
             repack_cmd(cli, grf, output, &opts)
         }
@@ -1385,6 +1480,13 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
         if let Some((z, l)) = counts {
             v["codecs"] = json!({"zlib": z, "lzma": l});
         }
+        if let Some(e) = a.encryption() {
+            v["grf_editor_encryption"] = json!({
+                "key_crc32": e.marker_crc.map(|c| format!("{c:08x}")),
+                "encrypted_entries": e.encrypted_entries,
+                "key_given": e.key_set,
+            });
+        }
         if let Some(p) = &a.header().patch {
             v["patch"] = json!({
                 "merge_into_grf": p.merge_into_grf,
@@ -1429,6 +1531,18 @@ fn info(cli: &Cli, grf: &Path, codecs: bool) -> Result<i32> {
             println!("Key block:  {} bytes (protected archive)", t.key_block);
         }
         println!("Encrypted:  {encrypted}");
+        if let Some(e) = a.encryption() {
+            println!(
+                "GRF Editor encryption: key CRC32 {}, {} entries encrypted, {}",
+                e.marker_crc.map_or("?".into(), |c| format!("{c:08x}")),
+                e.encrypted_entries,
+                if e.key_set {
+                    "key given, readable"
+                } else {
+                    "a key is needed (--password or --key-file)"
+                }
+            );
+        }
         if des > 0 {
             println!("DES:        {des} entries scrambled with the old DES scheme (readable)");
         }

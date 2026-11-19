@@ -38,6 +38,8 @@ pub struct BuildOptions {
     pub dry_run: bool,
     /// Override of the format's size limit (tests).
     pub max_file_len: Option<u64>,
+    /// Encrypt all files with GRF Editor's scheme (0x200 only) and mark the archive.
+    pub encrypt: Option<crate::grfcrypt::Key>,
 }
 
 impl Default for BuildOptions {
@@ -52,6 +54,7 @@ impl Default for BuildOptions {
             overwrite: false,
             dry_run: false,
             max_file_len: None,
+            encrypt: None,
         }
     }
 }
@@ -349,9 +352,15 @@ fn write_all(
     ctl: &Control,
     report: &mut BuildReport,
 ) -> Result<()> {
+    if opts.encrypt.is_some() && opts.format != Format::V200 {
+        return Err(Error::Unsupported(
+            "the encryption works with the 0x200 format only (as in GRF Editor)".into(),
+        ));
+    }
     let align = opts
         .align
-        .unwrap_or_else(|| opts.format.aligns_by_default());
+        .unwrap_or_else(|| opts.format.aligns_by_default())
+        || opts.encrypt.is_some();
     let file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
     let writer = Writer::new(
         BufWriter::with_capacity(1 << 20, file),
@@ -360,13 +369,17 @@ fn write_all(
         opts.max_file_len,
     )?;
     let mut stream_bytes = 0u64;
-    let (writer, done) = pipeline::run(
+    let (mut writer, done) = pipeline::run(
         writer,
         pipeline::batches(units.iter().map(|u| items[u.members[0]].size)),
         units.len() as u64,
         ctl,
         &|u| prepare(items, u, &units[u], opts),
-        &|u| items[units[u].members[0]].name.clone(),
+        &|u| {
+            let it = &items[units[u].members[0]];
+            (it.name.clone(), it.size as u32)
+        },
+        opts.encrypt.as_ref(),
         &mut |batch| stream_bytes += batch.iter().map(|p| p.stream.len() as u64).sum::<u64>(),
     )?;
     let mut placed: Vec<Option<Placed>> = vec![None; units.len()];
@@ -381,7 +394,7 @@ fn write_all(
             unit_of[m] = u;
         }
     }
-    let entries: Vec<OutEntry> = items
+    let mut entries: Vec<OutEntry> = items
         .iter()
         .enumerate()
         .map(|(i, it)| OutEntry {
@@ -391,13 +404,24 @@ fn write_all(
             flags: flags::FILE,
         })
         .collect();
+    if let Some(key) = &opts.encrypt {
+        entries.push(pipeline::encryption_marker(&mut writer, key)?);
+    }
     let (len, mut out) = writer.finish(&entries)?;
     std::io::Write::flush(&mut out)?;
     drop(out);
     report.output_file_len = len;
     report.output_stream_bytes = stream_bytes;
     if opts.verify {
-        verify_built(items, units, &unit_of, &expected, tmp, ctl)?;
+        verify_built(
+            items,
+            units,
+            &unit_of,
+            &expected,
+            tmp,
+            opts.encrypt.as_ref(),
+            ctl,
+        )?;
         report.verified = true;
     }
     Ok(())
@@ -409,15 +433,20 @@ fn verify_built(
     unit_of: &[usize],
     expected: &[Expected],
     path: &Path,
+    key: Option<&crate::grfcrypt::Key>,
     ctl: &Control,
 ) -> Result<()> {
     let fail = |m: String| Err(Error::VerifyFailed(m));
-    let out = Archive::open(path)?;
-    if out.len() != items.len() {
+    let out = match key {
+        Some(k) => Archive::open_with_key(path, k)?,
+        None => Archive::open(path)?,
+    };
+    let extra = usize::from(key.is_some());
+    if out.len() != items.len() + extra {
         return fail(format!(
             "{} entries written, {} expected",
             out.len(),
-            items.len()
+            items.len() + extra
         ));
     }
     for (i, (it, e)) in items.iter().zip(out.entries()).enumerate() {

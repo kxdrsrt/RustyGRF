@@ -15,7 +15,7 @@ Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/
 
 ## Nicht-Ziele (vorerst)
 - Kein Ersatz der kompletten GRF-Editor-GUI in der ersten Version.
-- Keine Verschlüsselung/Gravity-Schutz in Version 1 (erst nach Entscheidung, siehe [docs/03-roadmap.md](docs/03-roadmap.md)).
+- GRF Editors Verschlüsselung (Passwort, `cps.dll`) wird unterstützt, Gravitys Schutz (Flag 0x80, 0x300 mit Schlüsselblock) nicht (siehe [docs/02-format-notes.md](docs/02-format-notes.md)).
 
 ## Dokumente
 | Datei | Inhalt |

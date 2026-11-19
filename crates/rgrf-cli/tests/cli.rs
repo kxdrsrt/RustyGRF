@@ -1968,3 +1968,106 @@ fn patch_files_written_by_grf_editor_are_read_correctly() {
         let _ = std::fs::remove_dir_all(dest);
     }
 }
+
+#[test]
+fn grf_editor_encryption_end_to_end() {
+    let dir = tmpdir("crypt");
+    std::fs::create_dir_all(dir.join("src/data")).unwrap();
+    std::fs::write(dir.join("src/data/a.txt"), "hello hello hello hello\n").unwrap();
+    std::fs::write(dir.join("src/data/b.txt"), "second second second second\n").unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    let pw = ["--password", "geheim123"];
+    let with = |extra: &[&str]| -> Vec<String> {
+        pw.iter()
+            .chain(extra)
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>()
+    };
+    let run = |extra: &[&str]| {
+        let v = with(extra);
+        rgrf(&v.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+
+    // build encrypted; without the key the files are listed as encrypted and not extracted
+    let o = run(&["--encrypt", "build", &p("src"), "-o", &p("e.grf"), "-q"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&rgrf(&["--json", "info", &p("e.grf")]));
+    assert_eq!(v["grf_editor_encryption"]["encrypted_entries"], 2);
+    assert_eq!(v["grf_editor_encryption"]["key_given"], false);
+    let o = rgrf(&["extract", &p("e.grf"), &p("out1")]);
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("2 encrypted"),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    assert!(!dir.join("out1/data/a.txt").exists());
+
+    // with the key (password or key file) everything is read; a wrong one is refused
+    let o = run(&["extract", &p("e.grf"), &p("out2")]);
+    assert!(o.status.success());
+    assert_eq!(
+        std::fs::read(dir.join("out2/data/a.txt")).unwrap(),
+        std::fs::read(dir.join("src/data/a.txt")).unwrap()
+    );
+    let o = run(&["key", "create", "-o", &p("k.grfkey")]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(std::fs::metadata(dir.join("k.grfkey")).unwrap().len(), 260);
+    let o = rgrf(&[
+        "--key-file",
+        &p("k.grfkey"),
+        "cat",
+        &p("e.grf"),
+        r"data\b.txt",
+    ]);
+    assert_eq!(o.stdout, b"second second second second\n");
+    let o = rgrf(&["--password", "another one", "verify", &p("e.grf")]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("does not belong"));
+
+    // a repack with the key decrypts, with --encrypt it encrypts again
+    let o = run(&["repack", &p("e.grf"), "-o", &p("plain.grf"), "-q"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        json(&rgrf(&["--json", "info", &p("plain.grf")]))
+            .get("grf_editor_encryption")
+            .is_none()
+    );
+    let o = run(&[
+        "--encrypt",
+        "repack",
+        &p("plain.grf"),
+        "-o",
+        &p("again.grf"),
+        "-q",
+    ]);
+    assert!(o.status.success());
+    // --encrypt without a key is a usage error
+    let o = rgrf(&["--encrypt", "repack", &p("plain.grf"), "-o", &p("x.grf")]);
+    assert_eq!(o.status.code(), Some(1));
+
+    // the client side: needs GRF Editor's cps.dll (here a stand-in with the placeholder)
+    let mut dll = vec![5u8; 300];
+    dll.extend_from_slice(b"uncompress\0");
+    dll.extend_from_slice(b"TKTK");
+    dll.extend(vec![0u8; 520]);
+    std::fs::write(dir.join("cps.dll"), &dll).unwrap();
+    let mut exe = vec![1u8; 200];
+    exe.extend_from_slice(b"cps.dll\0uncompress\0");
+    std::fs::write(dir.join("client.exe"), &exe).unwrap();
+    let o = run(&[
+        "--json",
+        "client",
+        "encrypt",
+        &p("client.exe"),
+        "--cps-dll",
+        &p("cps.dll"),
+        "-o",
+        &p("patched"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    let dll_name = v["dll_name"].as_str().unwrap();
+    assert!(dll_name.ends_with(".dll") && dir.join("patched").join(dll_name).exists());
+    assert!(dir.join("patched/client.exe").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}

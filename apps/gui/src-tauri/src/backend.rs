@@ -174,6 +174,8 @@ pub struct Session {
     undo: Vec<Vec<Change>>,
     redo: Vec<Vec<Change>>,
     keys: OnceLock<HashMap<Vec<u8>, usize>>,
+    /// The key of GRF Editor's encryption, if the archive was opened with one.
+    crypt_key: Option<rgrf_core::grfcrypt::Key>,
 }
 
 /// A change waiting to be saved into a new archive (the open archive is never modified).
@@ -225,6 +227,8 @@ pub struct PendingRow {
 pub struct EditPlan {
     src: PathBuf,
     changes: Vec<Change>,
+    /// The key of an encrypted source; the result is encrypted again with it.
+    key: Option<rgrf_core::grfcrypt::Key>,
 }
 
 #[derive(Serialize, Debug)]
@@ -245,6 +249,15 @@ pub struct ArchiveInfo {
     pub entries: usize,
     pub files: usize,
     pub file_size: u64,
+    /// Set for an archive with GRF Editor's encryption.
+    pub encryption: Option<EncryptionOut>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EncryptionOut {
+    pub encrypted_entries: usize,
+    /// No (right) key yet: the encrypted entries cannot be read.
+    pub key_needed: bool,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -642,7 +655,11 @@ pub fn save_edited(
     overwrite: bool,
     ctl: &Control,
 ) -> Result<EditSummary, String> {
-    let src = Archive::open(&plan.src).map_err(|e| format!("{}: {e}", plan.src.display()))?;
+    let src = match &plan.key {
+        Some(k) => Archive::open_with_key(&plan.src, k),
+        None => Archive::open(&plan.src),
+    }
+    .map_err(|e| format!("{}: {e}", plan.src.display()))?;
     let mut edits = Vec::with_capacity(plan.changes.len());
     for c in &plan.changes {
         edits.push(match c {
@@ -661,6 +678,7 @@ pub fn save_edited(
     let opts = RepackOptions {
         overwrite,
         copy_streams: true,
+        encrypt: plan.key,
         ..RepackOptions::default()
     };
     let r = edit::apply(&src, &plan.src, dst, &edits, &opts, ctl).map_err(|e| e.to_string())?;
@@ -858,7 +876,17 @@ fn hex_dump(bytes: &[u8]) -> String {
 
 impl Session {
     pub fn open(path: &Path) -> Result<Self, String> {
-        let arc = Archive::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::open_with(path, None)
+    }
+
+    /// Opens an archive, with the key of GRF Editor's encryption if there is one (this also opens
+    /// a file table that is encrypted).
+    pub fn open_with(path: &Path, key: Option<&rgrf_core::grfcrypt::Key>) -> Result<Self, String> {
+        let arc = match key {
+            Some(k) => Archive::open_with_key(path, k),
+            None => Archive::open(path),
+        }
+        .map_err(|e| format!("{}: {e}", path.display()))?;
         // Korean names are readable; `set_names` switches to Latin-1 (as GRF Editor shows them) or UTF-8.
         let mode = NameMode::Cp949;
         let names = Self::display_names(&arc, mode);
@@ -873,6 +901,7 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             keys: OnceLock::new(),
+            crypt_key: key.copied(),
         })
     }
 
@@ -1319,6 +1348,7 @@ impl Session {
         Ok(EditPlan {
             src: self.path.clone(),
             changes: self.pending.clone(),
+            key: self.crypt_key,
         })
     }
 
@@ -1348,6 +1378,10 @@ impl Session {
             entries: self.arc.len(),
             files: self.arc.entries().iter().filter(|e| e.is_file()).count(),
             file_size: self.arc.file_len(),
+            encryption: self.arc.encryption().map(|e| EncryptionOut {
+                encrypted_entries: e.encrypted_entries,
+                key_needed: !e.key_set,
+            }),
         }
     }
 
@@ -2404,6 +2438,58 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_encrypted_archive_opens_with_its_key_and_is_saved_encrypted() {
+        let key = rgrf_core::grfcrypt::key_from_password("secret pw").unwrap();
+        let dir = tmp("crypt");
+        fs::create_dir_all(dir.join("src/data")).unwrap();
+        fs::write(dir.join("src/data/a.txt"), "hello hello hello hello\n").unwrap();
+        fs::write(dir.join("src/data/b.txt"), "second file second file\n").unwrap();
+        let grf = dir.join("e.grf");
+        build(
+            &dir.join("src"),
+            &grf,
+            &BuildOptions {
+                encrypt: Some(key),
+                ..BuildOptions::default()
+            },
+            &Control::default(),
+        )
+        .unwrap();
+        // without the key the archive opens, says so, and the text cannot be shown
+        let s = Session::open(&grf).unwrap();
+        let info = s.info();
+        let e = info.encryption.as_ref().unwrap();
+        assert!(e.key_needed && e.encrypted_entries == 2, "{info:?}");
+        let a = find(&s, "a.txt");
+        assert!(!matches!(
+            s.preview(a, None).unwrap(),
+            Preview::Text { text, .. } if text.contains("hello")
+        ));
+        // a wrong key is refused
+        let wrong = rgrf_core::grfcrypt::key_from_password("wrong pw").unwrap();
+        assert!(Session::open_with(&grf, Some(&wrong)).is_err());
+        // with the key everything reads, and a saved edit stays encrypted
+        let mut s = Session::open_with(&grf, Some(&key)).unwrap();
+        assert!(!s.info().encryption.unwrap().key_needed);
+        let a = find(&s, "a.txt");
+        assert!(matches!(
+            s.preview(a, None).unwrap(),
+            Preview::Text { text, .. } if text.contains("hello")
+        ));
+        let new = dir.join("new.txt");
+        fs::write(&new, "changed\n").unwrap();
+        s.stage_replace(a, &new).unwrap();
+        let out = dir.join("out.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let o = Archive::open(&out).unwrap();
+        assert_eq!(o.encryption().unwrap().encrypted_entries, 2);
+        let o = Archive::open_with_key(&out, &key).unwrap();
+        let ia = o.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap();
+        assert_eq!(o.read(ia).unwrap().data, b"changed\n");
         let _ = fs::remove_dir_all(dir);
     }
 

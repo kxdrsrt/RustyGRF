@@ -60,7 +60,12 @@ pub mod flags {
     pub const GRF_EDITOR_CRYPT: u8 = 0x20;
     /// Gravity's protected-entry scheme of newer archives (needs the key block of a 0x300 archive).
     pub const GRAVITY_CRYPT: u8 = 0x80;
-    pub const ANY_CRYPT: u8 = HEADER_CRYPT | DATA_CRYPT | GRF_EDITOR_CRYPT | GRAVITY_CRYPT;
+    /// Not stored in any file: set when reading an archive that has the hidden `__encryption.info`
+    /// entry and this entry's stream looks encrypted (GRF Editor writes no flag for it). Cleared
+    /// when the key is set.
+    pub const DETECTED_CRYPT: u8 = 0x40;
+    pub const ANY_CRYPT: u8 =
+        HEADER_CRYPT | DATA_CRYPT | GRF_EDITOR_CRYPT | GRAVITY_CRYPT | DETECTED_CRYPT;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,12 +191,13 @@ impl Entry {
     /// Scrambled with the old DES scheme of [`crate::des`]: readable without a key.
     pub fn is_des(&self) -> bool {
         self.flags & (flags::HEADER_CRYPT | flags::DATA_CRYPT) != 0
-            && self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT) == 0
+            && self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT | flags::DETECTED_CRYPT)
+                == 0
     }
 
     /// Encrypted in a way that needs a key we do not have (GRF Editor's scheme, Gravity's).
     pub fn needs_key(&self) -> bool {
-        self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT) != 0
+        self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT | flags::DETECTED_CRYPT) != 0
     }
 
     /// How the data of a DES entry is scrambled.
@@ -358,6 +364,14 @@ pub struct Container {
 }
 
 pub fn read_container(src: &dyn ReadAt) -> Result<Container> {
+    read_container_with(src, None)
+}
+
+/// Like [`read_container`]; `key` opens a file table that is encrypted (GRF Editor scheme).
+pub fn read_container_with(
+    src: &dyn ReadAt,
+    key: Option<&crate::grfcrypt::Key>,
+) -> Result<Container> {
     let file_len = src.len()?;
     if file_len < HEADER_LEN {
         return Err(Error::NotGrf(format!("file has only {file_len} bytes")));
@@ -407,11 +421,21 @@ pub fn read_container(src: &dyn ReadAt) -> Result<Container> {
     }
     let mut packed = vec![0u8; zsize as usize];
     src.read_exact_at(&mut packed, abs + u64::from(prefix_len))?;
+    let encrypted = crate::grfcrypt::looks_encrypted(&packed);
+    if let (true, Some(key)) = (encrypted, key) {
+        crate::grfcrypt::crypt(key, &mut packed, u64::from(size) + 8);
+    }
     let mut table = Vec::with_capacity(size as usize);
     flate2::read::ZlibDecoder::new(&packed[..])
         .take(u64::from(size) + 1)
         .read_to_end(&mut table)
-        .map_err(|e| Error::CorruptTable(format!("file table does not decompress: {e}")))?;
+        .map_err(|e| {
+            if encrypted && key.is_none() {
+                Error::EncryptedTable
+            } else {
+                Error::CorruptTable(format!("file table does not decompress: {e}"))
+            }
+        })?;
     if table.len() != size as usize {
         return Err(Error::CorruptTable(format!(
             "file table is {} bytes, header says {size}",

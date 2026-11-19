@@ -86,6 +86,42 @@ async function chooseArchive() {
   if (path) await openPath(Array.isArray(path) ? path[0] : path);
 }
 
+// An archive with GRF Editor's encryption needs its password: ask for it (again after a wrong one).
+async function openWithKey(path) {
+  let password = null;
+  let problem = "";
+  for (;;) {
+    let info = null;
+    try {
+      info = await invoke("open_archive", { path, password });
+      if (!info.encryption?.key_needed) return info;
+    } catch (e) {
+      // only a missing or wrong key is asked about again
+      if (!/key/i.test(errText(e)) || !/encrypted|CRC32/i.test(errText(e))) throw e;
+      problem = /CRC32/.test(errText(e)) ? "This password does not belong to the archive." : "";
+    }
+    if (info && !problem && password !== null) problem = "This password does not belong to the archive.";
+    const input = el("input", { type: "password", class: "field", autocomplete: "off", spellcheck: "false" });
+    const answer = await ask(
+      "Encrypted archive",
+      [
+        el("p", { text: "This archive is encrypted (GRF Editor's scheme). Enter its password to read the files." }),
+        problem ? el("p", { class: "error", text: problem }) : null,
+        input,
+      ],
+      [
+        { label: "Open without password", value: "skip" },
+        { label: "Open", value: "ok", primary: true },
+      ],
+    );
+    if (answer === "skip" || answer === null) {
+      if (info) return info;
+      throw new Error("The file table of this archive is encrypted; a password is needed to open it.");
+    }
+    password = input.value;
+  }
+}
+
 async function openPath(path, force = false) {
   if (!force && S.changes.length) {
     const go = await ask("Open another archive?", el("p", { text: `${fmtNum(S.changes.length)} pending change(s) in the open archive will be lost.` }), [{ label: "Open anyway", value: true }, { label: "Cancel", value: null, primary: true }]);
@@ -93,7 +129,7 @@ async function openPath(path, force = false) {
   }
   setStatus(`Opening ${path} …`);
   try {
-    S.info = await invoke("open_archive", { path });
+    S.info = await openWithKey(path);
   } catch (e) {
     setStatus("Could not open the archive");
     await note("Could not open", errText(e), true);

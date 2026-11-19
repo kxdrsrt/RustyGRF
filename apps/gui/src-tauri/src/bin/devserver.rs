@@ -53,7 +53,13 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
     let none = Control::default();
     match cmd {
         "open_archive" => {
-            let s = Session::open(&PathBuf::from(arg::<String>(a, "path")?))?;
+            let key = a
+                .get("password")
+                .and_then(|p| p.as_str())
+                .filter(|p| !p.is_empty())
+                .map(|p| rgrf_core::grfcrypt::key_from_password(p).map_err(|e| e.to_string()))
+                .transpose()?;
+            let s = Session::open_with(&PathBuf::from(arg::<String>(a, "path")?), key.as_ref())?;
             let info = s.info();
             *state.lock().map_err(|_| "state is locked")? = Some(s);
             to_json(info)

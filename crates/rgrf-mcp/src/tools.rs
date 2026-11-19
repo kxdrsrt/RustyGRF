@@ -73,6 +73,11 @@ const LEVEL: Param = opt(
     Ty::Int,
     "zlib 0-9 (default 9), zopfli iterations (default 10), lzma preset 0-9 (default 9).",
 );
+const ENCRYPT: Param = opt(
+    "encrypt",
+    Ty::Bool,
+    "Encrypt the files with GRF Editor's scheme (0x200 only), using the password of the server's RGRF_PASSWORD (or the key file RGRF_KEY_FILE). Without it, an archive that is opened with a key is written decrypted.",
+);
 const FORMAT: Param = opt(
     "format",
     Ty::Enum(&["0x200", "0x300", "0x102", "0x103"]),
@@ -295,6 +300,7 @@ pub const TOOLS: &[Tool] = &[
             METHOD,
             LEVEL,
             FORMAT,
+            ENCRYPT,
             opt(
                 "dedupe",
                 Ty::Bool,
@@ -317,6 +323,7 @@ pub const TOOLS: &[Tool] = &[
             METHOD,
             LEVEL,
             FORMAT,
+            ENCRYPT,
             DEDUPE,
             OVERWRITE,
             DRY_RUN,
@@ -339,6 +346,7 @@ pub const TOOLS: &[Tool] = &[
             METHOD_OR_COPY,
             LEVEL,
             FORMAT,
+            ENCRYPT,
             DEDUPE,
             OVERWRITE,
             DRY_RUN,
@@ -357,6 +365,7 @@ pub const TOOLS: &[Tool] = &[
             METHOD_OR_COPY,
             LEVEL,
             FORMAT,
+            ENCRYPT,
             DEDUPE,
             OVERWRITE,
             DRY_RUN,
@@ -376,9 +385,37 @@ fn names_mode(a: &Args) -> NameMode {
         .unwrap_or_default()
 }
 
+/// The key of GRF Editor's encryption from the server's environment: `RGRF_PASSWORD` or the key
+/// file `RGRF_KEY_FILE`. The password is not a tool argument so that it stays out of the chat.
+fn env_key() -> Result<Option<rgrf_core::grfcrypt::Key>, String> {
+    use rgrf_core::grfcrypt;
+    if let Some(p) = std::env::var("RGRF_PASSWORD")
+        .ok()
+        .filter(|p| !p.is_empty())
+    {
+        return grfcrypt::key_from_password(&p)
+            .map(Some)
+            .map_err(|e| e.to_string());
+    }
+    if let Some(f) = std::env::var("RGRF_KEY_FILE")
+        .ok()
+        .filter(|f| !f.is_empty())
+    {
+        let bytes = std::fs::read(&f).map_err(|e| format!("RGRF_KEY_FILE {f}: {e}"))?;
+        return grfcrypt::key_from_file(&bytes)
+            .map(Some)
+            .map_err(|e| e.to_string());
+    }
+    Ok(None)
+}
+
 fn open(ctx: &Ctx, path: &str) -> Result<Archive, String> {
     let p = ctx.policy.read(path)?;
-    let mut a = Archive::open(&p).map_err(|e| format!("{path}: {e}"))?;
+    let mut a = match env_key()? {
+        Some(k) => Archive::open_with_key(&p, &k),
+        None => Archive::open(&p),
+    }
+    .map_err(|e| format!("{path}: {e}"))?;
     a.set_max_entry_size(MAX_ENTRY_BYTES);
     Ok(a)
 }
@@ -741,6 +778,16 @@ fn format(a: &Args) -> Option<Format> {
     })
 }
 
+/// The key for `encrypt: true`.
+fn encrypt_key(a: &Args) -> Result<Option<rgrf_core::grfcrypt::Key>, String> {
+    if !a.flag("encrypt") {
+        return Ok(None);
+    }
+    env_key()?.map(Some).ok_or_else(|| {
+        "encrypt needs RGRF_PASSWORD or RGRF_KEY_FILE in the server's environment".to_string()
+    })
+}
+
 /// `copy_by_default`: without `method` the streams are copied unchanged (merge, patch).
 fn repack_options(a: &Args, copy_by_default: bool) -> Result<RepackOptions, String> {
     Ok(RepackOptions {
@@ -754,6 +801,7 @@ fn repack_options(a: &Args, copy_by_default: bool) -> Result<RepackOptions, Stri
         },
         overwrite: a.flag("overwrite"),
         dry_run: a.flag("dry_run"),
+        encrypt: encrypt_key(a)?,
         ..RepackOptions::default()
     })
 }
@@ -794,6 +842,7 @@ fn build_tool(ctx: &Ctx, a: &Args) -> Out {
         names: names_mode(a),
         overwrite: a.flag("overwrite"),
         dry_run: a.flag("dry_run"),
+        encrypt: encrypt_key(a)?,
         ..BuildOptions::default()
     };
     let r = build(&src, &out, &opts, &ctx.control).map_err(err)?;

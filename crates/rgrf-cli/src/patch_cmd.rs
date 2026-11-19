@@ -7,7 +7,7 @@ use rgrf_core::build::scan_folder;
 use rgrf_core::encode::Method;
 use rgrf_core::rgz;
 use rgrf_core::thor::{self, ThorFile, ThorOptions};
-use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
+use rgrf_core::{DecodeStatus, GrfPath, NameMode};
 use serde_json::json;
 
 /// The files of a folder (the folder is the patch root) or of an archive, decoded.
@@ -23,7 +23,8 @@ fn collect(source: &Path, names: NameMode) -> Result<Vec<(GrfPath, Vec<u8>)>> {
             })
             .collect();
     }
-    let a = Archive::open(source).with_context(|| format!("cannot open {}", source.display()))?;
+    let a = crate::crypt_cmd::open_archive(source)
+        .with_context(|| format!("cannot open {}", source.display()))?;
     let mut out = Vec::new();
     for (i, e) in a.entries().iter().enumerate() {
         if e.is_marker() || e.is_removal() {

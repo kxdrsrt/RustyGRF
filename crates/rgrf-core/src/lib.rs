@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod build;
+pub mod clientcrypt;
 pub mod codec;
 pub mod container;
 pub mod des;
@@ -9,6 +10,7 @@ pub mod edit;
 pub mod encode;
 pub mod error;
 pub mod extract;
+pub mod grfcrypt;
 pub mod hash;
 pub mod io;
 pub mod merge;

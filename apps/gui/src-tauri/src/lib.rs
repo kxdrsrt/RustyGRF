@@ -46,10 +46,18 @@ where
 }
 
 #[tauri::command]
-async fn open_archive(state: State<'_, AppState>, path: String) -> Res<ArchiveInfo> {
+async fn open_archive(
+    state: State<'_, AppState>,
+    path: String,
+    password: Option<String>,
+) -> Res<ArchiveInfo> {
     let shared = Arc::clone(&state.session);
     tauri::async_runtime::spawn_blocking(move || {
-        let s = Session::open(&PathBuf::from(path))?;
+        let key = password
+            .filter(|p| !p.is_empty())
+            .map(|p| rgrf_core::grfcrypt::key_from_password(&p).map_err(|e| e.to_string()))
+            .transpose()?;
+        let s = Session::open_with(&PathBuf::from(path), key.as_ref())?;
         let info = s.info();
         *shared
             .lock()

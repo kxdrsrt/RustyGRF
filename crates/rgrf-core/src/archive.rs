@@ -6,6 +6,7 @@ use crate::codec::{self, Decoded};
 use crate::container::{self, Entry, Header, TableInfo};
 use crate::des;
 use crate::error::{Error, Result};
+use crate::grfcrypt::{self, Key};
 use crate::io::{ReadAt, Source};
 use crate::name::{GrfPath, NameMode, glob_match};
 use crate::{rgz, thor};
@@ -22,6 +23,26 @@ pub struct Archive<R: ReadAt = Source> {
     entries: Vec<Entry>,
     file_len: u64,
     max_entry_size: u64,
+    crypt: Option<Crypt>,
+}
+
+/// State of an archive with GRF Editor's encryption (it has the hidden `__encryption.info` entry).
+struct Crypt {
+    /// CRC32 of the key, from the hidden entry (`None` when that entry cannot be read).
+    marker_crc: Option<u32>,
+    key: Option<Box<Key>>,
+    /// Entries whose stored stream was encrypted.
+    crypted: Vec<bool>,
+}
+
+/// What [`Archive::encryption`] tells about an encrypted archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncryptionInfo {
+    pub marker_crc: Option<u32>,
+    /// Entries whose stream is encrypted.
+    pub encrypted_entries: usize,
+    /// A key was set, so the entries are readable.
+    pub key_set: bool,
 }
 
 impl Archive<Source> {
@@ -46,23 +67,126 @@ impl Archive<Source> {
         }
         Self::from_source(Source::File(file))
     }
+
+    /// Like [`Archive::open`] with the key of GRF Editor's encryption: opens a file table that is
+    /// encrypted too, and makes the encrypted entries readable.
+    pub fn open_with_key(path: impl AsRef<Path>, key: &Key) -> Result<Self> {
+        let file = File::open(path)?;
+        let mut a = Self::from_source_with_key(Source::File(file), Some(key))?;
+        a.set_key(*key)?;
+        Ok(a)
+    }
 }
 
 impl<R: ReadAt> Archive<R> {
     /// Reads a GRF (0x102 to 0x300) from any positional source.
     pub fn from_source(src: R) -> Result<Self> {
-        let c = container::read_container(&src)?;
+        Self::from_source_with_key(src, None)
+    }
+
+    fn from_source_with_key(src: R, key: Option<&Key>) -> Result<Self> {
+        let c = container::read_container_with(&src, key)?;
         Ok(Self::from_parts(src, c))
     }
 
     fn from_parts(src: R, c: container::Container) -> Self {
-        Self {
+        let mut a = Self {
             src,
             header: c.header,
             table: c.table,
             entries: c.entries,
             file_len: c.file_len,
             max_entry_size: DEFAULT_MAX_ENTRY_SIZE,
+            crypt: None,
+        };
+        a.detect_encryption();
+        a
+    }
+
+    /// Looks for the hidden entry of GRF Editor's encryption and, if it is there, for the entries
+    /// whose streams are encrypted (they get the flag `DETECTED_CRYPT`, "needs a key").
+    fn detect_encryption(&mut self) {
+        if self.header.is_legacy() {
+            return;
+        }
+        let marker_key = GrfPath::new(grfcrypt::MARKER_NAME.as_bytes()).key();
+        let Some(marker) = self.entries.iter().position(|e| e.name.key() == marker_key) else {
+            return;
+        };
+        let marker_crc = self.read(marker).ok().and_then(|d| {
+            d.data
+                .get(..4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        });
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by_key(|&i| self.entries[i].offset);
+        let mut crypted = vec![false; self.entries.len()];
+        for i in order {
+            let e = &self.entries[i];
+            // plain streams of other kinds (stored uncompressed, markers, DES, empty) are not encrypted
+            if i == marker
+                || e.flags != container::flags::FILE
+                || e.zsize < 3
+                || e.abs_offset() + 3 > self.file_len
+            {
+                continue;
+            }
+            let mut head = [0u8; 3];
+            if self.src.read_exact_at(&mut head, e.abs_offset()).is_ok()
+                && grfcrypt::looks_encrypted(&head)
+            {
+                crypted[i] = true;
+            }
+        }
+        for (e, &c) in self.entries.iter_mut().zip(&crypted) {
+            if c {
+                e.flags |= container::flags::DETECTED_CRYPT;
+            }
+        }
+        self.crypt = Some(Crypt {
+            marker_crc,
+            key: None,
+            crypted,
+        });
+    }
+
+    /// Whether the archive uses GRF Editor's encryption (has the hidden entry).
+    pub fn encryption(&self) -> Option<EncryptionInfo> {
+        self.crypt.as_ref().map(|c| EncryptionInfo {
+            marker_crc: c.marker_crc,
+            encrypted_entries: c.crypted.iter().filter(|&&x| x).count(),
+            key_set: c.key.is_some(),
+        })
+    }
+
+    /// Sets the key of an encrypted archive; the entries then read as plain ones. A key that does
+    /// not match the CRC32 in the hidden entry is refused. On an archive that is not encrypted
+    /// this does nothing.
+    pub fn set_key(&mut self, key: Key) -> Result<()> {
+        let Some(c) = &mut self.crypt else {
+            return Ok(());
+        };
+        if c.marker_crc
+            .is_some_and(|crc| crc != grfcrypt::key_crc(&key))
+        {
+            return Err(Error::WrongKey);
+        }
+        c.key = Some(Box::new(key));
+        for (e, &was) in self.entries.iter_mut().zip(&c.crypted) {
+            if was {
+                e.flags &= !container::flags::DETECTED_CRYPT;
+            }
+        }
+        Ok(())
+    }
+
+    /// The key for an entry whose stream is encrypted and readable (a key is set).
+    fn key_for(&self, index: usize) -> Option<&Key> {
+        let c = self.crypt.as_ref()?;
+        if c.crypted.get(index).copied().unwrap_or(false) {
+            c.key.as_deref()
+        } else {
+            None
         }
     }
 
@@ -116,6 +240,9 @@ impl<R: ReadAt> Archive<R> {
         }
         let mut buf = vec![0u8; e.zsize as usize];
         self.src.read_exact_at(&mut buf, offset)?;
+        if let Some(key) = self.key_for(index) {
+            grfcrypt::crypt(key, &mut buf, u64::from(e.size));
+        }
         Ok(buf)
     }
 
@@ -142,6 +269,9 @@ impl<R: ReadAt> Archive<R> {
         }
         let mut buf = vec![0u8; len as usize];
         self.src.read_exact_at(&mut buf, e.abs_offset())?;
+        if let Some(key) = self.key_for(index) {
+            grfcrypt::crypt(key, &mut buf, u64::from(e.size));
+        }
         Ok(buf)
     }
 
@@ -159,6 +289,9 @@ impl<R: ReadAt> Archive<R> {
                 size: u64::from(e.zsize),
                 file_size: self.file_len,
             });
+        }
+        if self.key_for(index).is_some() {
+            return Ok(codec::sniff(&self.read_raw(index)?));
         }
         let mut b = [0u8; 1];
         self.src.read_exact_at(&mut b, e.abs_offset())?;

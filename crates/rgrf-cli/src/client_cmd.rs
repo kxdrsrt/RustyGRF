@@ -188,7 +188,7 @@ pub fn check(dir: &Path, names: NameMode, json: bool, check_lua: bool) -> Result
             );
             continue;
         };
-        match Archive::open(&path) {
+        match crate::crypt_cmd::open_archive(&path) {
             Ok(arc) => loaded.push(Loaded {
                 file: e.file.clone(),
                 arc,
@@ -469,4 +469,74 @@ pub fn check(dir: &Path, names: NameMode, json: bool, check_lua: bool) -> Result
         Level::Warn => 2,
         Level::Info => 0,
     })
+}
+
+/// `rgrf client encrypt`: the client side of GRF Editor's encryption (see `rgrf_core::clientcrypt`).
+pub fn encrypt(
+    exe: &Path,
+    cps_dll: &Path,
+    output: &Path,
+    rename: bool,
+    skip_resource_check: bool,
+    overwrite: bool,
+    json: bool,
+) -> Result<i32> {
+    use rgrf_core::clientcrypt::{ClientOptions, patch_client};
+    let key = crate::crypt_cmd::key()
+        .ok_or_else(|| anyhow::anyhow!("give the key with --password or --key-file"))?;
+    let client = fs::read(exe).with_context(|| format!("cannot read {}", exe.display()))?;
+    let template =
+        fs::read(cps_dll).with_context(|| format!("cannot read {}", cps_dll.display()))?;
+    let exe_name = exe
+        .file_name()
+        .context("the client path has no file name")?
+        .to_string_lossy()
+        .into_owned();
+    let patch = patch_client(
+        &client,
+        &template,
+        key,
+        exe_name.as_bytes(),
+        &ClientOptions {
+            rename,
+            skip_resource_check,
+            ..ClientOptions::default()
+        },
+    )?;
+    fs::create_dir_all(output)?;
+    let (out_exe, out_dll) = (output.join(&exe_name), output.join(&patch.dll_name));
+    for p in [&out_exe, &out_dll] {
+        if p.exists() && !overwrite {
+            bail!("{} exists already (use --overwrite)", p.display());
+        }
+    }
+    if out_exe.canonicalize().ok() == exe.canonicalize().ok() && out_exe.exists() {
+        bail!("the output folder holds the original client; choose another folder");
+    }
+    fs::write(&out_exe, &patch.client)?;
+    fs::write(&out_dll, &patch.dll)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema_version": crate::SCHEMA_VERSION,
+                "client": out_exe.display().to_string(),
+                "dll": out_dll.display().to_string(),
+                "dll_name": patch.dll_name,
+                "function_name": patch.uncompress_name,
+            })
+        );
+    } else {
+        println!("client: {}", out_exe.display());
+        println!(
+            "dll:    {} (the client calls its function {})",
+            out_dll.display(),
+            patch.uncompress_name
+        );
+        println!(
+            "Put both next to the other client files, and encrypt the GRFs with the same key: \
+             rgrf --password … --encrypt repack data.grf -o data-enc.grf"
+        );
+    }
+    Ok(0)
 }

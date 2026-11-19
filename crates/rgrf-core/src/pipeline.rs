@@ -94,7 +94,7 @@ pub(crate) fn batches(sizes: impl Iterator<Item = u64>) -> Vec<Range<usize>> {
 /// are already scrambled (copied DES entries) stay as they are. Returns the sizes to record.
 fn legacy_scramble(name: &GrfPath, p: &mut Prepared) -> Result<Option<(u32, u32)>> {
     if p.flags & flags::ANY_CRYPT != 0 {
-        if p.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT) != 0 {
+        if p.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT | flags::DETECTED_CRYPT) != 0 {
             return Err(Error::Unsupported(format!(
                 "{} is encrypted with a key; the 0x102/0x103 format cannot hold it",
                 name.display(NameMode::Cp1252)
@@ -114,15 +114,48 @@ fn legacy_scramble(name: &GrfPath, p: &mut Prepared) -> Result<Option<(u32, u32)
     Ok(Some((zsize, p.stream.len() as u32)))
 }
 
+/// Encrypts a plain compressed stream with GRF Editor's scheme (aligned, then RC4 with the
+/// decompressed size as the counter). Streams that cannot be told apart from plain ones afterwards
+/// stay plain, like in GRF Editor.
+fn encrypt_plain(key: &crate::grfcrypt::Key, size: u32, p: &mut Prepared) {
+    if p.flags != flags::FILE || p.raw.is_some() {
+        return;
+    }
+    let zsize = p.stream.len() as u32;
+    let mut padded = p.stream.clone();
+    padded.resize(padded.len().div_ceil(8) * 8, 0);
+    if crate::grfcrypt::encrypt_stream(key, &mut padded, u64::from(size)) {
+        p.raw = Some((zsize, padded.len() as u32));
+        p.stream = padded;
+    }
+}
+
+/// Writes the hidden entry that marks an archive as encrypted: the CRC32 of the key.
+pub(crate) fn encryption_marker(
+    writer: &mut Sink,
+    key: &crate::grfcrypt::Key,
+) -> Result<crate::writer::OutEntry> {
+    let crc = crate::grfcrypt::key_crc(key).to_le_bytes();
+    let placed = writer.put_stream(&crate::encode::encode(crate::encode::Method::DEFAULT, &crc))?;
+    Ok(crate::writer::OutEntry {
+        name: GrfPath::new(crate::grfcrypt::MARKER_NAME.as_bytes()),
+        placed,
+        size: 4,
+        flags: flags::FILE,
+    })
+}
+
 /// Prepares every unit of every batch with `prepare` (in parallel inside a batch) and writes the
 /// results in order. `on_batch` sees each finished batch before it is written (for statistics).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     mut writer: Sink,
     ranges: Vec<Range<usize>>,
     total: u64,
     ctl: &Control,
     prepare: &(dyn Fn(usize) -> Result<Prepared> + Sync),
-    name_of: &(dyn Fn(usize) -> GrfPath + Sync),
+    info_of: &(dyn Fn(usize) -> (GrfPath, u32) + Sync),
+    encrypt: Option<&crate::grfcrypt::Key>,
     on_batch: &mut dyn FnMut(&[Prepared]),
 ) -> Result<(Sink, Vec<Written>)> {
     let (tx, rx) = mpsc::sync_channel::<Vec<Prepared>>(1);
@@ -133,13 +166,16 @@ pub(crate) fn run(
             for batch in rx {
                 for mut p in batch {
                     if writer.is_legacy() {
-                        p.raw = legacy_scramble(&name_of(p.unit), &mut p)?;
+                        p.raw = legacy_scramble(&info_of(p.unit).0, &mut p)?;
+                    } else if let Some(key) = encrypt {
+                        encrypt_plain(key, info_of(p.unit).1, &mut p);
                     }
                     let pl = match p.raw {
                         Some((zsize, aligned)) => writer.put_raw(&p.stream, zsize, aligned)?,
                         None => writer.put_stream(&p.stream)?,
                     };
-                    done.push((p.unit, pl, p.flags, p.expected));
+                    // GRF Editor's encryption has no flag in the table
+                    done.push((p.unit, pl, p.flags & !flags::DETECTED_CRYPT, p.expected));
                 }
             }
             Ok((writer, done))

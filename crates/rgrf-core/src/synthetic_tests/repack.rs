@@ -371,6 +371,7 @@ fn the_output_check_detects_a_damaged_result() {
         &unit_of,
         &expected,
         &path,
+        None,
         &Control::default(),
     )
     .unwrap();
@@ -386,6 +387,7 @@ fn the_output_check_detects_a_damaged_result() {
         &unit_of,
         &expected,
         &path,
+        None,
         &Control::default(),
     )
     .unwrap_err();

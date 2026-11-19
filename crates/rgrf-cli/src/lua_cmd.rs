@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
-use rgrf_core::{Archive, DecodeStatus, NameMode};
+use rgrf_core::{DecodeStatus, NameMode};
 use rgrf_formats::lua;
 use serde_json::json;
 
@@ -80,7 +80,7 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
     }) {
-        let a = Archive::open(input)?;
+        let a = crate::crypt_cmd::open_archive(input)?;
         let idx: Vec<usize> = a
             .select(pattern, names)
             .into_iter()

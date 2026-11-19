@@ -35,6 +35,12 @@ pub enum Error {
     InvalidInput(String),
     #[error("cannot repack: {0}")]
     Unsupported(String),
+    #[error(
+        "this key does not belong to the archive (the CRC32 of the key differs from the one stored in __encryption.info)"
+    )]
+    WrongKey,
+    #[error("the file table is encrypted (GRF Editor scheme): a key is needed to open the archive")]
+    EncryptedTable,
     #[error("verification of the written archive failed: {0}")]
     VerifyFailed(String),
 }

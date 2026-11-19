@@ -54,6 +54,10 @@ pub struct RepackOptions {
     pub dry_run: bool,
     /// Override of the format's size limit (tests).
     pub max_file_len: Option<u64>,
+    /// Encrypt all entries with GRF Editor's scheme (0x200 only) and mark the archive. Entries of a
+    /// source that was opened with its key are decrypted first; the key does not have to be the
+    /// same. Without this, a source with a key set is written decrypted.
+    pub encrypt: Option<crate::grfcrypt::Key>,
 }
 
 impl Default for RepackOptions {
@@ -69,6 +73,7 @@ impl Default for RepackOptions {
             overwrite: false,
             dry_run: false,
             max_file_len: None,
+            encrypt: None,
         }
     }
 }
@@ -446,12 +451,48 @@ pub(crate) fn write_selection<R: ReadAt>(
     opts: &RepackOptions,
     ctl: &Control,
 ) -> Result<RepackReport> {
+    if opts.encrypt.is_some() {
+        if format != Format::V200 {
+            return Err(Error::Unsupported(
+                "the encryption works with the 0x200 format only (as in GRF Editor)".into(),
+            ));
+        }
+        if (0..s.len()).any(|i| s.entry(i).is_ok_and(Entry::needs_key)) {
+            return Err(Error::Unsupported(
+                "the source has encrypted entries and no key was given for it: give the key of the source to re-encrypt".into(),
+            ));
+        }
+    }
+    // the hidden entry of an encryption is replaced (or dropped when the output is plain)
+    let marker_key = GrfPath::new(crate::grfcrypt::MARKER_NAME.as_bytes()).key();
+    let drop_marker = |i: usize| {
+        s.name(i).is_ok_and(|n| n.key() == marker_key)
+            && (opts.encrypt.is_some() || s.archive(i).encryption().is_some_and(|e| e.key_set))
+    };
+    let filtered;
+    let s = if (0..s.len()).any(drop_marker) {
+        let keep: Vec<usize> = (0..s.len()).filter(|&i| !drop_marker(i)).collect();
+        filtered = Selection {
+            sources: s.sources,
+            sel: keep.iter().map(|&i| s.sel[i]).collect(),
+            names: if s.names.is_empty() {
+                Vec::new()
+            } else {
+                keep.iter()
+                    .map(|&i| s.names.get(i).cloned().flatten())
+                    .collect()
+            },
+        };
+        &filtered
+    } else {
+        s
+    };
     if s.sources.iter().any(|a| a.table_info().key_block > 0) {
         return Err(Error::Unsupported(
             "a source has a protected-archive key block (not supported yet)".into(),
         ));
     }
-    let align = opts.align.unwrap_or_else(|| format.aligns_by_default());
+    let align = opts.align.unwrap_or_else(|| format.aligns_by_default()) || opts.encrypt.is_some();
     if !opts.dry_run && dst.exists() && !opts.overwrite {
         return Err(Error::TargetExists(dst.display().to_string()));
     }
@@ -538,10 +579,15 @@ fn write_all<R: ReadAt>(
         ctl,
         &|u| prepare(s, u, &units[u], opts),
         &|u| {
-            s.name(units[u].members[0])
-                .expect("unit members are selected entries")
-                .clone()
+            let m = units[u].members[0];
+            (
+                s.name(m)
+                    .expect("unit members are selected entries")
+                    .clone(),
+                s.entry(m).map_or(0, |e| e.size),
+            )
         },
+        opts.encrypt.as_ref(),
         &mut |batch| {
             for p in batch {
                 match p.kind {
@@ -573,7 +619,8 @@ fn write_all<R: ReadAt>(
         zsize: 0,
         aligned: 0,
     };
-    let mut out_entries: Vec<OutEntry> = Vec::with_capacity(s.len());
+    let mut writer = writer;
+    let mut out_entries: Vec<OutEntry> = Vec::with_capacity(s.len() + 1);
     for (i, unit) in unit_of.iter().enumerate() {
         let e = s.entry(i)?;
         out_entries.push(match *unit {
@@ -591,6 +638,9 @@ fn write_all<R: ReadAt>(
             },
         });
     }
+    if let Some(key) = &opts.encrypt {
+        out_entries.push(crate::pipeline::encryption_marker(&mut writer, key)?);
+    }
     let (len, mut out) = writer.finish(&out_entries)?;
     std::io::Write::flush(&mut out)?;
     drop(out);
@@ -604,7 +654,15 @@ fn write_all<R: ReadAt>(
     report.output_file_len = len;
 
     if opts.verify {
-        verify_output(s, units, &unit_of, &expected, tmp, ctl)?;
+        verify_output(
+            s,
+            units,
+            &unit_of,
+            &expected,
+            tmp,
+            opts.encrypt.as_ref(),
+            ctl,
+        )?;
         report.verified = true;
     }
     Ok(())
@@ -618,18 +676,24 @@ pub(crate) fn verify_output<R: ReadAt>(
     unit_of: &[Option<usize>],
     expected: &[Expected],
     path: &Path,
+    key: Option<&crate::grfcrypt::Key>,
     ctl: &Control,
 ) -> Result<()> {
     let fail = |m: String| Err(Error::VerifyFailed(m));
-    let out = Archive::open(path)?;
-    if out.len() != s.len() {
+    let out = match key {
+        Some(k) => Archive::open_with_key(path, k)?,
+        None => Archive::open(path)?,
+    };
+    // the hidden entry of an encryption comes last
+    let extra = usize::from(key.is_some());
+    if out.len() != s.len() + extra {
         return fail(format!(
             "{} entries written, {} expected",
             out.len(),
-            s.len()
+            s.len() + extra
         ));
     }
-    for (i, b) in out.entries().iter().enumerate() {
+    for (i, b) in out.entries().iter().enumerate().take(s.len()) {
         let a = s.entry(i)?;
         if *s.name(i)? != b.name
             || a.size != b.size && !a.is_marker()

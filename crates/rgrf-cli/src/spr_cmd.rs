@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
+use rgrf_core::{DecodeStatus, GrfPath, NameMode};
 use rgrf_formats::png_io::{Frame, frame_from_png, indexed_to_png, rgba_to_png};
 use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};
 use serde_json::json;
@@ -19,7 +19,7 @@ pub(crate) fn load(
         let data = fs::read(input).with_context(|| format!("cannot read {}", input.display()))?;
         return Ok((data, input.display().to_string()));
     };
-    let a = Archive::open(input)?;
+    let a = crate::crypt_cmd::open_archive(input)?;
     let wanted = GrfPath::from_display(entry, names)
         .ok_or_else(|| anyhow!("'{entry}' cannot be written in the name mode {names:?}"))?;
     let Some(i) = a.find(&wanted) else {

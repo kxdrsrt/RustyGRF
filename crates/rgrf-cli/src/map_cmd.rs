@@ -277,7 +277,7 @@ impl Vfs {
                         e.file
                     );
                 };
-                archives.push((e.file.clone(), Archive::open(p)?));
+                archives.push((e.file.clone(), crate::crypt_cmd::open_archive(p)?));
             }
             if let Some(d) = find_ci(input, "data").filter(|d| d.is_dir()) {
                 let mut files: Vec<(String, PathBuf)> = Vec::new();
@@ -290,7 +290,10 @@ impl Vfs {
                 }
             }
         } else {
-            archives.push((input.display().to_string(), Archive::open(input)?));
+            archives.push((
+                input.display().to_string(),
+                crate::crypt_cmd::open_archive(input)?,
+            ));
         }
         let keymaps = archives.iter().map(|(_, a)| a.index_by_key()).collect();
         Ok(Self {
