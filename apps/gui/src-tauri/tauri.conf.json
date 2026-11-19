@@ -26,20 +26,30 @@
     "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "All-in-one tool for Ragnarok Online GRF archives",
+    "longDescription": "RustyGRF opens, checks, edits, builds, merges and encrypts Ragnarok Online GRF, GPF, Thor and RGZ archives, and shows and edits their sprites, animations, palettes, maps, models and Lua files.",
     "fileAssociations": [
       {
         "ext": ["grf", "gpf"],
+        "mimeType": "application/x-ragnarok-grf",
         "name": "GRF archive",
         "description": "Ragnarok Online GRF archive",
         "role": "Editor"
       },
       {
         "ext": ["thor", "rgz"],
+        "mimeType": "application/x-ragnarok-patch",
         "name": "Patch archive",
         "description": "Ragnarok Online Thor or RGZ patch",
         "role": "Viewer"
       }
     ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/rustygrf.desktop",
+        "files": { "/usr/share/mime/packages/rustygrf.xml": "linux/rustygrf-mime.xml" }
+      },
+      "appimage": { "files": {} }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

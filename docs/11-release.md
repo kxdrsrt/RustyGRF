@@ -9,7 +9,8 @@ Stand 2026-11-18. **Gebaut und geprüft** ist nur das macOS-Bundle; alles andere
 | macOS `.app` (Apple Silicon) | `npx tauri build --bundles app` | **gebaut** (9,9 MB, mit Icon, unsigniert, Dateizuordnung `.grf`/`.gpf` im `Info.plist` geprüft) |
 | macOS `.dmg` | `npx tauri build --bundles dmg` | nicht gebaut: das Tauri-Skript öffnet ein Finder-Fenster zum Anordnen der Symbole |
 | Windows `.msi` / `.exe` | `npx tauri build` unter Windows (ARM64-VM oder x64) | nicht gebaut; braucht Rust, Node und die Visual-Studio-Build-Tools in der VM |
-| Linux AppImage / `.deb` | `npx tauri build` unter Linux | nicht gebaut; braucht `webkit2gtk-4.1` und `libayatana-appindicator` |
+| Linux `.deb` (ARM64) | in Docker (`rust:1`, Debian, `CARGO_BUILD_JOBS=2`, sonst Speichermangel), `npx tauri build --bundles deb` | **gebaut und geprüft** (4,7 MB): installiert sich in einem sauberen Container ohne Fehler, `ldd` findet alle Bibliotheken, Desktop-Datei mit `Exec=rustygrf-gui %F` und `MimeType`, MIME-Definition für `*.grf`/`*.gpf`/`*.thor`/`*.rgz` (`src-tauri/linux/`), Icon in drei Größen; **nicht gestartet** (kein Bildschirm im Container) |
+| Linux x64, AppImage | `npx tauri build` unter Linux | nicht gebaut; braucht `webkit2gtk-4.1` und `libayatana-appindicator` (Workflow siehe unten) |
 | CLI `rgrf`, MCP-Server `rgrf-mcp` | `cargo build --release` (Hauptworkspace) | gebaut und getestet auf vier Plattformen (M5) |
 
 `npx tauri build` ohne `--bundles` baut alle Formate des eigenen Systems (`bundle.targets = "all"`). Das Bauverzeichnis steht lokal in `apps/gui/.cargo/config.toml` (nicht im Git).

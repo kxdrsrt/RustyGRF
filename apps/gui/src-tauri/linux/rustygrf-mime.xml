@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-ragnarok-grf">
+    <comment>Ragnarok Online GRF archive</comment>
+    <glob pattern="*.grf"/>
+    <glob pattern="*.gpf"/>
+  </mime-type>
+  <mime-type type="application/x-ragnarok-patch">
+    <comment>Ragnarok Online Thor or RGZ patch</comment>
+    <glob pattern="*.thor"/>
+    <glob pattern="*.rgz"/>
+  </mime-type>
+</mime-info>
