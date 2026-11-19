@@ -11,7 +11,7 @@
   <header class="toolbar">
     <button id="btn-open" class="primary">Open…</button>
     <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" disabled autocomplete="off" spellcheck="false">
-    <span id="count" class="muted"></span>
+    <span id="count" class="muted" aria-live="polite"></span>
     <span class="spacer"></span>
     <label class="muted" for="names" title="How file names are shown and searched. Extracting always writes Latin-1 names, so the result matches `rgrf build`.">Names
       <select id="names" disabled>
@@ -96,11 +96,11 @@
       <div id="lists" hidden>
         <div id="folder-pane" hidden aria-label="Folders">
           <button type="button" id="folder-all" class="folder-all" title="Show the files of every folder">All files</button>
-          <div id="folder-viewport" tabindex="0">
+          <div id="folder-viewport" tabindex="0" role="tree" aria-label="Folders">
             <div id="folder-spacer"><div id="folder-rows"></div></div>
           </div>
         </div>
-        <div id="split-folders" class="split v" hidden role="separator" aria-orientation="vertical"></div>
+        <div id="split-folders" class="split v" hidden role="separator" aria-orientation="vertical" aria-label="Resize the folder list" tabindex="0"></div>
         <div id="files-pane">
           <div id="colhead" hidden>
             <span></span>
@@ -109,20 +109,20 @@
             <button type="button" data-sort="size">Size</button>
             <button type="button" data-sort="stored">Stored</button>
           </div>
-          <div id="viewport" tabindex="0">
+          <div id="viewport" tabindex="0" role="listbox" aria-label="Entries">
             <div id="spacer"><div id="rows"></div></div>
           </div>
         </div>
       </div>
     </section>
-    <div id="split-main" class="split v" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+    <div id="split-main" class="split v" role="separator" aria-orientation="vertical" aria-label="Resize the preview (arrow keys)" title="Drag to resize, or focus and use the arrow keys" tabindex="0"></div>
     <section id="preview-pane" aria-label="Preview">
       <div id="preview-head"></div>
       <div id="preview-body"></div>
     </section>
   </main>
 
-  <footer id="status">Ready</footer>
+  <footer id="status" role="status" aria-live="polite">Ready</footer>
 
   <dialog id="act-dlg" class="wide">
     <h2 id="act-title">Edit animation</h2>

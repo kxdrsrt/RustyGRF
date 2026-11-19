@@ -300,3 +300,5 @@ details.pop .popbody a { color: var(--accent); cursor: pointer; }
   #colhead, .row.details { grid-template-columns: 22px minmax(0, 1fr) 40px 70px; }
   #colhead button:nth-child(5), .row.details .stored { display: none; }
 }
+
+.split:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent); }

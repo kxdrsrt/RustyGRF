@@ -184,7 +184,7 @@ const F = { total: 0, offset: 0, rows: [], selected: null, loading: false, pendi
 /** A virtual list: only the visible lines exist; pages come from the backend (`page_view`). */
 class VList {
   constructor(st, ids, view, renderRow, onPick) {
-    Object.assign(this, { st, view, renderRow, onPick });
+    Object.assign(this, { st, view, renderRow, onPick, prefix: ids.rows });
     this.vp = $(ids.vp);
     this.spacer = $(ids.spacer);
     this.rowsEl = $(ids.rows);
@@ -228,12 +228,25 @@ class VList {
   draw() {
     const [first, last] = this.range();
     const out = [];
+    const tree = this.vp.getAttribute("role") === "tree";
     for (let pos = first; pos < last; pos++) {
       const r = this.row(pos);
-      if (r) out.push(this.renderRow(r, pos));
+      if (!r) continue;
+      const e = this.renderRow(r, pos);
+      e.id = `${this.prefix}-${pos}`;
+      e.setAttribute("role", tree ? "treeitem" : "option");
+      e.setAttribute("aria-selected", String(pos === this.st.selected));
+      if (tree) {
+        e.setAttribute("aria-level", String((r.depth || 0) + 1));
+        if (r.folder) e.setAttribute("aria-expanded", String(!!r.expanded));
+      }
+      e.setAttribute("aria-label", rowLabel(r));
+      out.push(e);
     }
     this.rowsEl.style.top = "0";
     this.rowsEl.replaceChildren(...out);
+    if (this.st.selected != null) this.vp.setAttribute("aria-activedescendant", `${this.prefix}-${this.st.selected}`);
+    else this.vp.removeAttribute("aria-activedescendant");
   }
   scrolled() {
     this.draw();
@@ -270,6 +283,12 @@ class VList {
     }
     if (r) this.onPick(r, pos);
   }
+}
+
+/** What a screen reader says for a line. */
+function rowLabel(r) {
+  const base = r.name.slice(r.name.lastIndexOf("\\") + 1);
+  return r.folder ? `${base}, folder, ${fmtNum(r.count)} files, ${fmtBytes(r.bytes)}${r.expanded ? ", open" : ", closed"}` : `${base}, ${r.kind}, ${fmtBytes(r.size)}`;
 }
 
 const baseOf = (name) => name.slice(name.lastIndexOf("\\") + 1);
@@ -375,10 +394,13 @@ function mainSpec(autoExpand) {
 const filtersActive = () => V.kinds.length > 0 || V.size !== "" || S.query !== "";
 
 /** Arranges the lists after the search, filters, sort or layout changed. */
+let applySeq = 0;
 async function applyView({ keepSelection = true, autoExpand = false, pane = true } = {}) {
   if (!S.info) return;
+  const seq = ++applySeq;
   const before = keepSelection && S.selected != null ? mainList.row(S.selected) : null;
   const sum = await invoke("set_view", { view: 0, spec: mainSpec(autoExpand) });
+  if (seq !== applySeq) return; // a newer change is on its way (fast arrow keys)
   S.matches = sum.matches;
   S.selected = null;
   updateEditBar();
@@ -391,6 +413,7 @@ async function applyView({ keepSelection = true, autoExpand = false, pane = true
       line = at.line;
     }
   }
+  if (seq !== applySeq) return;
   await mainList.reset(rows);
   if (line != null) {
     S.selected = line;
@@ -433,8 +456,8 @@ async function toggleFolder(list, pos) {
   if (cur?.folder && V.preview !== "off") showFolderPreview(cur);
 }
 
-async function expandAll(open) {
-  const list = V.layout === "folders" ? folderList : mainList;
+async function expandAll(open, which) {
+  const list = which || (V.layout === "folders" ? folderList : mainList);
   const total = await invoke("tree_set_all", { view: list.view, open });
   list.st.total = total;
   list.spacer.style.height = `${total * ROW_H}px`;
@@ -473,6 +496,9 @@ function syncViewBar() {
   const kinds = $("kind-filter").querySelector("summary");
   kinds.textContent = V.kinds.length ? `Type: ${V.kinds.length === 1 ? (KINDS.find((k) => k[0] === V.kinds[0]) || [0, V.kinds[0]])[1] : `${V.kinds.length} kinds`}` : "Type: all";
   kinds.classList.toggle("active", V.kinds.length > 0);
+  $("viewport").setAttribute("role", V.layout === "tree" ? "tree" : "listbox");
+  for (const b of document.querySelectorAll("#view-seg button")) b.setAttribute("aria-pressed", String(b.dataset.layout === V.layout));
+  for (const b of document.querySelectorAll("#preview-seg button")) b.setAttribute("aria-pressed", String(b.dataset.preview === V.preview));
   const main = document.querySelector("main");
   main.className = `pv-${V.preview}${folders ? " lay-folders" : ""}`;
   applyPaneSizes();
@@ -1359,26 +1385,45 @@ function wireList(list) {
     if (row && list.row(Number(row.dataset.pos))?.folder) toggleFolder(list, Number(row.dataset.pos));
   });
   vp.addEventListener("keydown", async (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const st = list.st;
     const page = Math.max(1, Math.floor(vp.clientHeight / ROW_H) - 1);
     const cur = st.selected ?? -1;
     const r = cur >= 0 ? list.row(cur) : null;
-    if (r?.folder && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "Enter" || e.key === " ")) {
-      e.preventDefault();
-      if (e.key === "ArrowRight" && r.expanded) return list.pick(cur + 1);
-      if (e.key === "ArrowLeft" && !r.expanded) {
-        for (let q = cur - 1; q >= 0; q--) {
-          const up = list.row(q);
-          if (up?.folder && up.depth < r.depth) return list.pick(q);
-        }
+    const treeList = list === folderList || V.layout === "tree";
+    const go = async (path) => {
+      if (!path) return;
+      const at = await invoke("locate", { view: list.view, entry: null, folder: path });
+      if (at.line != null) await list.pick(at.line);
+    };
+    if (r && treeList) {
+      // the keys of a tree: Right opens or enters, Left closes or goes up, Enter/Space toggle
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (r.folder && !r.expanded) return toggleFolder(list, cur);
+        if (r.folder) return list.pick(cur + 1);
         return;
       }
-      if ((e.key === "ArrowRight" && !r.expanded) || (e.key === "ArrowLeft" && r.expanded) || e.key === "Enter" || e.key === " ") return toggleFolder(list, cur);
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (r.folder && r.expanded) return toggleFolder(list, cur);
+        return go(dirOf(r.name));
+      }
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        if (list === folderList && e.key === "Enter") return $("viewport").focus();
+        if (r.folder) return toggleFolder(list, cur);
+        return;
+      }
+      if (e.key === "*") {
+        e.preventDefault();
+        return expandAll(true, list);
+      }
     }
     const moves = { ArrowDown: cur + 1, ArrowUp: cur - 1, PageDown: cur + page, PageUp: cur - page, Home: 0, End: st.total - 1 };
     if (e.key in moves) {
       e.preventDefault();
-      list.pick(cur < 0 && e.key === "ArrowDown" ? 0 : moves[e.key]);
+      list.pick(cur < 0 && (e.key === "ArrowDown" || e.key === "PageDown") ? 0 : moves[e.key]);
     }
   });
 }
@@ -1432,6 +1477,31 @@ function dragSplit(handle, onMove, onDone) {
     handle.addEventListener("pointerup", up);
   });
 }
+/** Dividers can be moved with the arrow keys too (Shift = bigger steps). */
+function keySplit(handle, step) {
+  handle.addEventListener("keydown", (e) => {
+    const d = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    step(d * (e.shiftKey ? 64 : 16));
+  });
+}
+keySplit($("split-main"), (d) => {
+  const main = document.querySelector("main").getBoundingClientRect();
+  if (V.preview === "bottom") V.previewH = Math.round(Math.min(main.height - 120, Math.max(120, (V.previewH || main.height * 0.4) - d)));
+  else V.listW = Math.round(Math.min(main.width - 240, Math.max(260, (V.listW || $("list-pane").getBoundingClientRect().width) + d)));
+  applyPaneSizes();
+  savePrefs();
+  mainList.scrolled();
+});
+keySplit($("split-folders"), (d) => {
+  const box = $("lists").getBoundingClientRect();
+  V.foldersW = Math.round(Math.min(box.width - 260, Math.max(140, (V.foldersW || $("folder-pane").getBoundingClientRect().width) + d)));
+  applyPaneSizes();
+  savePrefs();
+  folderList.scrolled();
+  mainList.scrolled();
+});
 dragSplit(
   $("split-main"),
   (ev) => {
