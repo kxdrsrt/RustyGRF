@@ -393,12 +393,10 @@ pub fn reduce_images(
             ctl.report(done.fetch_add(1, Ordering::Relaxed) + 1, total);
             let e = &src.entries()[i];
             let d = src.read(i).map_err(|_| "unreadable")?;
-            let r = rgrf_formats::bmp::reduce_for_storage(
-                &d.data,
-                min_psnr,
-                u64::from(e.zsize),
-                |b| rgrf_core::encode::encode(Method::DEFAULT, b).len() as u64,
-            );
+            let r =
+                rgrf_formats::bmp::reduce_for_storage(&d.data, min_psnr, u64::from(e.zsize), |b| {
+                    rgrf_core::encode::encode(Method::DEFAULT, b).len() as u64
+                });
             r.map(|s| (e.name.clone(), s)).map_err(|k| k.reason())
         })
         .collect();
@@ -427,7 +425,10 @@ pub fn reduce_images(
                 if st.psnr.is_finite() {
                     sum.worst_psnr = Some(sum.worst_psnr.map_or(st.psnr, |w: f64| w.min(st.psnr)));
                 }
-                edits.push(Edit::Put { name, data: st.bytes });
+                edits.push(Edit::Put {
+                    name,
+                    data: st.bytes,
+                });
             }
             Err(why) => *sum.kept.entry(why.to_owned()).or_default() += 1,
         }
@@ -447,6 +448,16 @@ pub fn reduce_images(
     sum.file_bytes = r.merge.repack.output_file_len;
     sum.verified = r.merge.repack.verified;
     Ok(sum)
+}
+
+/// A sound named in an animation, as the client finds it: `data\wav\<name>`.
+#[derive(Serialize, Debug)]
+pub struct SoundOut {
+    /// The path in the archive.
+    pub path: String,
+    /// Playable audio (base64 WAV), or `None` with the reason in `problem`.
+    pub data: Option<String>,
+    pub problem: Option<String>,
 }
 
 /// One BMP reduced to 8 bits, to compare before staging it.
@@ -1289,6 +1300,36 @@ impl Session {
         png: &Path,
     ) -> Result<(), String> {
         self.transact(|s| s.stage_spr_image_impl(index, frame, png))
+    }
+
+    /// The sound of an animation frame, read from this archive (with staged changes).
+    pub fn act_sound(&self, name: &str) -> Result<SoundOut, String> {
+        let raw = rgrf_formats::act::sound_from_name(name)
+            .ok_or_else(|| format!("'{name}' is not a sound name an animation can hold"))?;
+        let len = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+        let path = [b"data\\wav\\".as_slice(), &raw[..len]].concat();
+        let shown = GrfPath::new(path.clone()).display(self.mode);
+        let out = |data: Option<String>, problem: Option<&str>| SoundOut {
+            path: shown.clone(),
+            data,
+            problem: problem.map(str::to_owned),
+        };
+        // the client's marker for the frame that hits; there is no such file
+        if name.eq_ignore_ascii_case("atk") {
+            return Ok(out(
+                None,
+                Some("\"atk\" marks the frame that hits, it is not a sound"),
+            ));
+        }
+        let Some(i) = self.arc.find(&GrfPath::new(path)) else {
+            return Ok(out(None, Some("not in this archive")));
+        };
+        let data = self.read_working(i)?;
+        Ok(match rgrf_formats::wav::playable(&data) {
+            Ok(rgrf_formats::wav::Playable::AsIs) => out(Some(b64(&data)), None),
+            Ok(rgrf_formats::wav::Playable::Decoded(pcm)) => out(Some(b64(&pcm)), None),
+            Err(e) => out(None, Some(&format!("cannot be played: {e}"))),
+        })
     }
 
     pub fn reduce_preview(&self, index: usize) -> Result<ReducePreview, String> {

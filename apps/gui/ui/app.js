@@ -1349,10 +1349,12 @@ async function setPalette(row) {
 
 // ---------- animation editor ----------
 
-const E = { row: null, action: 0, frame: 0, view: null, busy: false };
+const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map() };
 
 async function openActEditor(row, action) {
-  Object.assign(E, { row, action, frame: 0, view: null });
+  stopActPlay();
+  // sounds are read again each time: a staged change may have replaced one
+  Object.assign(E, { row, action, frame: 0, view: null, sounds: new Map() });
   $("act-title").textContent = `Edit animation: ${row.name}`;
   $("act-body").replaceChildren(el("p", { class: "muted", text: "Loading …" }));
   $("act-dlg").showModal();
@@ -1360,6 +1362,7 @@ async function openActEditor(row, action) {
 }
 
 $("act-dlg").addEventListener("close", () => {
+  stopActPlay();
   if (E.row) refreshPreview(E.action);
   E.row = null;
 });
@@ -1419,8 +1422,49 @@ async function loadActFrame() {
   }
 }
 
+/** Plays the sound of an animation frame from the archive; returns what was found. */
+async function playActSound(name) {
+  if (!name) return null;
+  let s = E.sounds.get(name);
+  if (!s) {
+    s = await invoke("act_sound", { name }).catch((e) => ({ problem: errText(e) }));
+    E.sounds.set(name, s);
+  }
+  if (s.data) new Audio(dataUrl("audio/wav", s.data)).play().catch(() => {});
+  return s;
+}
+
+function stopActPlay() {
+  E.playing = false;
+  clearTimeout(E.timer);
+}
+
+// one frame after the other at the action's frame time, with the frames' sounds
+async function actPlayStep() {
+  if (!E.playing || !$("act-dlg").open) return stopActPlay();
+  const started = performance.now();
+  E.frame = (E.frame + 1) % E.view.frames;
+  await loadActFrame();
+  if (!E.playing) return;
+  playActSound(E.view.sound);
+  E.timer = setTimeout(actPlayStep, Math.max(16, E.view.interval_ms - (performance.now() - started)));
+}
+
+function toggleActPlay() {
+  if (E.playing) {
+    stopActPlay();
+    drawActEditor();
+    return;
+  }
+  E.playing = true;
+  drawActEditor();
+  playActSound(E.view.sound);
+  E.timer = setTimeout(actPlayStep, Math.max(16, E.view.interval_ms));
+}
+
 async function actEdit(edit) {
   if (E.busy) return;
+  stopActPlay();
   E.busy = true;
   try {
     setPending(await invoke("stage_act_edit", { index: E.row.index, action: E.action, frame: E.frame, edit }));
@@ -1451,7 +1495,20 @@ function soundField(v) {
   const list = el("datalist", { id: "act-sounds" }, v.sounds.map((s) => el("option", { value: s })));
   const input = el("input", { type: "text", style: "width:13em", list: "act-sounds", value: v.sound ?? "", placeholder: "none", title: "Sound file played with this frame, e.g. effect\\hit.wav (empty = none)", size: "22" });
   input.addEventListener("change", () => actEdit({ op: "set_sound", name: input.value.trim() === "" ? null : input.value.trim() }));
-  return el("label", { class: "muted", text: "Sound " }, input, list);
+  const note = el("span", { class: "muted", role: "status" });
+  const hear = el("button", {
+    type: "button",
+    class: "small",
+    icon: "audio",
+    title: "Play this sound (data\\wav\\ in the archive)",
+    "aria-label": "Play the sound of this frame",
+    disabled: !v.sound,
+    onclick: async () => {
+      const s = await playActSound(v.sound);
+      note.textContent = s?.problem ? `${s.path ?? v.sound}: ${s.problem}` : "";
+    },
+  });
+  return el("span", { class: "soundfield" }, el("label", { class: "muted", text: "Sound " }, input, list), hear, note);
 }
 
 function drawActEditor() {
@@ -1471,6 +1528,7 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", text: "◀", disabled: v.frame === 0, onclick: () => { E.frame -= 1; loadActFrame(); } }),
     el("span", { text: `Frame ${v.frame + 1} / ${v.frames}` }),
     el("button", { type: "button", class: "small", text: "▶", disabled: v.frame >= v.frames - 1, onclick: () => { E.frame += 1; loadActFrame(); } }),
+    el("button", { type: "button", class: "small", text: E.playing ? "Stop" : "Play", "aria-pressed": String(E.playing), "data-act-play": "", title: "Play the action at its frame time, with the sounds of its frames", disabled: v.frames <= 1, onclick: toggleActPlay }),
     el("label", { class: "muted", text: "ms/frame " }, num(v.interval_ms, (n) => actEdit({ op: "set_interval", ms: n }), { narrow: true })),
     el("span", { class: "muted", text: `ACT ${v.version}` }),
     v.sounds_supported ? soundField(v) : null,
@@ -1523,7 +1581,10 @@ function drawActEditor() {
         el("button", { type: "button", class: "small", text: "+ Anchor", onclick: () => actEdit({ op: "add_anchor" }) }),
       )
     : el("p", { class: "muted", text: `ACT ${v.version} has no anchors.` });
+  // every frame is drawn anew: keep the keyboard on Play/Stop while it plays
+  const keepPlay = document.activeElement?.hasAttribute("data-act-play");
   $("act-body").replaceChildren(el("div", { class: "acted" }, bar, left, el("div", {}, layers, anchors)));
+  if (keepPlay) $("act-body").querySelector("[data-act-play]")?.focus();
   updateEditBar();
 }
 

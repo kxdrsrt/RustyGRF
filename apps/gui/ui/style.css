@@ -271,6 +271,7 @@ dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
 .texted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .acted { display: grid; grid-template-columns: minmax(260px, 40%) 1fr; gap: 16px; align-items: start; }
 .acted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; grid-column: 1 / -1; }
+.acted .soundfield { display: inline-flex; align-items: center; gap: 6px; }
 .acted .stage { position: relative; display: inline-block; line-height: 0; min-width: 120px; min-height: 120px; }
 .acted .stage img { image-rendering: pixelated; display: block; }
 .acted .cross-h, .acted .cross-v { position: absolute; background: var(--accent); opacity: 0.55; pointer-events: none; }

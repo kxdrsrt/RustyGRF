@@ -474,6 +474,12 @@ async fn stage_act_interval(
     .await
 }
 
+/// The sound an animation frame plays (`data\wav\<name>` of the open archive).
+#[tauri::command]
+async fn act_sound(state: State<'_, AppState>, name: String) -> Res<backend::SoundOut> {
+    with_session(&state, move |s| s.act_sound(&name)).await
+}
+
 /// A true-colour BMP reduced to 8 bits, to compare with the original before staging it.
 #[tauri::command]
 async fn reduce_preview(state: State<'_, AppState>, index: usize) -> Res<backend::ReducePreview> {
@@ -822,6 +828,7 @@ pub fn run() {
             build_archive,
             merge_archives,
             reduce_preview,
+            act_sound,
             stage_reduce,
             reduce_images,
             stage_replace,

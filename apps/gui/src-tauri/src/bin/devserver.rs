@@ -200,6 +200,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_text_edit(arg(a, "index")?, &arg::<String>(a, "text")?)?;
             to_json(s.pending())
         }),
+        "act_sound" => with(state, |s| to_json(s.act_sound(&arg::<String>(a, "name")?)?)),
         "reduce_preview" => with(state, |s| to_json(s.reduce_preview(arg(a, "index")?)?)),
         "stage_reduce" => with(state, |s| {
             s.stage_reduce(arg(a, "index")?)?;

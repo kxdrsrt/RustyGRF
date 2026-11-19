@@ -474,3 +474,22 @@ fn a_map_is_extracted_with_everything_it_needs() {
     assert_eq!(s.extract_map(i, &dest, true).unwrap().files, 323);
     std::fs::remove_dir_all(dest).unwrap();
 }
+
+/// The sounds of a monster animation are found where the client looks (`data\wav\`), and the
+/// client's "atk" marker is not mistaken for a file.
+#[test]
+fn the_sounds_of_an_animation_are_found_and_playable() {
+    let Some(s) = open() else { return };
+    let sound = s.act_sound("poring_move.wav").unwrap();
+    assert_eq!(sound.path, "data\\wav\\poring_move.wav");
+    assert!(
+        sound.data.is_some_and(|d| d.len() > 100),
+        "{:?}",
+        sound.problem
+    );
+    let atk = s.act_sound("atk").unwrap();
+    assert!(atk.data.is_none() && atk.problem.unwrap().contains("hits"));
+    let missing = s.act_sound("no_such_sound.wav").unwrap();
+    assert_eq!(missing.problem.as_deref(), Some("not in this archive"));
+    assert!(s.act_sound(&"x".repeat(60)).is_err());
+}
