@@ -21,6 +21,7 @@
   <symbol id="i-remove" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
   <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/></symbol>
   <symbol id="i-changes" viewBox="0 0 24 24"><path d="M4 6h10M4 12h10M4 18h6"/><path d="M16 17l2 2 4-5"/></symbol>
   <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 4v6h6"/><path d="M5.5 15a8 8 0 1 0 1.5-8.5L4 10"/></symbol>
   <symbol id="i-expand" viewBox="0 0 24 24"><path d="M7 6l5 5 5-5M7 13l5 5 5-5"/></symbol>
@@ -81,7 +82,7 @@
       <button id="btn-remove" disabled title="Leave the selected entry out of the saved archive"><svg class="ic" aria-hidden="true"><use href="#i-remove"/></svg><span>Remove</span></button>
       <button id="btn-undo" disabled title="Undo the last staged change (Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
       <button id="btn-redo" disabled title="Redo (Shift+Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
-      <button id="btn-changes" disabled title="Review and save the pending changes as a new archive"><svg class="ic" aria-hidden="true"><use href="#i-changes"/></svg><span id="changes-label">Changes</span><span id="changes-badge" class="badge" hidden>0</span></button>
+      <button id="btn-changes" disabled title="Review and save the pending changes as a new archive (Cmd/Ctrl+S)"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span id="changes-label">Save…</span><span id="changes-badge" class="badge" hidden>0</span></button>
     </div>
     <span class="spacer"></span>
     <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" aria-label="Search" disabled autocomplete="off" spellcheck="false">

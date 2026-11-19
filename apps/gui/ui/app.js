@@ -807,8 +807,8 @@ function updateEditBar() {
   const n = S.changes.length;
   $("changes-badge").textContent = n;
   $("changes-badge").hidden = n === 0;
-  $("btn-changes").setAttribute("aria-label", `Changes (${n})`);
-  $("btn-changes").title = n ? `Review and save the ${n} pending change${n === 1 ? "" : "s"} as a new archive` : "Review and save the pending changes as a new archive";
+  $("btn-changes").setAttribute("aria-label", n ? `Save ${n} pending changes as a new archive` : "Save changes");
+  $("btn-changes").title = (n ? `Save the ${n} pending change${n === 1 ? "" : "s"} as a new archive` : "Save the pending changes as a new archive") + " (Cmd/Ctrl+S)";
   if (S.info) {
     invoke("history")
       .then((h) => {
@@ -2032,6 +2032,10 @@ window.addEventListener("resize", () => {
   folderList.scrolled();
 });
 window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    if (S.info && !document.querySelector("dialog[open]")) doChanges();
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === ",") {
     e.preventDefault();
     openSettings();

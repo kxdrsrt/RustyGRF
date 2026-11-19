@@ -608,13 +608,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
             item("merge", "Merge...", None)?,
             item("extract", "Extract...", None)?,
             item("verify", "Verify", None)?,
+            item("changes", "Save Changes as New Archive...", None)?,
         ];
         file.insert(&entries[0], 0)?;
         file.insert(&sep()?, 1)?;
         for (k, e) in entries[1..].iter().enumerate() {
             file.insert(e, 2 + k)?;
         }
-        file.insert(&sep()?, 6)?;
+        file.insert(&sep()?, 2 + entries.len() - 1)?;
     }
     if let Some(edit) = find("Edit")? {
         edit.append(&sep()?)?;
