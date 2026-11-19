@@ -186,7 +186,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "grf_inspect",
         title: "Look inside a client file",
-        description: "Reads the format of an entry and returns its structure as JSON: SPR (image sizes), ACT (actions, frames, intervals, sounds), PAL, GAT (cell types), GND (size, textures), RSW (models, sounds, water), RSM/RSM2 (nodes, triangles, animation), STR (layers, textures) and compiled Lua (function count). Use it instead of reading binary bytes.",
+        description: "Reads the format of an entry and returns its structure as JSON: SPR (image sizes), ACT (actions, frames, intervals, sounds), PAL, BMP and TGA (size, bit depth, colours, transparent pixels), GAT (cell types), GND (size, textures), RSW (models, sounds, water), RSM/RSM2 (nodes, triangles, animation), STR (layers, textures) and compiled Lua (function count). Use it instead of reading binary bytes.",
         params: &[
             req("path", Ty::Str, "Path of the .grf file."),
             req(
@@ -409,6 +409,30 @@ pub const TOOLS: &[Tool] = &[
         ],
         writes: true,
         run: edit_tool,
+    },
+    Tool {
+        name: "grf_image_reduce",
+        title: "Shrink the true-colour BMPs of an archive",
+        description: "Writes a COPY of an archive whose 16/24/32-bit BMPs are stored as 8-bit BMPs (256 colours) where the picture keeps at least `min_psnr` dB and the stored file gets smaller. Magenta, the transparent colour, stays exact and no other colour becomes transparent; pictures with at most 256 colours lose nothing. The client loads 8-bit BMPs (21,461 of kRO's own are). Use `dry_run` first to see the savings.",
+        params: &[
+            req("path", Ty::Str, "The archive (it stays unchanged)."),
+            opt(
+                "min_psnr",
+                Ty::Int,
+                "Lowest picture quality in dB (default 40, hard to tell from the original; 35 shows bands on smooth gradients).",
+            ),
+            opt(
+                "only",
+                Ty::Str,
+                "Which entries, as a glob (default \"*.bmp\").",
+            ),
+            NAMES,
+            OUTPUT,
+            OVERWRITE,
+            DRY_RUN,
+        ],
+        writes: true,
+        run: image_reduce_tool,
     },
     Tool {
         name: "grf_patch",
@@ -1033,6 +1057,73 @@ fn edit_tool(ctx: &Ctx, a: &Args) -> Out {
     v["added"] = r.added.into();
     v["replaced"] = r.replaced.into();
     v["removed"] = r.removed.into();
+    Ok(v)
+}
+
+fn image_reduce_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rayon::prelude::*;
+    use rgrf_core::edit::{Edit, apply};
+    use rgrf_formats::bmp::reduce_for_storage;
+    let src = ctx.policy.read(a.str("path"))?;
+    let out = output_path(ctx, a, std::slice::from_ref(&src))?;
+    let min_psnr = a.opt_u64("min_psnr").unwrap_or(40) as f64;
+    let only = a.opt_str("only").unwrap_or("*.bmp");
+    let arc = open(ctx, a.str("path"))?;
+    let opts = repack_options(a, true)?;
+    let idx = arc.select(Some(only), names_mode(a));
+    let results: Vec<_> = idx
+        .par_iter()
+        .map(|&i| {
+            ctx.control.check().map_err(|_| "cancelled")?;
+            let e = &arc.entries()[i];
+            let d = arc.read(i).map_err(|_| "unreadable")?;
+            reduce_for_storage(&d.data, min_psnr, u64::from(e.zsize), |b| {
+                rgrf_core::encode::encode(opts.method, b).len() as u64
+            })
+            .map(|s| (e.name.clone(), s))
+            .map_err(|k| k.reason())
+        })
+        .collect();
+    ctx.control.check().map_err(err)?;
+    let mut kept = std::collections::BTreeMap::<&str, usize>::new();
+    let (mut before, mut after, mut lossless) = (0u64, 0u64, 0usize);
+    let mut worst: Option<f64> = None;
+    let mut edits = Vec::new();
+    for r in results {
+        match r {
+            Ok((name, st)) => {
+                before += st.stored_before;
+                after += st.stored_after;
+                if st.psnr.is_finite() {
+                    worst = Some(worst.map_or(st.psnr, |w| w.min(st.psnr)));
+                } else {
+                    lossless += 1;
+                }
+                edits.push(Edit::Put {
+                    name,
+                    data: st.bytes,
+                });
+            }
+            Err(why) => *kept.entry(why).or_default() += 1,
+        }
+    }
+    let reduced = edits.len();
+    let mut v = if reduced == 0 || opts.dry_run {
+        json!({ "output": out.display().to_string(), "dry_run": opts.dry_run, "written": false })
+    } else {
+        let r = apply(&arc, &src, &out, &edits, &opts, &ctx.control).map_err(err)?;
+        let mut v = repack_json(&r.merge.repack, &out);
+        v["written"] = true.into();
+        v
+    };
+    v["matched"] = idx.len().into();
+    v["reduced"] = reduced.into();
+    v["lossless"] = lossless.into();
+    v["kept"] = json!(kept);
+    v["stored_bytes_before"] = before.into();
+    v["stored_bytes_after"] = after.into();
+    v["worst_psnr_db"] = json!(worst);
+    v["min_psnr_db"] = json!(min_psnr);
     Ok(v)
 }
 

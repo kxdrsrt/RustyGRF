@@ -474,6 +474,37 @@ async fn stage_act_interval(
     .await
 }
 
+/// A true-colour BMP reduced to 8 bits, to compare with the original before staging it.
+#[tauri::command]
+async fn reduce_preview(state: State<'_, AppState>, index: usize) -> Res<backend::ReducePreview> {
+    with_session(&state, move |s| s.reduce_preview(index)).await
+}
+
+#[tauri::command]
+async fn stage_reduce(state: State<'_, AppState>, index: usize) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_reduce(index)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Writes a copy of the open archive (with its pending changes) whose true-colour BMPs are stored
+/// as 8 bits where that keeps `min_psnr` dB and saves space.
+#[tauri::command]
+async fn reduce_images(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dst: String,
+    min_psnr: f64,
+) -> Res<backend::ReduceSummary> {
+    let plan = with_session(&state, |s| Ok(s.plan())).await?;
+    run_job(app, &state, move |ctl| {
+        backend::reduce_images(&plan, &PathBuf::from(dst), min_psnr, ctl)
+    })
+    .await
+}
+
 /// Removes the given entries, or everything in the current search when `indices` is empty.
 #[tauri::command]
 async fn stage_remove(state: State<'_, AppState>, indices: Vec<usize>) -> Res<Vec<PendingRow>> {
@@ -672,6 +703,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         item("extract", "Extract...", None)?,
         item("verify", "Verify", None)?,
         item("changes", "Save Changes as New Archive...", None)?,
+        item("reduce-images", "Reduce Images...", None)?,
         sep()?,
         Box::new(PredefinedMenuItem::close_window(app, None)?),
     ];
@@ -789,6 +821,9 @@ pub fn run() {
             verify,
             build_archive,
             merge_archives,
+            reduce_preview,
+            stage_reduce,
+            reduce_images,
             stage_replace,
             stage_add,
             stage_remove,

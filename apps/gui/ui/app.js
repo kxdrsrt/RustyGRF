@@ -675,10 +675,18 @@ function renderPreview(p, row, meta) {
     case "image": {
       const img = el("img", { src: dataUrl(p.mime, p.data), alt: row.name });
       img.addEventListener("load", () => {
-        meta.textContent += `, ${img.naturalWidth} x ${img.naturalHeight} px`;
+        meta.textContent += `, ${img.naturalWidth} x ${img.naturalHeight} px${p.bits ? `, ${p.bits}-bit` : ""}`;
         if (img.naturalWidth <= 128) img.style.width = `${img.naturalWidth * 4}px`;
       });
-      return [el("div", { class: "checker" }, img)];
+      const reduce =
+        p.bits > 8
+          ? el(
+              "div",
+              { class: "controls" },
+              el("button", { type: "button", class: "small", icon: "palette", text: "8-bit…", title: "Store this picture with 256 colours (smaller; magenta stays transparent). Shows both to compare first (staged)", onclick: () => openReduceDialog(row) }),
+            )
+          : null;
+      return [reduce, el("div", { class: "checker" }, img)];
     }
     case "audio":
       return [el("audio", { controls: true, src: dataUrl(p.mime, p.data) })];
@@ -1737,6 +1745,102 @@ async function doMerge() {
   }
 }
 
+const PSNR_HINT = "PSNR measures how far the colours moved: from 40 dB on the difference is hard to see, below 35 dB smooth gradients show bands.";
+
+/** One true-colour BMP next to its 8-bit version; staging replaces the entry. */
+async function openReduceDialog(row) {
+  let p;
+  try {
+    p = await invoke("reduce_preview", { index: row.index });
+  } catch (e) {
+    return note("Cannot reduce this picture", errText(e), true);
+  }
+  const pic = (data, caption) => {
+    const img = el("img", { src: dataUrl("image/bmp", data), alt: caption });
+    img.addEventListener("load", () => {
+      if (img.naturalWidth <= 160) {
+        img.style.width = `${img.naturalWidth * 2}px`;
+        img.style.imageRendering = "pixelated";
+      }
+    });
+    return el("figure", {}, el("div", { class: "checker" }, img), el("figcaption", { class: "muted", text: caption }));
+  };
+  const quality = p.psnr == null ? "lossless: the picture has no more than 256 colours" : `PSNR ${p.psnr.toFixed(1)} dB`;
+  const go = await ask(
+    "Reduce to 8 bits?",
+    [
+      el("p", { text: `${fmtBytes(p.bytes_before)} → ${fmtBytes(p.bytes_after)} unpacked, ${fmtNum(p.colors)} colours, ${quality}. Magenta (transparent) stays exact.` }),
+      p.psnr == null ? null : el("p", { class: "muted", text: PSNR_HINT }),
+      el("div", { class: "compare" }, pic(p.before, "Original"), pic(p.after, "8-bit")),
+    ],
+    [{ label: "Reduce", value: true, primary: true }, { label: "Cancel", value: null }],
+  );
+  if (!go) return;
+  try {
+    setPending(await invoke("stage_reduce", { index: row.index }));
+    setStatus(`${row.name} reduced to 8 bits (staged)`);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not reduce", errText(e), true);
+  }
+}
+
+/** A copy of the open archive (with the pending changes) whose true-colour BMPs are 8-bit. */
+async function doReduceImages() {
+  if (!S.info) return;
+  const level = el(
+    "select",
+    { class: "field" },
+    ...[
+      [45, "45 dB: best, smallest savings"],
+      [40, "40 dB: hard to tell apart (recommended)"],
+      [38, "38 dB: smaller, slight loss in gradients"],
+      [35, "35 dB: smallest, gradients may show bands"],
+    ].map(([v, t]) => el("option", { value: String(v), text: t, selected: v === 40 })),
+  );
+  const pending = S.changes.length;
+  const go = await ask(
+    "Reduce images",
+    [
+      el("p", { text: "Writes a copy of this archive in which every true-colour BMP is stored with 256 colours, where the picture keeps the quality below and the stored file gets smaller. The open archive is not changed. The client loads 8-bit BMPs (many of its own are)." }),
+      el("p", { class: "muted", text: `${PSNR_HINT} Magenta (transparent) stays exact, and no other colour becomes transparent. Pictures with at most 256 colours lose nothing.` }),
+      el("div", { class: "form" }, el("label", {}, "Lowest quality ", level)),
+      pending ? el("p", { text: `The ${fmtNum(pending)} pending change(s) are written into the copy too; those entries are not reduced.` }) : null,
+    ],
+    [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }],
+  );
+  if (!go) return;
+  const base = S.info.file_name.replace(/\.[^.]+$/, "");
+  const dst = await T.dialog.save({ title: "Save the reduced archive as", defaultPath: `${base}-8bit.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  if (!dst) return;
+  const job = showJob("Reducing images");
+  setStatus(`Reducing images into ${dst} …`);
+  try {
+    const r = await invoke("reduce_images", { dst, minPsnr: Number(level.value) });
+    job.close();
+    const why = { already_8_bit: "already 8-bit", below_min_psnr: "below the quality", not_smaller: "not smaller stored", noisy_transparency: "noisy around magenta", alpha: "with alpha", unreadable: "unreadable" };
+    const kept = Object.entries(r.kept).map(([k, n]) => `${fmtNum(n)} ${why[k] || k}`).join(", ");
+    const saved = r.stored_before - r.stored_after;
+    const lines = [
+      el("p", { text: `${fmtNum(r.reduced)} of ${fmtNum(r.matched)} BMPs reduced (${fmtNum(r.lossless)} lossless${r.worst_psnr != null ? `, worst ${r.worst_psnr.toFixed(1)} dB` : ""}), ${fmtBytes(saved)} smaller.` }),
+      kept ? el("p", { class: "muted", text: `Kept as they are: ${kept}.` }) : null,
+    ];
+    if (!r.written) {
+      setStatus("Nothing to reduce");
+      return ask("Nothing to reduce", lines, [{ label: "OK", value: true, primary: true }], "info");
+    }
+    lines.push(el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}.` }));
+    setStatus(`Reduced into ${dst}: ${fmtBytes(saved)} smaller`);
+    const open = await ask("Images reduced", lines, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    if (open) await openPath(dst, true);
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? "Reducing cancelled" : "Reducing failed");
+    await note(cancelled ? "Reducing cancelled" : "Could not reduce", cancelled ? "Nothing was written." : errText(e), !cancelled);
+  }
+}
+
 /** A progress dialog for a long job; the page feeds it with `job-progress` events. */
 function showJob(title) {
   const bar = el("progress", { max: 100, value: 0 });
@@ -2149,6 +2253,7 @@ function runMenuCommand(id) {
   if (document.querySelector("dialog[open]")) return;
   if (id.startsWith("layout-")) return S.info && setLayout(id.slice(7));
   if (id.startsWith("preview-")) return setPreviewMode(id.slice(8));
+  if (id === "reduce-images") return doReduceImages();
   const b = MENU_BUTTONS[id] && $(MENU_BUTTONS[id]);
   if (b && !b.disabled) b.click();
 }

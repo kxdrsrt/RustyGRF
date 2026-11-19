@@ -120,7 +120,7 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 15);
+    assert_eq!(names(&rw).len(), 16);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -577,4 +577,67 @@ fn a_cancelled_call_gets_no_reply() {
         "params": {"name": "grf_verify", "arguments": {"path": g.to_str().unwrap()}}});
     assert!(s.handle(&msg, &cancel, &|_| {}).is_none());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn image_reduce_writes_8_bit_bmps_and_dry_run_only_reports() {
+    use rgrf_formats::spr::RgbaImage;
+    let dir = tmp("image-reduce");
+    // 200 colours at random: lossless as 8 bits and smaller stored
+    let mut pixels = Vec::new();
+    for i in 0..128u64 * 128 {
+        let mut r = i + 1;
+        for _ in 0..3 {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+        }
+        let r = (r % 200) as u8;
+        pixels.extend([r, r / 2, 255 - r, 255]);
+    }
+    let bmp = rgrf_formats::bmp::write_rgb(&RgbaImage {
+        width: 128,
+        height: 128,
+        pixels,
+    });
+    let p = make_grf(
+        &dir,
+        "pics.grf",
+        &[("data/a.bmp", &bmp), ("data/b.txt", b"text")],
+    );
+    let s = server(&[], std::slice::from_ref(&dir));
+    let out = dir.join("small.grf").display().to_string();
+    let v = ok(
+        &s,
+        "grf_image_reduce",
+        json!({"path": p, "output": out, "dry_run": true}),
+    );
+    assert_eq!(
+        (
+            v["matched"].clone(),
+            v["reduced"].clone(),
+            v["written"].clone()
+        ),
+        (1.into(), 1.into(), false.into())
+    );
+    assert!(!dir.join("small.grf").exists());
+    let v = ok(&s, "grf_image_reduce", json!({"path": p, "output": out}));
+    assert_eq!(
+        (
+            v["reduced"].clone(),
+            v["lossless"].clone(),
+            v["verified"].clone()
+        ),
+        (1.into(), 1.into(), true.into())
+    );
+    assert!(v["stored_bytes_after"].as_u64() < v["stored_bytes_before"].as_u64());
+    let v = ok(
+        &s,
+        "grf_inspect",
+        json!({"path": out, "entry": "data/a.bmp"}),
+    );
+    assert_eq!(
+        (v["kind"].clone(), v["bits"].clone(), v["colors"].clone()),
+        ("bmp".into(), 8.into(), 200.into())
+    );
 }

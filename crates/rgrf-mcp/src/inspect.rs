@@ -115,6 +115,24 @@ pub fn inspect(ctx: &Ctx, a: &Args) -> Out {
                 "textures": str_effect::texture_names(&s).iter().map(|t| korean(t)).collect::<Vec<_>>(),
             })
         }
+        "bmp" | "tga" => {
+            let img = if kind == "bmp" {
+                rgrf_formats::bmp::parse(&data).map_err(|e| bad("BMP", &e))?
+            } else {
+                rgrf_formats::tga::parse(&data).map_err(|e| bad("TGA", &e))?
+            };
+            let px = img.pixels.as_chunks::<4>().0;
+            let mut colors = px.to_vec();
+            colors.sort_unstable();
+            colors.dedup();
+            json!({
+                "kind": kind, "width": img.width, "height": img.height,
+                "bits": (kind == "bmp").then(|| rgrf_formats::bmp::info(&data).ok().map(|i| i.bits)).flatten(),
+                "colors": colors.len(),
+                "transparent_key_pixels": px.iter().filter(|p| rgrf_formats::quantize::is_key([p[0], p[1], p[2]])).count(),
+                "alpha_pixels": px.iter().filter(|p| p[3] != 255).count(),
+            })
+        }
         "lub" | "lua" if data.starts_with(b"\x1bLua") => {
             let info = luac::check_bytecode(&data).map_err(|e| bad("compiled Lua", &e))?;
             json!({
@@ -125,7 +143,7 @@ pub fn inspect(ctx: &Ctx, a: &Args) -> Out {
         }
         _ => {
             return Err(format!(
-                "no format reader for .{kind} files (supported: spr, act, pal, gat, gnd, rsw, rsm, rsm2, str, compiled lub); use grf_read_summary"
+                "no format reader for .{kind} files (supported: spr, act, pal, bmp, tga, gat, gnd, rsw, rsm, rsm2, str, compiled lub); use grf_read_summary"
             ));
         }
     };

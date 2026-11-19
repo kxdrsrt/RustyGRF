@@ -28,6 +28,7 @@ mod act_cmd;
 mod client_cmd;
 mod crypt_cmd;
 mod edit_cmd;
+mod image_cmd;
 mod lua_cmd;
 mod map_cmd;
 mod pal_cmd;
@@ -258,6 +259,11 @@ enum Cmd {
     Hash {
         grf: PathBuf,
         pattern: Option<String>,
+    },
+    /// Pictures (.bmp/.tga/.png): show, convert, and shrink the true-colour BMPs of an archive to 8 bits
+    Image {
+        #[command(subcommand)]
+        action: ImageCmd,
     },
     /// Sprites (.spr): show, export frames as PNG, build from PNGs
     Spr {
@@ -767,6 +773,45 @@ enum ActCmd {
         output: PathBuf,
         #[arg(long)]
         overwrite: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImageCmd {
+    /// Format, size, bit depth, colours and transparent pixels (a loose file, or a GRF and the entry path)
+    Info {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// Write a picture as .png or .bmp (the format follows the extension of the output)
+    Convert {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// BMP only: 24 (default) or 8 (at most 256 colours, magenta kept exact; prints the PSNR)
+        #[arg(long)]
+        bits: Option<u16>,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Write a copy of an archive whose true-colour BMPs are stored as 8-bit BMPs (256 colours),
+    /// where the picture keeps at least --min-psnr dB and the stored file gets smaller. Magenta
+    /// (the transparent colour) stays exact; nothing else becomes transparent. The client loads
+    /// 8-bit BMPs (21,461 of kRO's own are 8-bit)
+    Reduce {
+        grf: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Which entries (glob, default every BMP)
+        #[arg(long, default_value = "*.bmp")]
+        only: String,
+        /// Lowest picture quality to accept, in dB: 40 is hard to tell from the original, 35 shows
+        /// banding on smooth gradients; images with at most 256 colours are always lossless
+        #[arg(long, default_value_t = 40.0)]
+        min_psnr: f64,
+        #[command(flatten)]
+        write: WriteArgs,
     },
 }
 
@@ -1594,6 +1639,56 @@ fn run(cli: &Cli) -> Result<i32> {
                 names: cli.names,
                 json: cli.json,
             }),
+        },
+        Cmd::Image { action } => match action {
+            ImageCmd::Info { input, entry } => {
+                image_cmd::info(input, entry.as_deref(), cli.names, cli.json)
+            }
+            ImageCmd::Convert {
+                input,
+                entry,
+                output,
+                bits,
+                overwrite,
+            } => image_cmd::convert(
+                input,
+                entry.as_deref(),
+                cli.names,
+                &image_cmd::ConvertArgs {
+                    output,
+                    bits: *bits,
+                    overwrite: *overwrite,
+                },
+                cli.json,
+            ),
+            ImageCmd::Reduce {
+                grf,
+                output,
+                only,
+                min_psnr,
+                write,
+            } => {
+                let meter = Meter::new(cli);
+                let cb = meter.callback();
+                let ctl = Control {
+                    cancel: None,
+                    progress: Some(&cb),
+                };
+                let r = image_cmd::reduce(
+                    grf,
+                    output,
+                    &image_cmd::ReduceArgs {
+                        only,
+                        min_psnr: *min_psnr,
+                    },
+                    &write.options(encrypt_key(cli)?)?,
+                    cli.names,
+                    cli.json,
+                    &ctl,
+                );
+                meter.done();
+                r
+            }
         },
         Cmd::Spr { action } => match action {
             SprCmd::Info { input, entry } => {

@@ -308,6 +308,175 @@ pub struct EditPlan {
     key: Option<rgrf_core::grfcrypt::Key>,
 }
 
+impl EditPlan {
+    fn open(&self) -> Result<Archive, String> {
+        match &self.key {
+            Some(k) => Archive::open_with_key(&self.src, k),
+            None => Archive::open(&self.src),
+        }
+        .map_err(|e| format!("{}: {e}", self.src.display()))
+    }
+
+    fn edits(&self) -> Result<Vec<Edit>, String> {
+        self.changes
+            .iter()
+            .map(|c| {
+                Ok(match c {
+                    Change::Put { name, file } => Edit::Put {
+                        name: name.clone(),
+                        data: std::fs::read(file)
+                            .map_err(|e| format!("{}: {e}", file.display()))?,
+                    },
+                    Change::PutBytes { name, data, .. } => Edit::Put {
+                        name: name.clone(),
+                        data: (**data).clone(),
+                    },
+                    Change::Remove { name } => Edit::Remove { name: name.clone() },
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Serialize, Debug)]
+pub struct ReduceSummary {
+    pub matched: usize,
+    pub reduced: usize,
+    /// Reduced without any colour change (at most 256 colours before).
+    pub lossless: usize,
+    /// Left alone, by reason.
+    pub kept: std::collections::BTreeMap<String, usize>,
+    pub stored_before: u64,
+    pub stored_after: u64,
+    pub worst_psnr: Option<f64>,
+    /// Whether an archive was written (not when nothing was reduced and nothing is pending).
+    pub written: bool,
+    pub files: usize,
+    pub file_bytes: u64,
+    pub verified: bool,
+}
+
+/// Writes `dst` as the open archive with its pending changes and every other true-colour BMP
+/// stored as 8 bits where the picture keeps `min_psnr` dB and the stored file gets smaller
+/// (`rgrf image reduce` does the same). The open archive is not touched.
+pub fn reduce_images(
+    plan: &EditPlan,
+    dst: &Path,
+    min_psnr: f64,
+    ctl: &Control,
+) -> Result<ReduceSummary, String> {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    if same_file(&plan.src, dst) {
+        return Err("the target must not be the open archive".into());
+    }
+    let src = plan.open()?;
+    let touched: std::collections::HashSet<Vec<u8>> =
+        plan.changes.iter().map(|c| c.name().key()).collect();
+    let idx: Vec<usize> = src
+        .entries()
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            e.is_file()
+                && !touched.contains(&e.name.key())
+                && e.name.as_bytes().to_ascii_lowercase().ends_with(b".bmp")
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let total = idx.len() as u64;
+    let done = AtomicU64::new(0);
+    let results: Vec<Result<(GrfPath, rgrf_formats::bmp::Stored), &'static str>> = idx
+        .par_iter()
+        .map(|&i| {
+            ctl.check().map_err(|_| "cancelled")?;
+            ctl.report(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            let e = &src.entries()[i];
+            let d = src.read(i).map_err(|_| "unreadable")?;
+            let r = rgrf_formats::bmp::reduce_for_storage(
+                &d.data,
+                min_psnr,
+                u64::from(e.zsize),
+                |b| rgrf_core::encode::encode(Method::DEFAULT, b).len() as u64,
+            );
+            r.map(|s| (e.name.clone(), s)).map_err(|k| k.reason())
+        })
+        .collect();
+    ctl.check().map_err(|e| e.to_string())?;
+    let mut sum = ReduceSummary {
+        matched: idx.len(),
+        reduced: 0,
+        lossless: 0,
+        kept: Default::default(),
+        stored_before: 0,
+        stored_after: 0,
+        worst_psnr: None,
+        written: false,
+        files: 0,
+        file_bytes: 0,
+        verified: false,
+    };
+    let mut edits = plan.edits()?;
+    for r in results {
+        match r {
+            Ok((name, st)) => {
+                sum.reduced += 1;
+                sum.lossless += usize::from(st.psnr.is_infinite());
+                sum.stored_before += st.stored_before;
+                sum.stored_after += st.stored_after;
+                if st.psnr.is_finite() {
+                    sum.worst_psnr = Some(sum.worst_psnr.map_or(st.psnr, |w: f64| w.min(st.psnr)));
+                }
+                edits.push(Edit::Put { name, data: st.bytes });
+            }
+            Err(why) => *sum.kept.entry(why.to_owned()).or_default() += 1,
+        }
+    }
+    if edits.is_empty() {
+        return Ok(sum);
+    }
+    let opts = RepackOptions {
+        overwrite: true,
+        copy_streams: true,
+        encrypt: plan.key,
+        ..RepackOptions::default()
+    };
+    let r = edit::apply(&src, &plan.src, dst, &edits, &opts, ctl).map_err(|e| e.to_string())?;
+    sum.written = true;
+    sum.files = r.merge.repack.files;
+    sum.file_bytes = r.merge.repack.output_file_len;
+    sum.verified = r.merge.repack.verified;
+    Ok(sum)
+}
+
+/// One BMP reduced to 8 bits, to compare before staging it.
+#[derive(Serialize, Debug)]
+pub struct ReducePreview {
+    /// `None`: no colour changed.
+    pub psnr: Option<f64>,
+    pub colors: usize,
+    pub bytes_before: usize,
+    pub bytes_after: usize,
+    /// Both pictures as BMP, base64.
+    pub before: String,
+    pub after: String,
+}
+
+fn reduce_one(data: &[u8]) -> Result<(Vec<u8>, f64, usize), String> {
+    let info = rgrf_formats::bmp::info(data).map_err(|e| e.to_string())?;
+    if info.bits <= 8 {
+        return Err(format!(
+            "the picture already has {} bits per pixel",
+            info.bits
+        ));
+    }
+    let img = rgrf_formats::bmp::parse(data).map_err(|e| e.to_string())?;
+    if img.pixels.as_chunks::<4>().0.iter().any(|p| p[3] != 255) {
+        return Err("the picture has an alpha channel, which 8-bit BMPs cannot keep".into());
+    }
+    rgrf_formats::bmp::write_reduced(&img, 256).map_err(|e| e.to_string())
+}
+
 #[derive(Serialize, Debug)]
 pub struct EditSummary {
     pub added: usize,
@@ -496,6 +665,9 @@ pub enum Preview {
     Image {
         mime: String,
         data: String,
+        /// Bits per pixel of a BMP (more than 8: it can be reduced to 8).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bits: Option<u16>,
     },
     Audio {
         mime: String,
@@ -776,25 +948,8 @@ pub fn save_edited(
     overwrite: bool,
     ctl: &Control,
 ) -> Result<EditSummary, String> {
-    let src = match &plan.key {
-        Some(k) => Archive::open_with_key(&plan.src, k),
-        None => Archive::open(&plan.src),
-    }
-    .map_err(|e| format!("{}: {e}", plan.src.display()))?;
-    let mut edits = Vec::with_capacity(plan.changes.len());
-    for c in &plan.changes {
-        edits.push(match c {
-            Change::Put { name, file } => Edit::Put {
-                name: name.clone(),
-                data: std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
-            },
-            Change::PutBytes { name, data, .. } => Edit::Put {
-                name: name.clone(),
-                data: (**data).clone(),
-            },
-            Change::Remove { name } => Edit::Remove { name: name.clone() },
-        });
-    }
+    let src = plan.open()?;
+    let edits = plan.edits()?;
     // unchanged entries keep their streams, so the archive does not grow or lose its compression
     let opts = RepackOptions {
         overwrite,
@@ -1134,6 +1289,38 @@ impl Session {
         png: &Path,
     ) -> Result<(), String> {
         self.transact(|s| s.stage_spr_image_impl(index, frame, png))
+    }
+
+    pub fn reduce_preview(&self, index: usize) -> Result<ReducePreview, String> {
+        let (_, data, _) = self.working_bytes(index)?;
+        let (out, psnr, colors) = reduce_one(&data)?;
+        Ok(ReducePreview {
+            psnr: psnr.is_finite().then_some(psnr),
+            colors,
+            bytes_before: data.len(),
+            bytes_after: out.len(),
+            before: b64(&data),
+            after: b64(&out),
+        })
+    }
+
+    /// Stores a true-colour BMP as an 8-bit one (256 colours, magenta kept exact).
+    pub fn stage_reduce(&mut self, index: usize) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, data, mut what) = s.working_bytes(index)?;
+            let (out, psnr, colors) = reduce_one(&data)?;
+            what.push(if psnr.is_finite() {
+                format!("reduced to 8 bits: {colors} colours, PSNR {psnr:.1} dB")
+            } else {
+                format!("reduced to 8 bits: {colors} colours, lossless")
+            });
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(out),
+                what,
+            });
+            Ok(())
+        })
     }
 
     pub fn stage_spr_add(&mut self, index: usize, png: &Path) -> Result<(), String> {
@@ -1645,11 +1832,16 @@ impl Session {
         if self.pending.is_empty() {
             return Err("there are no changes to save".into());
         }
-        Ok(EditPlan {
+        Ok(self.plan())
+    }
+
+    /// The open archive and its pending changes (possibly none).
+    pub fn plan(&self) -> EditPlan {
+        EditPlan {
             src: self.path.clone(),
             changes: self.pending.clone(),
             key: self.crypt_key,
-        })
+        }
     }
 
     fn display_names(arc: &Archive, mode: NameMode) -> Vec<String> {
@@ -1979,6 +2171,9 @@ impl Session {
                 };
                 Preview::Image {
                     mime: mime.into(),
+                    bits: (kind == "bmp")
+                        .then(|| rgrf_formats::bmp::info(&data).ok().map(|i| i.bits))
+                        .flatten(),
                     data: b64(&data),
                 }
             }
@@ -1987,6 +2182,7 @@ impl Session {
                 Preview::Image {
                     mime: "image/png".into(),
                     data: b64(&rgba_to_png(&img).map_err(|e| e.to_string())?),
+                    bits: None,
                 }
             }
             "ogg" => Preview::Audio {
@@ -3571,6 +3767,109 @@ mod tests {
         s.discard_pending();
         assert!(s.pending().is_empty());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn true_colour_bmps_are_reduced_one_by_one_and_for_the_whole_archive() {
+        let dir = tmp("reduce");
+        let src = dir.join("src/data");
+        fs::create_dir_all(&src).unwrap();
+        let picture = |w: u16, h: u16, f: &dyn Fn(u32, u32) -> [u8; 3]| {
+            let mut pixels = Vec::new();
+            for y in 0..u32::from(h) {
+                for x in 0..u32::from(w) {
+                    pixels.extend(f(x, y));
+                    pixels.push(255);
+                }
+            }
+            rgrf_formats::bmp::write_rgb(&RgbaImage {
+                width: w,
+                height: h,
+                pixels,
+            })
+        };
+        // a smooth gradient (lossy) and 200 colours at random (lossless, still smaller)
+        fs::write(
+            src.join("grad.bmp"),
+            picture(64, 64, &|x, y| [(x * 2) as u8, (y * 2) as u8, 0]),
+        )
+        .unwrap();
+        fs::write(
+            src.join("noise.bmp"),
+            picture(128, 128, &|x, y| {
+                let mut r = u64::from(x * 128 + y + 1);
+                for _ in 0..3 {
+                    r ^= r << 13;
+                    r ^= r >> 7;
+                    r ^= r << 17;
+                }
+                let r = (r % 200) as u8;
+                [r, r / 2, 255 - r]
+            }),
+        )
+        .unwrap();
+        fs::write(src.join("a.txt"), "text").unwrap();
+        let grf = dir.join("a.grf");
+        build(
+            &dir.join("src"),
+            &grf,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+
+        let mut s = Session::open(&grf).unwrap();
+        let index = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+        let grad = index(&mut s, "grad.bmp");
+        match s.preview(grad, None).unwrap() {
+            Preview::Image { bits, .. } => assert_eq!(bits, Some(24)),
+            other => panic!("{other:?}"),
+        }
+        let p = s.reduce_preview(grad).unwrap();
+        assert!(
+            p.psnr.is_some_and(|v| v > 40.0) && p.bytes_after < p.bytes_before,
+            "{p:?}"
+        );
+        s.stage_reduce(grad).unwrap();
+        assert_eq!(s.pending().len(), 1);
+        assert!(
+            s.reduce_preview(grad)
+                .unwrap_err()
+                .contains("already has 8 bits")
+        );
+        let txt = index(&mut s, "a.txt");
+        assert!(s.reduce_preview(txt).is_err());
+
+        let plan = s.plan();
+        assert!(reduce_images(&plan, &grf, 40.0, &Control::default()).is_err());
+        let out = dir.join("out.grf");
+        let r = reduce_images(&plan, &out, 40.0, &Control::default()).unwrap();
+        // the staged gradient is not looked at again; the noise is reduced without loss
+        assert_eq!(
+            (r.matched, r.reduced, r.lossless, r.written, r.verified),
+            (1, 1, 1, true, true)
+        );
+        let a = Archive::open(&out).unwrap();
+        for name in ["data\\grad.bmp", "data\\noise.bmp"] {
+            let i = a
+                .find(&GrfPath::from_display(name, NameMode::Cp1252).unwrap())
+                .unwrap();
+            assert_eq!(
+                rgrf_formats::bmp::info(&a.read(i).unwrap().data)
+                    .unwrap()
+                    .bits,
+                8,
+                "{name}"
+            );
+        }
+        let i = a
+            .find(&GrfPath::from_display("data\\a.txt", NameMode::Cp1252).unwrap())
+            .unwrap();
+        assert_eq!(a.read(i).unwrap().data, b"text");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -551,6 +551,188 @@ fn edit_replaces_adds_and_removes_without_touching_the_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A 24-bit BMP (bottom-up) with the colour of each pixel from `f(x, y)`.
+fn bmp24(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+    let stride = (w * 3).div_ceil(4) * 4;
+    let mut v = b"BM".to_vec();
+    v.extend((54 + stride * h).to_le_bytes());
+    v.extend([0; 4]);
+    v.extend(54u32.to_le_bytes());
+    v.extend(40u32.to_le_bytes());
+    v.extend(w.to_le_bytes());
+    v.extend(h.to_le_bytes());
+    v.extend(1u16.to_le_bytes());
+    v.extend(24u16.to_le_bytes());
+    v.extend([0; 24]);
+    for y in (0..h).rev() {
+        for x in 0..w {
+            let c = f(x, y);
+            v.extend([c[2], c[1], c[0]]);
+        }
+        v.resize(v.len() + (stride - w * 3) as usize, 0);
+    }
+    v
+}
+
+#[test]
+fn image_reduce_shrinks_true_colour_bmps_and_keeps_magenta() {
+    let dir = tmpdir("image-reduce");
+    let src = dir.join("src/data");
+    std::fs::create_dir_all(&src).unwrap();
+    // 200 colours scattered at random and a magenta corner: lossless; a smooth two-channel
+    // gradient: lossy (about 45 dB); 2 x 2: not smaller
+    let flat = bmp24(128, 128, |x, y| {
+        let mut r = (x * 128 + y + 1) as u64;
+        for _ in 0..3 {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+        }
+        let r = (r % 200) as u8;
+        if x < 8 && y < 8 {
+            [255, 0, 255]
+        } else {
+            [r, r / 2, 255 - r]
+        }
+    });
+    std::fs::write(src.join("flat.bmp"), &flat).unwrap();
+    let grad = bmp24(64, 64, |x, y| [(x * 2) as u8, (y * 2) as u8, 0]);
+    std::fs::write(src.join("grad.bmp"), &grad).unwrap();
+    std::fs::write(
+        src.join("tiny.bmp"),
+        bmp24(2, 2, |x, y| [x as u8, y as u8, 0]),
+    )
+    .unwrap();
+    std::fs::write(src.join("note.txt"), "not a picture").unwrap();
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    assert_eq!(
+        rgrf(&["build", &p("src"), "-o", &p("base.grf"), "--quiet"])
+            .status
+            .code(),
+        Some(0)
+    );
+
+    let dry = rgrf(&[
+        "image",
+        "reduce",
+        &p("base.grf"),
+        "-o",
+        &p("out.grf"),
+        "--dry-run",
+        "--json",
+    ]);
+    assert_eq!(
+        dry.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let v = json(&dry);
+    assert_eq!(
+        (
+            v["matched"].as_u64(),
+            v["reduced"].as_u64(),
+            v["written"].as_bool()
+        ),
+        (Some(3), Some(2), Some(false))
+    );
+    assert!(!dir.join("out.grf").exists());
+
+    let o = rgrf(&[
+        "image",
+        "reduce",
+        &p("base.grf"),
+        "-o",
+        &p("out.grf"),
+        "--min-psnr",
+        "99",
+        "--json",
+        "--quiet",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(
+        (v["reduced"].as_u64(), v["lossless"].as_u64()),
+        (Some(1), Some(1))
+    );
+    assert_eq!(v["kept"]["below_min_psnr"].as_u64(), Some(1));
+    assert_eq!(v["kept"]["not_smaller"].as_u64(), Some(1));
+    assert!(v["stored_bytes_after"].as_u64() < v["stored_bytes_before"].as_u64());
+
+    // the flat picture is 8-bit now, with the same colours and the magenta corner intact
+    let info = |grf: &str| {
+        json(&rgrf(&[
+            "image",
+            "info",
+            &p(grf),
+            "data/flat.bmp",
+            "--json",
+        ]))
+    };
+    let (a, b) = (info("base.grf"), info("out.grf"));
+    assert_eq!(
+        (a["bits"].as_u64(), b["bits"].as_u64()),
+        (Some(24), Some(8))
+    );
+    assert_eq!(a["colors"], b["colors"]);
+    assert_eq!(b["transparent_key_pixels"].as_u64(), Some(64));
+    let same = rgrf(&["cat", &p("out.grf"), "data/note.txt"]);
+    assert_eq!(same.stdout, b"not a picture");
+    let again = rgrf(&[
+        "image",
+        "reduce",
+        &p("base.grf"),
+        "-o",
+        &p("out.grf"),
+        "--quiet",
+    ]);
+    assert_eq!(
+        again.status.code(),
+        Some(1),
+        "an existing output is never replaced"
+    );
+
+    // convert: PNG out, and an 8-bit BMP with its PSNR
+    let o = rgrf(&[
+        "image",
+        "convert",
+        &p("base.grf"),
+        "data/grad.bmp",
+        "-o",
+        &p("grad.png"),
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        std::fs::read(dir.join("grad.png"))
+            .unwrap()
+            .starts_with(b"\x89PNG")
+    );
+    let o = rgrf(&[
+        "image",
+        "convert",
+        &p("grad.png"),
+        "-o",
+        &p("grad8.bmp"),
+        "--bits",
+        "8",
+        "--json",
+    ]);
+    let v = json(&o);
+    assert!(v["psnr_db"].as_f64().is_some_and(|p| p > 30.0), "{v}");
+    assert_eq!(std::fs::read(dir.join("grad8.bmp")).unwrap()[28], 8);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn spr_info_export_build_round_trip() {
     use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};

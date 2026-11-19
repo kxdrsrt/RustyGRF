@@ -236,7 +236,7 @@ fn previews_of_real_files() {
     assert!(s.search("*.tga") > 100);
     let tga = s.page(0, 1)[0].index;
     match s.preview(tga, None).unwrap() {
-        Preview::Image { mime, data } => {
+        Preview::Image { mime, data, .. } => {
             assert_eq!((mime.as_str(), data.is_empty()), ("image/png", false))
         }
         other => panic!("{other:?}"),

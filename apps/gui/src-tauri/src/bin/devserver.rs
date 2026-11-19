@@ -200,6 +200,20 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_text_edit(arg(a, "index")?, &arg::<String>(a, "text")?)?;
             to_json(s.pending())
         }),
+        "reduce_preview" => with(state, |s| to_json(s.reduce_preview(arg(a, "index")?)?)),
+        "stage_reduce" => with(state, |s| {
+            s.stage_reduce(arg(a, "index")?)?;
+            to_json(s.pending())
+        }),
+        "reduce_images" => {
+            let plan = with(state, |s| Ok(s.plan()))?;
+            to_json(backend::reduce_images(
+                &plan,
+                &PathBuf::from(arg::<String>(a, "dst")?),
+                arg(a, "minPsnr")?,
+                &none,
+            )?)
+        }
         "stage_act_interval" => with(state, |s| {
             s.stage_act_interval(arg(a, "index")?, arg(a, "action")?, arg(a, "ms")?)?;
             to_json(s.pending())

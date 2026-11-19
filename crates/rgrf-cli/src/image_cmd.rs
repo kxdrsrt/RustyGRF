@@ -1,0 +1,305 @@
+//! `rgrf image`: look at BMP/TGA/PNG pictures, convert them, and shrink the true-colour BMPs of an
+//! archive to 8 bits (M7d).
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+use std::time::Instant;
+
+use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
+use rgrf_core::edit::{Edit, apply};
+use rgrf_core::encode::encode;
+use rgrf_core::progress::Control;
+use rgrf_core::repack::RepackOptions;
+use rgrf_core::{GrfPath, NameMode};
+use rgrf_formats::bmp::{self, Stored};
+use rgrf_formats::png_io::{Frame, frame_from_png, rgba_to_png};
+use rgrf_formats::quantize::is_key;
+use rgrf_formats::spr::RgbaImage;
+use serde_json::json;
+
+use crate::spr_cmd::load;
+
+/// A picture in any of the formats the client uses (JPEG is not decoded).
+fn decode(data: &[u8], what: &str) -> Result<(&'static str, RgbaImage)> {
+    if data.starts_with(b"BM") {
+        return Ok((
+            "bmp",
+            bmp::parse(data).with_context(|| format!("{what} is not a readable BMP"))?,
+        ));
+    }
+    if data.starts_with(b"\x89PNG") {
+        let frame =
+            frame_from_png(data).with_context(|| format!("{what} is not a readable PNG"))?;
+        return Ok((
+            "png",
+            match frame {
+                Frame::Rgba(img) => img,
+                Frame::Indexed { image, palette } => RgbaImage {
+                    width: image.width,
+                    height: image.height,
+                    pixels: image
+                        .pixels
+                        .iter()
+                        .flat_map(|&i| {
+                            let c = &palette[4 * usize::from(i)..4 * usize::from(i) + 3];
+                            [c[0], c[1], c[2], 255]
+                        })
+                        .collect(),
+                },
+            },
+        ));
+    }
+    if data.starts_with(&[0xff, 0xd8]) {
+        bail!("{what} is a JPEG; reading JPEG is not supported");
+    }
+    if what.to_ascii_lowercase().ends_with(".tga") {
+        return Ok((
+            "tga",
+            rgrf_formats::tga::parse(data)
+                .with_context(|| format!("{what} is not a readable TGA"))?,
+        ));
+    }
+    bail!("{what} is neither BMP, PNG nor TGA")
+}
+
+pub fn info(input: &Path, entry: Option<&str>, names: NameMode, json: bool) -> Result<i32> {
+    let (data, what) = load(input, entry, names)?;
+    let (format, img) = decode(&data, &what)?;
+    let bits = if format == "bmp" {
+        bmp::info(&data).ok().map(|i| i.bits)
+    } else {
+        None
+    };
+    let px = img.pixels.as_chunks::<4>().0;
+    let mut colors: Vec<[u8; 4]> = px.to_vec();
+    colors.sort_unstable();
+    colors.dedup();
+    let key = px.iter().filter(|p| is_key([p[0], p[1], p[2]])).count();
+    let alpha = px.iter().filter(|p| p[3] != 255).count();
+    if json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": crate::SCHEMA_VERSION,
+                "source": what,
+                "format": format,
+                "bytes": data.len(),
+                "width": img.width,
+                "height": img.height,
+                "bits": bits,
+                "colors": colors.len(),
+                "transparent_key_pixels": key,
+                "alpha_pixels": alpha,
+            })
+        );
+    } else {
+        println!("{what}");
+        let bits = bits.map(|b| format!(", {b} bits")).unwrap_or_default();
+        println!(
+            "  {format}{bits}, {} x {}, {} bytes",
+            img.width,
+            img.height,
+            data.len()
+        );
+        println!(
+            "  {} colours, {key} magenta (transparent) pixels, {alpha} pixels with alpha",
+            colors.len()
+        );
+    }
+    Ok(0)
+}
+
+pub struct ConvertArgs<'a> {
+    pub output: &'a Path,
+    pub bits: Option<u16>,
+    pub overwrite: bool,
+}
+
+/// Writes the picture as PNG or BMP, by the extension of the output. BMP is 24-bit unless
+/// `bits` is 8 (then reduced to 256 colours; the PSNR is printed).
+pub fn convert(
+    input: &Path,
+    entry: Option<&str>,
+    names: NameMode,
+    args: &ConvertArgs,
+    json: bool,
+) -> Result<i32> {
+    let (data, what) = load(input, entry, names)?;
+    let (_, img) = decode(&data, &what)?;
+    if args.output.exists() && !args.overwrite {
+        bail!("{} exists (use --overwrite)", args.output.display());
+    }
+    let ext = args
+        .output
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let mut psnr = None;
+    let out = match (ext.as_str(), args.bits) {
+        ("png", None) => rgba_to_png(&img)?,
+        ("png", Some(_)) => bail!("--bits is for BMP output"),
+        ("bmp", None | Some(24)) => bmp::write_rgb(&img),
+        ("bmp", Some(8)) => {
+            let (b, p, _) = bmp::write_reduced(&img, 256)?;
+            psnr = Some(p);
+            b
+        }
+        ("bmp", Some(b)) => bail!("--bits {b}: BMP output is 8 or 24 bits"),
+        _ => bail!("write .png or .bmp (the format follows the extension of the output)"),
+    };
+    fs::write(args.output, &out)
+        .with_context(|| format!("cannot write {}", args.output.display()))?;
+    let psnr_text = psnr.map(fmt_psnr);
+    if json {
+        println!(
+            "{}",
+            json!({
+                "schema_version": crate::SCHEMA_VERSION,
+                "source": what,
+                "output": args.output.display().to_string(),
+                "bytes": out.len(),
+                "psnr_db": psnr.filter(|p| p.is_finite()),
+                "lossless": psnr.is_none_or(f64::is_infinite),
+            })
+        );
+    } else {
+        println!(
+            "{} -> {} ({} bytes)",
+            what,
+            args.output.display(),
+            out.len()
+        );
+        if let Some(p) = psnr_text {
+            println!("  reduced to 256 colours: {p}");
+        }
+    }
+    Ok(0)
+}
+
+fn fmt_psnr(p: f64) -> String {
+    if p.is_finite() {
+        format!("PSNR {p:.1} dB")
+    } else {
+        "lossless".into()
+    }
+}
+
+pub struct ReduceArgs<'a> {
+    pub only: &'a str,
+    pub min_psnr: f64,
+}
+
+/// Writes `output` as `grf` with every matching true-colour BMP stored as 8-bit where that keeps
+/// at least `min_psnr` dB and the stored (compressed) file gets smaller.
+pub fn reduce(
+    grf: &Path,
+    output: &Path,
+    args: &ReduceArgs,
+    opts: &RepackOptions,
+    names: NameMode,
+    json: bool,
+    ctl: &Control,
+) -> Result<i32> {
+    let started = Instant::now();
+    if !opts.dry_run && output.exists() && !opts.overwrite {
+        bail!("{} exists (use --overwrite)", output.display());
+    }
+    let a = crate::crypt_cmd::open_archive(grf)?;
+    let idx = a.select(Some(args.only), names);
+    let method = opts.method;
+    let results: Vec<Result<(GrfPath, Stored), &'static str>> = idx
+        .par_iter()
+        .map(|&i| {
+            let e = &a.entries()[i];
+            let d = a.read(i).map_err(|_| "unreadable")?;
+            let r = bmp::reduce_for_storage(&d.data, args.min_psnr, u64::from(e.zsize), |b| {
+                encode(method, b).len() as u64
+            });
+            r.map(|s| (e.name.clone(), s)).map_err(|k| k.reason())
+        })
+        .collect();
+    let mut kept: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut edits = Vec::new();
+    let (mut before, mut after, mut worst, mut lossless) = (0u64, 0u64, f64::INFINITY, 0usize);
+    for r in results {
+        match r {
+            Ok((name, st)) => {
+                before += st.stored_before;
+                after += st.stored_after;
+                worst = worst.min(st.psnr);
+                lossless += usize::from(st.psnr.is_infinite());
+                edits.push(Edit::Put {
+                    name,
+                    data: st.bytes,
+                });
+            }
+            Err(why) => *kept.entry(why).or_default() += 1,
+        }
+    }
+    let reduced = edits.len();
+    let write = !opts.dry_run && reduced > 0;
+    let report = if write {
+        Some(apply(&a, grf, output, &edits, opts, ctl)?)
+    } else {
+        None
+    };
+    let secs = started.elapsed().as_secs_f64();
+    if json {
+        let mut v = match &report {
+            Some(r) => crate::write_json(&r.merge.repack, output, secs),
+            None => json!({}),
+        };
+        let extra = json!({
+            "schema_version": crate::SCHEMA_VERSION,
+            "matched": idx.len(),
+            "reduced": reduced,
+            "lossless": lossless,
+            "kept": kept,
+            "stored_bytes_before": before,
+            "stored_bytes_after": after,
+            "worst_psnr_db": (reduced > 0 && worst.is_finite()).then_some(worst),
+            "min_psnr_db": args.min_psnr,
+            "written": write,
+            "seconds": secs,
+        });
+        for (k, x) in extra.as_object().into_iter().flatten() {
+            v[k] = x.clone();
+        }
+        crate::print_json(&v)?;
+    } else {
+        let mib = |b: u64| b as f64 / f64::from(1u32 << 20);
+        println!("{} entries match '{}'", idx.len(), args.only);
+        println!(
+            "Reduced:  {reduced} to 8 bits ({lossless} lossless), worst {}",
+            if reduced > 0 {
+                fmt_psnr(worst)
+            } else {
+                "-".into()
+            }
+        );
+        println!(
+            "Stored:   {:.1} -> {:.1} MiB (saves {:.1} MiB)",
+            mib(before),
+            mib(after),
+            mib(before - after)
+        );
+        let kept: Vec<String> = kept
+            .iter()
+            .map(|(k, n)| format!("{n} {}", k.replace('_', " ")))
+            .collect();
+        if !kept.is_empty() {
+            println!("Kept:     {}", kept.join(", "));
+        }
+        if let Some(r) = &report {
+            crate::write_summary(&r.merge.repack, output, secs);
+        } else if reduced > 0 {
+            println!("Dry run:  nothing written");
+        } else {
+            println!("Nothing to reduce, nothing written");
+        }
+    }
+    Ok(0)
+}
