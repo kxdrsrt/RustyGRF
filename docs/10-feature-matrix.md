@@ -38,7 +38,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Interpolation (auch „erweitert“), Skripte (C#-Skript-Engine, `doc/ScriptGuide`) | – | ❓ Skripte: andere Sprache nötig (Frage) |
 | GIF-Export | `act render --gif` | ✅ (Hintergrund wählen ❓) |
 | Sound-Effekte je Frame | `act sound` | ✅ (setzen/entfernen, Tabelle wächst; Eingabe im GUI ✅ (ACT-Editor), Abspielen 🔨) |
-| Palette Editor (`PaletteEditorTool`, `PaletteSheetGenerator`) | `pal info/extract/png/from-png/set/adjust/sheet` | ✅ Palette ansehen, als Bild bearbeiten und zurückholen, Farben setzen, Farbton/Sättigung/Helligkeit, Vorschaublatt eines Sprites mit mehreren Paletten (an einem echten Sprite geprüft); Oberfläche ✅ (`.pal`-Vorschau: Farbe anklicken, Bereich anpassen; vorgemerkt wie jede Änderung); Pixel-Editor für Sprites (`SpriteEditorTools`) 🔨 |
+| Palette Editor (`PaletteEditorTool`, `PaletteSheetGenerator`) | `pal info/extract/png/from-png/set/adjust/sheet` | ✅ Palette ansehen, als Bild bearbeiten und zurückholen, Farben setzen, Farbton/Sättigung/Helligkeit, Vorschaublatt eines Sprites mit mehreren Paletten (an einem echten Sprite geprüft); Oberfläche ✅ (`.pal`-Vorschau: Farbe anklicken, Bereich anpassen; vorgemerkt wie jede Änderung); Pixel-Editor für Sprites ✅ (Paletten-Bilder: Stift, Radierer, Füllen, Pipette, Palette; `SpriteEditorTools`) |
 | Sprite von indiziert nach BGRA konvertieren (und zurück) | `spr convert --to rgba|indexed [--act … --act-output …]` | ✅ (2026-11-19; ACT-Ebenen folgen; zurück verlustfrei bei höchstens 255 Farben, sonst Median-Cut mit Meldung; echter Sprite `C_Surf_Board_Poring` hin und zurück: gleiche Größe, 9 Bilder) |
 | `GrfShellExplorer` (Windows-Explorer-Integration) | – | ❓ nur Windows |
 

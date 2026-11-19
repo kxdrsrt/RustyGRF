@@ -165,6 +165,17 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             let changed = s.stage_gat_edit(arg(a, "index")?, &edit)?;
             Ok(json!({ "changed": changed, "pending": s.pending() }))
         }),
+        "spr_image" => with(state, |s| {
+            to_json(s.spr_image(arg(a, "index")?, arg(a, "frame")?)?)
+        }),
+        "stage_spr_pixels" => with(state, |s| {
+            s.stage_spr_pixels(
+                arg(a, "index")?,
+                arg(a, "frame")?,
+                &arg::<String>(a, "pixels")?,
+            )?;
+            to_json(s.pending())
+        }),
         "pal_colors" => with(state, |s| to_json(s.pal_colors(arg(a, "index")?)?)),
         "stage_pal_edit" => with(state, |s| {
             let edit: rustygrf_gui_lib::pal_editor::PalEdit = arg(a, "edit")?;

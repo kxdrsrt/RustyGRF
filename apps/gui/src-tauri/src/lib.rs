@@ -4,6 +4,7 @@ pub mod act_editor;
 pub mod backend;
 pub mod gat_editor;
 pub mod pal_editor;
+pub mod spr_editor;
 pub mod view;
 
 use std::path::PathBuf;
@@ -375,6 +376,31 @@ struct GatStaged {
     pending: Vec<PendingRow>,
 }
 
+/// One palette image of the sprite `index` as palette indices, with staged changes applied.
+#[tauri::command]
+async fn spr_image(
+    state: State<'_, AppState>,
+    index: usize,
+    frame: usize,
+) -> Res<spr_editor::SprImageView> {
+    with_session(&state, move |s| s.spr_image(index, frame)).await
+}
+
+/// Replaces the pixels (palette indices, base64) of one palette image (staged).
+#[tauri::command]
+async fn stage_spr_pixels(
+    state: State<'_, AppState>,
+    index: usize,
+    frame: usize,
+    pixels: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_spr_pixels(index, frame, &pixels)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// The 256 colours (`rrggbb`) of the palette `index`, with staged changes applied.
 #[tauri::command]
 async fn pal_colors(state: State<'_, AppState>, index: usize) -> Res<Vec<String>> {
@@ -592,6 +618,8 @@ pub fn run() {
             stage_act_interval,
             pal_colors,
             stage_gat_edit,
+            spr_image,
+            stage_spr_pixels,
             stage_pal_edit,
             act_frame,
             stage_act_edit,

@@ -28,7 +28,7 @@ Die Tests mit echten Archiven brauchen `RGRF_TESTDATA` (siehe `apps/gui/.cargo/c
 - **Signierung und Notarisierung** (macOS: Apple-Developer-Konto; Windows: Zertifikat). Ohne sie warnt das System beim ersten Start („nicht verifizierter Entwickler“, SmartScreen). Für den Eigengebrauch reicht Rechtsklick → Öffnen.
 - **Icon:** Entwurf A (Kiste, Rostorange) ist eingebaut und im `.app` geprüft; Entwürfe und Vorgehen in [icon-drafts/](icon-drafts/README.md). Ein endgültiges Design ist deine Entscheidung.
 - **Versionsnummer:** `0.0.0` in `tauri.conf.json` und den `Cargo.toml`; vor dem ersten Release festlegen.
-- **Automatische Builds** (CI für macOS/Windows/Linux): erst sinnvoll, wenn das Projekt ein eigenes Repository hat (bisher nur lokales Git, kein Push).
+- **Automatische Builds:** `.github/workflows/gui-bundles.yml` baut die Installer (Windows `.msi`/`.exe`, Linux `.deb`/AppImage x64 und ARM64, macOS `.app`/`.dmg`) bei Hand-Start oder Tag `v*`; läuft erst, wenn das Projekt auf GitHub liegt (bisher nur lokales Git, kein Push), Syntax geprüft (YAML), nicht ausgeführt.
 - **Updater:** nicht eingebaut.
 
 ## Bekannte Grenzen der Pakete

@@ -678,6 +678,7 @@ function renderPreview(p, row, meta) {
                 ? el(
                     "div",
                     { class: "figactions" },
+                    el("button", { type: "button", class: "small", icon: "pencil", text: "Pixels…", title: "Draw on this image: pencil, eraser, fill and colour picker on the palette colours (staged)", onclick: () => openPixelEditor(row, i) }),
                     el("button", { type: "button", class: "small", text: "Replace…", title: "Replace this image with a PNG (staged, saved with Changes…)", onclick: () => replaceImage(row, i) }),
                     el("button", { type: "button", class: "small", text: "Remove", title: "Remove this image; the animation next to it follows (staged)", onclick: () => removeImage(row, i) }),
                   )
@@ -860,6 +861,243 @@ async function removeImage(row, frame) {
     refreshPreview();
   } catch (e) {
     await note("Could not remove the image", errText(e), true);
+  }
+}
+
+// ---------- pixel editor ----------
+
+/** Draws on the palette indices of one sprite image; Apply stages the result. */
+async function openPixelEditor(row, frame) {
+  let v;
+  try {
+    v = await invoke("spr_image", { index: row.index, frame });
+  } catch (e) {
+    await note("Pixels", errText(e), true);
+    return;
+  }
+  const { width: w, height: h, palette } = v;
+  const px = Uint8Array.from(atob(v.pixels), (c) => c.charCodeAt(0));
+  const original = px.slice();
+  const undo = [];
+  const st = { tool: "pencil", color: 1, zoom: Math.max(2, Math.min(24, Math.floor(480 / Math.max(w, h)))), down: false, last: null, grid: true };
+  const rgb = palette.map((p) => [parseInt(p.slice(0, 2), 16), parseInt(p.slice(2, 4), 16), parseInt(p.slice(4, 6), 16)]);
+
+  const canvas = el("canvas", { class: "pixcanvas", tabindex: "0", "aria-label": `Image ${frame}, ${w} by ${h} pixels. Arrow keys move the cursor, Space draws.` });
+  const off = document.createElement("canvas");
+  off.width = w;
+  off.height = h;
+  const readout = el("span", { class: "muted", text: `${w} x ${h} px` });
+  const cursor = { x: 0, y: 0 };
+
+  const draw = () => {
+    const z = st.zoom;
+    canvas.width = w * z;
+    canvas.height = h * z;
+    const octx = off.getContext("2d");
+    const img = octx.createImageData(w, h);
+    for (let i = 0; i < w * h; i++) {
+      const ix = px[i];
+      const [r, g, b] = rgb[ix];
+      const o = i * 4;
+      img.data.set(ix === 0 ? [0, 0, 0, 0] : [r, g, b, 255], o);
+    }
+    octx.putImageData(img, 0, 0);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    // checkerboard for the transparent colour
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      ctx.fillStyle = (x + y) % 2 ? "#3a3835" : "#2c2a28";
+      ctx.fillRect(x * z, y * z, z, z);
+    }
+    ctx.drawImage(off, 0, 0, w * z, h * z);
+    if (st.grid && z >= 6) {
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x <= w; x++) { ctx.moveTo(x * z + 0.5, 0); ctx.lineTo(x * z + 0.5, h * z); }
+      for (let y = 0; y <= h; y++) { ctx.moveTo(0, y * z + 0.5); ctx.lineTo(w * z, y * z + 0.5); }
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "#ea580c";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cursor.x * z + 1, cursor.y * z + 1, z - 2, z - 2);
+    status();
+  };
+  const status = () => {
+    const i = cursor.y * w + cursor.x;
+    readout.textContent = `${w} x ${h} px — x ${cursor.x}, y ${cursor.y}: colour ${px[i]} (#${palette[px[i]]})${px[i] === 0 ? ", transparent" : ""}`;
+  };
+  const pushUndo = () => {
+    undo.push(px.slice());
+    if (undo.length > 50) undo.shift();
+  };
+  const put = (x, y, c) => {
+    if (x >= 0 && y >= 0 && x < w && y < h) px[y * w + x] = c;
+  };
+  const line = (x0, y0, x1, y1, c) => {
+    const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let err = dx + dy;
+    for (;;) {
+      put(x0, y0, c);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+  };
+  const fill = (x, y, c) => {
+    const target = px[y * w + x];
+    if (target === c) return;
+    const stack = [[x, y]];
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      if (cx < 0 || cy < 0 || cx >= w || cy >= h || px[cy * w + cx] !== target) continue;
+      px[cy * w + cx] = c;
+      stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+    }
+  };
+  const act = (x, y, first) => {
+    cursor.x = x;
+    cursor.y = y;
+    if (st.tool === "picker") {
+      st.color = px[y * w + x];
+      swatches();
+      return;
+    }
+    if (first) pushUndo();
+    const c = st.tool === "eraser" ? 0 : st.color;
+    if (st.tool === "fill") fill(x, y, c);
+    else if (st.last && !first) line(st.last[0], st.last[1], x, y, c);
+    else put(x, y, c);
+    st.last = [x, y];
+  };
+  const at = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return [Math.max(0, Math.min(w - 1, Math.floor(((e.clientX - r.left) / r.width) * w))), Math.max(0, Math.min(h - 1, Math.floor(((e.clientY - r.top) / r.height) * h)))];
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    canvas.focus();
+    canvas.setPointerCapture(e.pointerId);
+    st.down = true;
+    st.last = null;
+    act(...at(e), true);
+    draw();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    const [x, y] = at(e);
+    if (st.down && st.tool !== "fill" && st.tool !== "picker") act(x, y, false);
+    else {
+      cursor.x = x;
+      cursor.y = y;
+    }
+    draw();
+  });
+  const up = () => (st.down = false);
+  canvas.addEventListener("pointerup", up);
+  canvas.addEventListener("pointercancel", up);
+  canvas.addEventListener("keydown", (e) => {
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (d) {
+      e.preventDefault();
+      cursor.x = Math.max(0, Math.min(w - 1, cursor.x + d[0]));
+      cursor.y = Math.max(0, Math.min(h - 1, cursor.y + d[1]));
+      if (e.shiftKey) act(cursor.x, cursor.y, !st.last);
+      draw();
+    } else if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      st.last = null;
+      act(cursor.x, cursor.y, true);
+      draw();
+    }
+  });
+  canvas.addEventListener("keyup", (e) => e.key === "Shift" && (st.last = null));
+
+  const toolBtns = {};
+  const tool = (name, icon, label, key) => {
+    const b = el("button", { type: "button", class: "small", icon, text: label, "aria-pressed": String(st.tool === name), title: `${label} (${key})`, onclick: () => setTool(name) });
+    toolBtns[name] = b;
+    return b;
+  };
+  const setTool = (name) => {
+    st.tool = name;
+    for (const [n, b] of Object.entries(toolBtns)) {
+      b.classList.toggle("on", n === name);
+      b.setAttribute("aria-pressed", String(n === name));
+    }
+  };
+  const bar = el("div", { class: "controls wrap" }, tool("pencil", "pencil", "Pencil", "P"), tool("eraser", "eraser", "Eraser", "E"), tool("fill", "fill", "Fill", "F"), tool("picker", "picker", "Picker", "I"));
+  const zoom = el("input", { type: "range", min: "1", max: "32", value: String(st.zoom), "aria-label": "Zoom" });
+  zoom.addEventListener("input", () => {
+    st.zoom = Number(zoom.value);
+    draw();
+  });
+  const grid = el("input", { type: "checkbox", checked: true, onchange: () => {
+    st.grid = grid.checked;
+    draw();
+  } });
+  const undoBtn = el("button", { type: "button", class: "small", icon: "undo", text: "Undo", onclick: () => {
+    if (undo.length) px.set(undo.pop());
+    draw();
+  } });
+  const resetBtn = el("button", { type: "button", class: "small", icon: "reset", text: "Revert", onclick: () => {
+    pushUndo();
+    px.set(original);
+    draw();
+  } });
+  bar.append(el("label", { class: "muted", text: "Zoom " }, zoom), el("label", { class: "muted" }, grid, " Grid"), undoBtn, resetBtn);
+
+  const sw = el("div", { class: "swatches", role: "listbox", "aria-label": "Palette" });
+  const swatches = () => {
+    sw.replaceChildren(
+      ...palette.map((p, i) => el("button", { type: "button", class: `swatch${i === st.color ? " cur" : ""}${i === 0 ? " zero" : ""}`, style: i === 0 ? "" : `background:#${p}`, title: `${i}: #${p}${i === 0 ? " (transparent)" : ""}`, role: "option", "aria-selected": String(i === st.color), "aria-label": `Colour ${i}`, onclick: () => {
+        st.color = i;
+        if (st.tool === "picker") setTool("pencil");
+        swatches();
+      } })),
+    );
+  };
+  swatches();
+  setTool("pencil");
+
+  $("pix-title").textContent = `Pixels of image ${frame} — ${row.name}`;
+  $("pix-body").replaceChildren(el("div", { class: "pixed" }, el("div", {}, bar, el("div", { class: "pixstage" }, canvas), readout), el("div", {}, el("h3", { class: "muted", text: "Palette (click a colour; 0 is transparent)" }), sw)));
+  const dlg = $("pix-dlg");
+  const actions = $("pix-actions");
+  const finish = (go) =>
+    new Promise((resolve) => {
+      actions.replaceChildren(
+        el("button", { type: "button", text: "Cancel", onclick: () => { dlg.close(); resolve(false); } }),
+        el("button", { type: "button", class: "primary", icon: "changes", text: "Apply", onclick: () => { dlg.close(); resolve(true); } }),
+      );
+      dlg.addEventListener("cancel", () => resolve(false), { once: true });
+      dlg.showModal();
+      draw();
+      canvas.focus();
+    });
+  const keyTools = (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    const m = { p: "pencil", e: "eraser", f: "fill", i: "picker" }[e.key.toLowerCase()];
+    if (m && !e.metaKey && !e.ctrlKey) setTool(m);
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      e.stopPropagation();
+      undoBtn.click();
+    }
+  };
+  dlg.addEventListener("keydown", keyTools);
+  const go = await finish();
+  dlg.removeEventListener("keydown", keyTools);
+  if (!go) return;
+  if (px.every((v, i) => v === original[i])) return setStatus("No pixel changed.");
+  let bin = "";
+  for (let i = 0; i < px.length; i += 8192) bin += String.fromCharCode(...px.subarray(i, i + 8192));
+  try {
+    setPending(await invoke("stage_spr_pixels", { index: row.index, frame, pixels: btoa(bin) }));
+    setStatus(`Image ${frame} of ${row.name} edited (staged); save with Changes….`);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not stage the pixels", errText(e), true);
   }
 }
 

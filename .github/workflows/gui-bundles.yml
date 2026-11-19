@@ -1,0 +1,58 @@
+# Baut die Installer der App (Tauri 2): Windows .msi/.exe, Linux .deb/AppImage, macOS .app/.dmg.
+# Läuft erst, wenn das Repo auf GitHub liegt (noch kein Push): von Hand (Actions → Run workflow)
+# oder bei einem Tag `v*`. Lokal gebaut und geprüft sind nur das macOS-.app und das Linux-.deb
+# (Docker), siehe docs/11-release.md. Die Pakete sind unsigniert.
+name: GUI-Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x64, os: ubuntu-latest, args: "--bundles deb,appimage" }
+          - { name: Linux ARM64, os: ubuntu-24.04-arm, args: "--bundles deb,appimage" }
+          - { name: macOS ARM64, os: macos-latest, args: "--bundles app,dmg" }
+          - { name: Windows x64, os: windows-latest, args: "--bundles msi,nsis" }
+          - { name: Windows ARM64, os: windows-11-arm, args: "--bundles nsis" }
+    defaults:
+      run:
+        working-directory: apps/gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/gui
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: "Linux: Systembibliotheken"
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils
+      - run: npm ci
+      - run: npx tauri build ${{ matrix.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustygrf-${{ matrix.name }}
+          path: |
+            apps/gui/target/release/bundle/**/*.msi
+            apps/gui/target/release/bundle/**/*.exe
+            apps/gui/target/release/bundle/**/*.deb
+            apps/gui/target/release/bundle/**/*.AppImage
+            apps/gui/target/release/bundle/**/*.dmg
+            apps/gui/target/release/bundle/macos/*.app
+          if-no-files-found: error

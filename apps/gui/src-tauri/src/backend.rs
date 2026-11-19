@@ -8,6 +8,7 @@ use std::sync::{Arc, OnceLock};
 use crate::act_editor::{self, ActEdit, ActFrameView};
 use crate::gat_editor::{self, GatEdit};
 use crate::pal_editor::{self, PalEdit};
+use crate::spr_editor;
 use crate::view::{self, Line, Meta, Tree, ViewSpec};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -998,6 +999,38 @@ impl Session {
     pub fn pal_colors(&self, index: usize) -> Result<Vec<String>, String> {
         let (_, data, _) = self.working_bytes(index)?;
         pal_editor::colors(&data)
+    }
+
+    pub fn spr_image(
+        &self,
+        index: usize,
+        frame: usize,
+    ) -> Result<spr_editor::SprImageView, String> {
+        let (_, data, _) = self.working_bytes(index)?;
+        spr_editor::image(&data, frame)
+    }
+
+    /// Writes edited pixels (palette indices, base64) back into a palette image.
+    pub fn stage_spr_pixels(
+        &mut self,
+        index: usize,
+        frame: usize,
+        pixels: &str,
+    ) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, data, mut what) = s.working_bytes(index)?;
+            let out = spr_editor::apply(&data, frame, pixels)?;
+            let note = format!("image {frame} edited pixel by pixel");
+            if !what.contains(&note) {
+                what.push(note);
+            }
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(out),
+                what,
+            });
+            Ok(())
+        })
     }
 
     /// Sets cells of a map; returns how many cells changed.
@@ -2661,6 +2694,27 @@ mod tests {
                 .any(|l| l.contains("type 1") && l.contains("4 cells")),
             "{info:?}"
         );
+        // saved as a new archive and opened again, the map has the new cells
+        let out = dir.join("edited.grf");
+        let r = save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        assert!(r.verified);
+        let mut again = Session::open(&out).unwrap();
+        let j = find(&again, "map.gat");
+        let Preview::Map { info, .. } = again.preview(j, None).unwrap() else {
+            panic!()
+        };
+        assert!(
+            info.iter()
+                .any(|l| l.contains("type 1") && l.contains("4 cells")),
+            "{info:?}"
+        );
+        // and the original archive is untouched
+        let orig = Session::open(&grf).unwrap();
+        let Preview::Map { info, .. } = orig.preview(find(&orig, "map.gat"), None).unwrap() else {
+            panic!()
+        };
+        assert!(info.iter().any(|l| l.contains("type 5")), "{info:?}");
+        let _ = &mut again;
         // wrong input stages nothing
         let bad = GatEdit {
             kind: Some(9),
