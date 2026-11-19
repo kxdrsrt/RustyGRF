@@ -151,6 +151,30 @@ Ergebnis der Vorabstimmung 2026-11-18: Bundle-ID `dev.rustygrf.app` bestätigt, 
 - **Verpackung:** macOS `.app`/`.dmg`, Windows `.msi` oder `.exe`-Installer, Linux AppImage/`.deb`. Signierung und Notarisierung (Apple Developer Account, Windows-Zertifikat) brauchen Konten und Geld; ohne sie warnen die Systeme beim ersten Start.
 - **Abnahme:** App startet auf macOS und Windows, öffnet `data.grf` in unter 2 s, Bauen/Merge liefern dieselben Ergebnisse wie die CLI (gleiche Hashes), App-Icon und Name erscheinen in Dock/Taskleiste/Installer.
 
+## Kleinster Client (2026-11-19)
+Ziel: alle GRFs eines Clients so klein wie möglich, **ohne spürbaren Qualitätsverlust**. Testclient `client-dev/test-smallest/` (Kopie von `test-lzma`, damit LZMA-`cps.dll`; `test-lzma` und `full` bleiben unverändert). Erzeugt mit der CLI:
+- `cdata`, `core`: `rgrf image reduce … --method lzma --recompress` (BMPs ab 40 dB als 8 Bit, alles andere neu mit LZMA);
+- `cpal` (keine BMPs): `rgrf repack --method lzma`;
+- `data` (schon LZMA): `rgrf image reduce … --method lzma --dedupe content` (unveränderte Streams werden kopiert, nur die neuen BMPs kodiert).
+
+| GRF | vorher (`test-lzma`) | nachher | Änderung |
+|---|---|---|---|
+| `cdata.grf` | 17,0 MB | 12,0 MB | −29 % |
+| `core.grf` | 88,0 MB | 65,9 MB | −25 % |
+| `cpal.grf` | 42,5 MB | 33,5 MB | −21 % |
+| `data.grf` | 2.757,9 MB | 2.554,1 MB | −7,4 % (25.151 BMPs, schlechtester Wert 40,0 dB) |
+| **zusammen** | **2.905,4 MB** | **2.665,6 MB** | **−8,3 %** |
+
+`verify` ohne Fehler; `diff` zeigt in `data` genau die 25.151 BMPs, in `cdata`/`core` nur neu kodierte Streams (Inhalt gleich) und BMPs, in `cpal` keinen Unterschied. Eine leere Marker-Datei (`…로나는12프레임스킬테스트용.txt`, 0 Byte) fällt beim Neuschreiben weg (bekannt, Marker werden nicht übernommen). `rgrf image reduce --report liste.csv` schreibt alle verkleinerten Bilder nach PSNR sortiert, um die schlechtesten anzusehen. **Nicht geprüft:** Spiel mit dem Client (Login nötig, macht der Nutzer in der Windows-VM); ob 40 dB überall unauffällig ist (Schwelle zum Anpassen mit `--min-psnr`, die Liste zeigt die Kandidaten).
+
+**Nächste Stufe (Zukunft, nicht begonnen): so klein wie möglich *und* bessere Qualität** aller Texturen, Modelle, BMPs usw. Ideen, noch unbewertet:
+- besserer Quantisierer (Dithering nur wo es hilft, Fehlermaß SSIM statt nur PSNR, je Bild die kleinste Palette über der Schwelle);
+- Texturen hochskalieren oder entrauschen (KI-gestützt), danach wieder klein speichern; Ergebnis nur mit Vorher/Nachher-Vergleich übernehmen;
+- Paletten-PNG, falls der Client sie lädt (zuerst messen), und verlustfreies Nachpacken von PNG/TGA;
+- Modelle (RSM/GND): doppelte Texturen zusammenführen, Texturgrößen angleichen;
+- Inhalts-Deduplizierung über alle GRFs eines Clients (heute je Archiv);
+- jede Änderung nur mit Test im Spiel, Messwerte in dieser Tabelle.
+
 ## Risiken
 | Risiko | Gegenmaßnahme |
 |---|---|

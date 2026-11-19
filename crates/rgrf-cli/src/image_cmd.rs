@@ -190,6 +190,7 @@ fn fmt_psnr(p: f64) -> String {
 pub struct ReduceArgs<'a> {
     pub only: &'a str,
     pub min_psnr: f64,
+    pub report: Option<&'a Path>,
 }
 
 /// Writes `output` as `grf` with every matching true-colour BMP stored as 8-bit where that keeps
@@ -223,10 +224,15 @@ pub fn reduce(
         .collect();
     let mut kept: BTreeMap<&str, usize> = BTreeMap::new();
     let mut edits = Vec::new();
+    // path, PSNR, stored size before and after (for --report)
+    let mut rows: Vec<(GrfPath, f64, u64, u64)> = Vec::new();
     let (mut before, mut after, mut worst, mut lossless) = (0u64, 0u64, f64::INFINITY, 0usize);
     for r in results {
         match r {
             Ok((name, st)) => {
+                if args.report.is_some() {
+                    rows.push((name.clone(), st.psnr, st.stored_before, st.stored_after));
+                }
                 before += st.stored_before;
                 after += st.stored_after;
                 worst = worst.min(st.psnr);
@@ -238,6 +244,20 @@ pub fn reduce(
             }
             Err(why) => *kept.entry(why).or_default() += 1,
         }
+    }
+    if let Some(path) = args.report {
+        rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut csv = String::from("path,psnr_db,stored_before,stored_after\n");
+        for (name, psnr, before, after) in &rows {
+            let psnr = if psnr.is_finite() {
+                format!("{psnr:.2}")
+            } else {
+                "lossless".into()
+            };
+            let shown = name.display(names).replace('"', "\"\"");
+            csv.push_str(&format!("\"{shown}\",{psnr},{before},{after}\n"));
+        }
+        fs::write(path, csv).with_context(|| format!("cannot write {}", path.display()))?;
     }
     let reduced = edits.len();
     let write = !opts.dry_run && reduced > 0;

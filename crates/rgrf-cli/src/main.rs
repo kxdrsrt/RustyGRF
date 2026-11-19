@@ -827,6 +827,15 @@ enum ImageCmd {
         /// banding on smooth gradients; images with at most 256 colours are always lossless
         #[arg(long, default_value_t = 40.0)]
         min_psnr: f64,
+        /// Also compress every unchanged entry again with --method (needs --method): useful when
+        /// the archive is zlib and the result should be LZMA. Without it unchanged entries are
+        /// copied as they are and only the reduced BMPs use --method
+        #[arg(long, requires = "method")]
+        recompress: bool,
+        /// Write a CSV list of every reduced picture (path, PSNR in dB or "lossless", stored
+        /// bytes before and after) to this file, to look at the worst ones
+        #[arg(long)]
+        report: Option<PathBuf>,
         #[command(flatten)]
         write: WriteArgs,
     },
@@ -1689,6 +1698,8 @@ fn run(cli: &Cli) -> Result<i32> {
                 output,
                 only,
                 min_psnr,
+                recompress,
+                report,
                 write,
             } => {
                 let meter = Meter::new(cli);
@@ -1703,8 +1714,14 @@ fn run(cli: &Cli) -> Result<i32> {
                     &image_cmd::ReduceArgs {
                         only,
                         min_psnr: *min_psnr,
+                        report: report.as_deref(),
                     },
-                    &write.options(encrypt_key(cli)?)?,
+                    &{
+                        let mut o = write.options(encrypt_key(cli)?)?;
+                        // new pictures use the chosen method, everything else is copied
+                        o.copy_streams = !*recompress;
+                        o
+                    },
                     cli.names,
                     cli.json,
                     &ctl,
