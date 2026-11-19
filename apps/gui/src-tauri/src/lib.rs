@@ -576,6 +576,40 @@ fn startup_select() -> Option<String> {
     None
 }
 
+const SETTINGS_MENU_ID: &str = "settings";
+
+/// The system's default menu plus a "Settings..." entry (Cmd/Ctrl+,): in the application menu on
+/// macOS, where users look for it, and in the Edit menu elsewhere.
+fn add_settings_menu(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let menu = Menu::default(app)?;
+    let item = MenuItem::with_id(
+        app,
+        SETTINGS_MENU_ID,
+        "Settings...",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
+    let sep = PredefinedMenuItem::separator(app)?;
+    let target = if cfg!(target_os = "macos") { 0 } else { 1 };
+    if let Some(sub) = menu
+        .items()?
+        .get(target)
+        .and_then(|i| i.as_submenu().cloned())
+    {
+        // after "About" on macOS, at the end of Edit elsewhere
+        let at = if cfg!(target_os = "macos") {
+            1
+        } else {
+            sub.items()?.len()
+        };
+        sub.insert(&sep, at)?;
+        sub.insert(&item, at + 1)?;
+    }
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -591,6 +625,15 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .setup(|app| {
+            add_settings_menu(app.handle())?;
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == SETTINGS_MENU_ID {
+                let _ = app.emit("open-settings", ());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             open_archive,
             search,

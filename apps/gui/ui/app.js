@@ -2015,6 +2015,7 @@ window.addEventListener("keydown", (e) => {
 if (T.event?.listen) {
   T.event.listen("open-file", (e) => e.payload && openPath(e.payload));
   T.event.listen("job-progress", (e) => S.onJob?.(e.payload));
+  T.event.listen("open-settings", () => openSettings());
   T.event.listen("tauri://drag-drop", (e) => {
     const p = e.payload?.paths?.[0];
     if (p) openPath(p);
