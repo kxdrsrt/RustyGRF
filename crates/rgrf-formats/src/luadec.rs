@@ -1038,11 +1038,15 @@ impl Ctx<'_> {
                         .filter(|&t| t > at && t < end)
                         .ok_or_else(|| Unsupported("a loop that leaves its block".into()))?;
                     let tail = Instr::decode(f.code[fl]);
+                    // Lua 5.0 counts in R(A) itself, 5.1 in a copy in R(A + 3)
+                    let counter = if f.orig_code.is_some() { a } else { a + 3 };
                     if tail.name() != "FORLOOP" || tail.a != i.a || a + 3 >= reg.len() {
                         return Err(Unsupported("a loop of an unknown shape".into()));
                     }
                     let (init, limit, step) = (get(reg, a)?, get(reg, a + 1)?, get(reg, a + 2)?);
-                    let var = reg_name(self, f, pc, a + 3).unwrap_or_else(|| "i".into());
+                    // in 5.0 the loop's locals start after the (ignored) jump of the loop head
+                    let named_at = if f.orig_code.is_some() { pc + 1 } else { pc };
+                    let var = reg_name(self, f, named_at, counter).unwrap_or_else(|| "i".into());
                     let mut head = format!(
                         "for {var} = {}, {}",
                         self.expr(f, &init, indent),
@@ -1055,7 +1059,7 @@ impl Ctx<'_> {
                         reg: reg.clone(),
                         top: *top,
                     };
-                    inner.reg[a + 3] = Some(Expr::Param(var));
+                    inner.reg[counter] = Some(Expr::Param(var));
                     let body = self.block(
                         f,
                         &mut inner,
@@ -1069,6 +1073,7 @@ impl Ctx<'_> {
                     )?;
                     out.push_str(&format!("{pad}{head} do\n{body}{pad}end\n"));
                     forget_changed(reg, &[&inner], a..a + 4);
+                    reg[counter] = None;
                     pc = fl + 1;
                 }
                 "EQ" | "LT" | "LE" | "TEST" => 'cmp: {
@@ -1723,6 +1728,37 @@ mod tests {
         let same =
             first.main.code == second.main.code && first.main.constants == second.main.constants;
         (text, same)
+    }
+
+    /// The same for Lua 5.0 code.
+    fn round_trip50(src: &str) -> (String, bool) {
+        let first = crate::luacomp50::compile(src.as_bytes(), b"=t").unwrap();
+        let text = decompile(&crate::luac50::to_lua51(&first), &|b| {
+            String::from_utf8_lossy(b).into_owned()
+        });
+        let second = crate::luacomp50::compile(text.as_bytes(), b"=t").unwrap();
+        let same =
+            first.main.code == second.main.code && first.main.constants == second.main.constants;
+        (text, same)
+    }
+
+    #[test]
+    fn lua_50_numeric_for_loops_and_open_constructors() {
+        for src in [
+            "for i = 1, 3 do Put(i) end",
+            "for i = 10, 1, -2 do Put(i) if i == 4 then break end end",
+            "for i = 1, 3 do for j = 1, 2 do Put(i, j) end end Done()",
+            "local n = Get() for i = 1, n do Put(i) end",
+            "t = { 1, 2, f() }",
+            "t = { a = 1, f() }",
+            "function g(a) return { a, f() } end",
+        ] {
+            let (text, same) = round_trip50(src);
+            assert!(!text.contains("not decompiled"), "{src}\n{text}");
+            assert!(same, "{src}\n{text}");
+        }
+        let (text, _) = round_trip50("for i = 1, 3 do Put(i) end");
+        assert!(text.contains("for i = 1, 3 do"), "{text}");
     }
 
     #[test]

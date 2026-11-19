@@ -456,9 +456,40 @@ fn convert(raw: u32) -> u32 {
             let n = (i.bx() & 31) + 1;
             enc51(op51("SETLIST"), a, n, (i.bx() >> 5) + 1)
         }
-        "SETLISTO" | "FORLOOP" => enc51(63, a, b, c),
+        // open-ended constructor `{ 1, 2, f() }`: 5.1 says it with B = 0
+        "SETLISTO" => enc51(op51("SETLIST"), a, 0, (i.bx() >> 5) + 1),
+        // belongs to a numeric `for`; `numeric_for` rewrites the whole loop head
+        "FORLOOP" => enc51(63, a, b, c),
         _ => enc51(op51(name), a, b, c),
     }
+}
+
+/// Translates the code of a function. A 5.0 numeric `for` is `SUB R(A) R(A) R(A+2)`, `JMP` to the
+/// `FORLOOP`, the body, `FORLOOP A` back to the body; 5.1 has `FORPREP` for the first two. The
+/// instruction count must stay the same, so the `SUB` becomes `FORPREP` (jumping to the
+/// `FORLOOP`), the `JMP` becomes a `CLOSE` the decompiler ignores, and the `FORLOOP` jumps back to
+/// the instruction after the `FORPREP`, as in 5.1.
+fn numeric_for(code: &[u32]) -> Vec<u32> {
+    let mut out: Vec<u32> = code.iter().map(|&r| convert(r)).collect();
+    for p in 0..code.len().saturating_sub(1) {
+        let (sub, jmp) = (Instr::decode(code[p]), Instr::decode(code[p + 1]));
+        if sub.name() != "SUB" || jmp.name() != "JMP" || sub.b != sub.a || sub.c != sub.a + 2 {
+            continue;
+        }
+        let Ok(f) = usize::try_from(p as i64 + 2 + jmp.sbx()) else {
+            continue;
+        };
+        let Some(&raw) = code.get(f) else { continue };
+        let tail = Instr::decode(raw);
+        if tail.name() != "FORLOOP" || tail.a != sub.a || f <= p + 1 {
+            continue;
+        }
+        let sbx51 = |from: usize, to: usize| ((to as i64 - from as i64 - 1) + 131071) as u32;
+        out[p] = op51("FORPREP") | (sub.a << 6) | (sbx51(p, f) << 14);
+        out[p + 1] = enc51(op51("CLOSE"), sub.a, 0, 0);
+        out[f] = op51("FORLOOP") | (sub.a << 6) | (sbx51(f, p + 1) << 14);
+    }
+    out
 }
 
 /// The chunk in the 5.1 representation the decompiler works on (`orig_code` keeps the 5.0 code).
@@ -472,7 +503,7 @@ pub fn to_lua51(chunk: &Chunk) -> crate::luac::Chunk {
             params: f.params,
             is_vararg: f.is_vararg,
             max_stack: f.max_stack,
-            code: f.code.iter().map(|&r| convert(r)).collect(),
+            code: numeric_for(&f.code),
             constants: f.constants.clone(),
             protos: f.protos.iter().map(go).collect(),
             lines: f.lines.clone(),

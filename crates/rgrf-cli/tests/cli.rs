@@ -2069,5 +2069,22 @@ fn grf_editor_encryption_end_to_end() {
     let dll_name = v["dll_name"].as_str().unwrap();
     assert!(dll_name.ends_with(".dll") && dir.join("patched").join(dll_name).exists());
     assert!(dir.join("patched/client.exe").exists());
+    // without --cps-dll the built-in GRF Editor template is used
+    let o = run(&[
+        "--json",
+        "client",
+        "encrypt",
+        &p("client.exe"),
+        "-o",
+        &p("patched2"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let name = json(&o)["dll_name"].as_str().unwrap().to_owned();
+    assert_eq!(
+        std::fs::metadata(dir.join("patched2").join(name))
+            .unwrap()
+            .len(),
+        176128
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

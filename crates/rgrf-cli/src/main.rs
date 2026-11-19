@@ -385,9 +385,9 @@ enum ClientCmd {
     Encrypt {
         /// The client executable (it is not changed; the patched copy goes to the output folder)
         exe: PathBuf,
-        /// GRF Editor's template cps.dll (its source tree has it as GRFEditor/Files/cps.dll)
+        /// A different template cps.dll (by default GRF Editor's, which is built in)
         #[arg(long)]
-        cps_dll: PathBuf,
+        cps_dll: Option<PathBuf>,
         /// Output folder for the patched executable and the DLL
         #[arg(short, long)]
         output: PathBuf,
@@ -1063,7 +1063,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 overwrite,
             } => client_cmd::encrypt(
                 exe,
-                cps_dll,
+                cps_dll.as_deref(),
                 output,
                 !*no_rename,
                 *skip_resource_check,

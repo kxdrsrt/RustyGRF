@@ -474,7 +474,7 @@ pub fn check(dir: &Path, names: NameMode, json: bool, check_lua: bool) -> Result
 /// `rgrf client encrypt`: the client side of GRF Editor's encryption (see `rgrf_core::clientcrypt`).
 pub fn encrypt(
     exe: &Path,
-    cps_dll: &Path,
+    cps_dll: Option<&Path>,
     output: &Path,
     rename: bool,
     skip_resource_check: bool,
@@ -485,8 +485,10 @@ pub fn encrypt(
     let key = crate::crypt_cmd::key()
         .ok_or_else(|| anyhow::anyhow!("give the key with --password or --key-file"))?;
     let client = fs::read(exe).with_context(|| format!("cannot read {}", exe.display()))?;
-    let template =
-        fs::read(cps_dll).with_context(|| format!("cannot read {}", cps_dll.display()))?;
+    let template = match cps_dll {
+        Some(p) => fs::read(p).with_context(|| format!("cannot read {}", p.display()))?,
+        None => rgrf_core::clientcrypt::CPS_TEMPLATE.to_vec(),
+    };
     let exe_name = exe
         .file_name()
         .context("the client path has no file name")?

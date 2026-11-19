@@ -125,7 +125,7 @@ Die Golden-Hashes (Pfad, Größe, CRC32, MD5 aller Einträge) sind also auf alle
 - **Umgesetzt (2026-11-19):** 0x102/0x103 schreiben (`--format 0x102|0x103`, von GrfCL gegengelesen).
 - **Gemessen mit Dateien Dritter (2026-11-19):** Thor, GPF, GRF 0x102/0x103 aus öffentlichen Repositories öffnen und prüfen fehlerfrei (Details in [02-format-notes.md](02-format-notes.md)); RGZ echter Patcher fehlt noch. Dabei korrigiert: `data.integrity` enthält die CRC32 des Inhalts (nicht des Stroms), `rgrf verify` prüft sie.
 - **GRF Editors Verschlüsselung ✅ (2026-11-19):** Bibliothek (`grfcrypt.rs`, `clientcrypt.rs`), CLI, GUI, MCP; Gegenproben mit GrfCL, `Encryption.dll` und einem verschlüsselten Client, Details in [02-format-notes.md](02-format-notes.md). Die frühere Aussage „braucht einen Schlüssel von dir“ war falsch: der Schlüssel ist ein Passwort, das du wählst.
-- **Offen:** Gravitys Schutz (Flag 0x80, Schlüsselblock von 0x300): ohne die Schlüssel von Gravity nicht lesbar; die `cps.dll`-Vorlage von GRF Editor liegt nicht bei (Weitergabe ist Sache von Tokeiburu).
+- **Offen:** Gravitys Schutz (Flag 0x80, Schlüsselblock von 0x300): ohne die Schlüssel von Gravity nicht lesbar; die `cps.dll`-Vorlage von GRF Editor ist eingebaut (Erlaubnis bestätigt).
 
 ## M7 – Formate und All-in-one (Entscheidung D16, 2026-11-18)
 **Ziel (von dir bestätigt):** ein Werkzeug statt GRF Editor + ACT Editor + Palette Editor + Einzelskripte. Reihenfolge nach Abhängigkeit; je Teil zuerst Bibliothek (`rgrf-core`/Format-Crates), dann CLI und MCP, die GUI (M8) setzt darauf auf.

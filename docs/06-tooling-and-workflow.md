@@ -84,3 +84,6 @@ Weitere Werkzeuge:
 3. Nach jedem Meilenstein: `cargo fmt`, `cargo clippy -D warnings`, `cargo nextest`, `cargo deny check`, danach Review (Code-Review, bei Sicherheit/Concurrency zusätzlich Zweitmeinung).
 4. Nichts committen, was Spieldaten enthält. Keine Archive ins Repo.
 5. Doku und Plan aktuell halten, offene Fragen in `03-roadmap.md` führen.
+
+## Verschlüsselter Test-Client (2026-11-19)
+`client-dev/full-encrypted` ist eine Kopie von `client-dev/full` ohne `datacomp.grf`, Screenshots und Replays: die vier GRFs (`cdata`, `core`, `cpal`, `data`) mit GRF Editors Verschlüsselung (Passwort in `PASSWORD.txt`), `alpha.exe` gepatcht, dazu die DLL mit dem Schlüssel (Name aus dem Schlüssel, derzeit `cwn.dll`). Erzeugt mit `rgrf --password … --encrypt repack <grf> -o …` und `rgrf --password … client encrypt alpha.exe -o …`. Starten in der VM wie jeder Client **von einer lokalen Kopie auf C:** (`C:\RO-local\full-encrypted`, aus der Freigabe geht Ctrl+S nicht). Gemessen: erreicht die Dienstauswahl mit allen Texturen. Hinweis: `repack` packt LZMA-Einträge in zlib um, `core.grf` wird dadurch größer (88 auf 97 MB).

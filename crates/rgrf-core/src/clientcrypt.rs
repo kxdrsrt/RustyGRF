@@ -4,7 +4,8 @@
 //! Follows GRF Editor's encryptor (Tokeiburu, used with permission, see docs/05-licensing.md; the
 //! dialog is in `GRFEditor/WPF/EncryptorDialog.xaml.cs`, the block layout was read from the IL of
 //! its `Encryption.dll`). It needs the template `cps.dll` that GRF Editor carries as a resource
-//! (`GRFEditor/Files/cps.dll`); RustyGRF does not ship it.
+//! (`GRFEditor/Files/cps.dll`), which is built in ([`CPS_TEMPLATE`], with Tokeiburu's permission,
+//! see docs/05-licensing.md); another one can be given.
 //!
 //! What it does: the template holds the placeholder `TKTK` followed by room for 524 bytes, which
 //! become `[i32 length of the client][i32 seed][256 key bytes scrambled with the seed][260 bytes:
@@ -14,6 +15,9 @@
 
 use crate::error::{Error, Result};
 use crate::grfcrypt::{self, KEY_LEN, Key};
+
+/// GRF Editor's `cps.dll` (MD5 d35eb41c552d8c2572b6938f7cd222b3), the template for [`patch_client`].
+pub const CPS_TEMPLATE: &[u8] = include_bytes!("../assets/cps-template.dll");
 
 /// The placeholder in the template DLL.
 const PLACEHOLDER: &[u8] = b"TKTK";
