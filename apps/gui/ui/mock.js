@@ -121,6 +121,11 @@ if (!window.__TAURI__) {
           case "stage_act_edit":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action} frame ${a.frame}: ${a.edit.op}` });
             return pendingRows;
+          case "text_for_edit":
+            return { text: "-- demo\nx = 1\n", format: "Lua 5.1 bytecode", complete: true };
+          case "stage_text_edit":
+            pendingRows.push({ kind: "replace", name: all[a.index].name, file: "Lua recompiled from edited text" });
+            return pendingRows;
           case "stage_act_interval":
             pendingRows.push({ kind: "replace", name: all[a.index].name, file: `action ${a.action}: ${a.ms} ms per frame` });
             return pendingRows;

@@ -203,6 +203,16 @@ impl Change {
     }
 }
 
+/// A text or Lua entry as text for the editor.
+#[derive(Serialize, Debug)]
+pub struct TextForEdit {
+    pub text: String,
+    /// "Lua 5.1 bytecode", "text (UTF-8)", ...
+    pub format: String,
+    /// False when the decompiler left functions as a listing (they cannot be compiled again).
+    pub complete: bool,
+}
+
 #[derive(Serialize, Debug)]
 pub struct PendingRow {
     /// `replace`, `add` or `remove`
@@ -466,8 +476,12 @@ pub fn build_archive(req: &BuildRequest, ctl: &Control) -> Result<BuildSummary, 
         "lzma" => Method::Lzma { preset: 9 },
         other => return Err(format!("unknown method '{other}'")),
     };
-    let format = Format::parse(&req.format)
-        .ok_or_else(|| format!("unknown format '{}' (0x102, 0x103, 0x200 or 0x300)", req.format))?;
+    let format = Format::parse(&req.format).ok_or_else(|| {
+        format!(
+            "unknown format '{}' (0x102, 0x103, 0x200 or 0x300)",
+            req.format
+        )
+    })?;
     let opts = BuildOptions {
         method,
         format,
@@ -786,6 +800,27 @@ fn png_frame(img: &RgbaImage, label: String) -> Option<Frame> {
 
 /// Text of a file whose encoding is unknown: UTF-8 if it is, else Korean (CP949) if that decodes
 /// without errors, else Windows-1252.
+fn lua_version(chunk: &rgrf_formats::luac::Chunk) -> &'static str {
+    if chunk.main.orig_code.is_some() {
+        "5.0"
+    } else {
+        "5.1"
+    }
+}
+
+/// Encodes text in a single-byte or Korean legacy encoding; characters it cannot hold are an error
+/// (a replacement would silently change the file).
+fn encode_legacy(enc: &'static encoding_rs::Encoding, text: &str) -> Result<Vec<u8>, String> {
+    let (bytes, _, bad) = enc.encode(text);
+    if bad {
+        return Err(format!(
+            "the text has characters that {} cannot hold",
+            enc.name()
+        ));
+    }
+    Ok(bytes.into_owned())
+}
+
 fn decode_text(bytes: &[u8]) -> (String, &'static str) {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return (s.to_owned(), "UTF-8");
@@ -877,6 +912,33 @@ impl Session {
         ms: f32,
     ) -> Result<(), String> {
         self.transact(|s| s.stage_act_interval_impl(index, action, ms))
+    }
+
+    pub fn stage_text_edit(&mut self, index: usize, text: &str) -> Result<(), String> {
+        self.transact(|s| s.stage_text_edit_impl(index, text))
+    }
+
+    /// The whole content of a text or Lua entry as editable text (compiled Lua is decompiled).
+    pub fn text_for_edit(&self, index: usize) -> Result<TextForEdit, String> {
+        let (_, data, _) = self.working_bytes(index)?;
+        if data.starts_with(b"\x1bLua") {
+            let chunk = rgrf_formats::luac::parse_any(&data)
+                .map_err(|e| format!("this compiled Lua cannot be read: {e}"))?;
+            let names = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+            let text = rgrf_formats::luadec::decompile(&chunk, &names);
+            let complete = rgrf_formats::luadec::is_complete(&text);
+            return Ok(TextForEdit {
+                text,
+                format: format!("Lua {} bytecode", lua_version(&chunk)),
+                complete,
+            });
+        }
+        let (text, encoding) = decode_text(&data);
+        Ok(TextForEdit {
+            text,
+            format: format!("text ({encoding})"),
+            complete: true,
+        })
     }
 
     pub fn stage_remove(&mut self, indices: &[usize]) -> Result<usize, String> {
@@ -1142,6 +1204,57 @@ impl Session {
         let (name, data, mut what) = self.working_bytes(index)?;
         let out = set_act_interval(&data, action, ms)?;
         what.push(format!("action {action}: {ms} ms per frame"));
+        self.stage(Change::PutBytes {
+            name,
+            data: Arc::new(out),
+            what,
+        });
+        Ok(())
+    }
+
+    /// Replaces a text or Lua entry by edited text. Compiled Lua is compiled again (same Lua version,
+    /// same debug information as before); plain text keeps its encoding and line endings.
+    fn stage_text_edit_impl(&mut self, index: usize, text: &str) -> Result<(), String> {
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let out = if data.starts_with(b"\x1bLua") {
+            let old = rgrf_formats::luac::parse_any(&data)
+                .map_err(|e| format!("this compiled Lua cannot be read: {e}"))?;
+            if lua_version(&old) == "5.0" {
+                return Err("compiling Lua 5.0 is not available in the editor yet".into());
+            }
+            let stripped = old.main.source.is_empty() && old.main.lines.is_empty();
+            let cp949 = |run: &str| {
+                GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec())
+            };
+            let mut chunk = rgrf_formats::luacomp::compile_text(
+                text,
+                &old.main.source,
+                rgrf_formats::luacomp::TextEncoding::Auto,
+                &cp949,
+            )
+            .map_err(|e| e.to_string())?;
+            if stripped {
+                rgrf_formats::luacomp::strip(&mut chunk);
+            }
+            let lub = rgrf_formats::luac::dump32(&chunk);
+            rgrf_formats::luac::check_bytecode(&lub)
+                .map_err(|e| format!("internal error, the result is invalid: {e}"))?;
+            what.push("Lua recompiled from edited text".into());
+            lub
+        } else {
+            let (_, encoding) = decode_text(&data);
+            let mut text = text.replace("\r\n", "\n");
+            if data.windows(2).any(|w| w == b"\r\n") {
+                text = text.replace('\n', "\r\n");
+            }
+            let bytes = match encoding {
+                "UTF-8" => text.into_bytes(),
+                "CP949" => encode_legacy(encoding_rs::EUC_KR, &text)?,
+                _ => encode_legacy(encoding_rs::WINDOWS_1252, &text)?,
+            };
+            what.push(format!("text edited ({encoding})"));
+            bytes
+        };
         self.stage(Change::PutBytes {
             name,
             data: Arc::new(out),
@@ -2287,6 +2400,80 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn edited_text_and_lua_are_staged_in_their_own_format() {
+        use rgrf_formats::{luac, luacomp};
+        let dir = tmp("textedit");
+        let src = dir.join("src/data");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("crlf.txt"), "a\r\nb \u{e9}\r\n").unwrap();
+        fs::write(src.join("korean.txt"), [0xb0u8, 0xa1, 0x0a]).unwrap(); // CP949 "가"
+        let cp949 =
+            |run: &str| GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec());
+        let lua = "x = \"\u{ac00}\"\nfunction f(a)\n  return a + 1\nend\n";
+        let mut chunk =
+            luacomp::compile_text(lua, b"@t.lua", luacomp::TextEncoding::Auto, &cp949).unwrap();
+        fs::write(src.join("t.lub"), luac::dump32(&chunk)).unwrap();
+        luacomp::strip(&mut chunk);
+        fs::write(src.join("s.lub"), luac::dump32(&chunk)).unwrap();
+        let out = dir.join("t.grf");
+        build(
+            &dir.join("src"),
+            &out,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let mut s = Session::open(&out).unwrap();
+        let (t, st, crlf, kr) = (
+            find(&s, "t.lub"),
+            find(&s, "s.lub"),
+            find(&s, "crlf.txt"),
+            find(&s, "korean.txt"),
+        );
+
+        let doc = s.text_for_edit(t).unwrap();
+        assert!(doc.complete && doc.format == "Lua 5.1 bytecode", "{doc:?}");
+        assert!(
+            doc.text.contains("f = function(a)") && doc.text.contains('\u{ac00}'),
+            "{}",
+            doc.text
+        );
+        s.stage_text_edit(t, &doc.text.replace("a + 1", "a + 2"))
+            .unwrap();
+        let (_, bytes, _) = s.working_bytes(t).unwrap();
+        let new = luac::parse(&bytes).unwrap();
+        assert_eq!(new.main.source, b"@t.lua", "debug information is kept");
+        assert!(
+            rgrf_formats::luadec::decompile(&new, &|b| String::from_utf8_lossy(b).into_owned())
+                .contains("a + 2")
+        );
+
+        // a stripped file stays stripped
+        let doc = s.text_for_edit(st).unwrap();
+        s.stage_text_edit(st, &doc.text).unwrap();
+        let (_, bytes, _) = s.working_bytes(st).unwrap();
+        let new = luac::parse(&bytes).unwrap();
+        assert!(new.main.source.is_empty() && new.main.lines.is_empty());
+
+        // a syntax error changes nothing and names the line
+        let before = s.pending().len();
+        let err = s.stage_text_edit(t, "x = 1\ny = = 2\n").unwrap_err();
+        assert!(err.contains(":2:"), "{err}");
+        assert_eq!(s.pending().len(), before);
+
+        // plain text keeps its line endings and encoding
+        s.stage_text_edit(crlf, "one\ntwo \u{e9}\n").unwrap();
+        assert_eq!(
+            s.working_bytes(crlf).unwrap().1,
+            "one\r\ntwo \u{e9}\r\n".as_bytes()
+        );
+        s.stage_text_edit(kr, "\u{b098}\n").unwrap();
+        assert_eq!(s.working_bytes(kr).unwrap().1, [0xb3, 0xaa, 0x0a]);
+        assert!(s.stage_text_edit(kr, "\u{1f600}\n").is_err());
         let _ = fs::remove_dir_all(dir);
     }
 

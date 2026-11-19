@@ -272,7 +272,8 @@ function renderPreview(p, row, meta) {
     case "text": {
       const pre = el("pre", { text: p.text });
       const note = el("div", { class: "muted" }, "Encoding: ", el("span", { class: "badge", text: p.encoding }), p.truncated ? " (shortened)" : "");
-      return [note, pre];
+      const edit = el("button", { type: "button", class: "small", text: "Edit…", title: "Edit the text; compiled Lua is compiled again (staged, saved with Changes…)", onclick: () => openTextEditor(row) });
+      return [el("div", { class: "controls" }, edit), note, pre];
     }
     case "frames":
       return [
@@ -502,6 +503,50 @@ $("act-dlg").addEventListener("close", () => {
   if (E.row) refreshPreview(E.action);
   E.row = null;
 });
+
+async function openTextEditor(row) {
+  $("text-title").textContent = `Edit ${row.name}`;
+  $("text-body").replaceChildren(el("p", { class: "muted", text: "Loading …" }));
+  $("text-dlg").showModal();
+  let doc;
+  try {
+    doc = await invoke("text_for_edit", { index: row.index });
+  } catch (e) {
+    $("text-body").replaceChildren(el("p", { class: "error", text: errText(e) }));
+    return;
+  }
+  const area = el("textarea", { spellcheck: "false", wrap: "off" });
+  area.value = doc.text;
+  const msg = el("p", { class: "muted" });
+  const lua = doc.format.startsWith("Lua");
+  if (!doc.complete) msg.textContent = "Parts of this file could not be decompiled and stay as a listing; they cannot be compiled again. Edit only what the text shows as Lua.";
+  const save = el("button", { type: "button", class: "primary", text: lua ? "Compile and stage" : "Stage" });
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    msg.className = "muted";
+    msg.textContent = lua ? "Compiling …" : "Staging …";
+    try {
+      setPending(await invoke("stage_text_edit", { index: row.index, text: area.value }));
+      setStatus(`${row.name} staged${lua ? " (compiled again)" : ""}. Save with Changes….`);
+      $("text-dlg").close();
+      refreshPreview();
+    } catch (e) {
+      const text = errText(e);
+      msg.className = "error";
+      msg.textContent = text;
+      const m = /:(\d+):/.exec(text);
+      if (m) {
+        const line = Number(m[1]);
+        const at = area.value.split("\n").slice(0, line - 1).join("\n").length + (line > 1 ? 1 : 0);
+        area.focus();
+        area.setSelectionRange(at, at);
+      }
+    } finally {
+      save.disabled = false;
+    }
+  });
+  $("text-body").replaceChildren(el("div", { class: "texted" }, el("div", { class: "bar" }, el("span", { class: "badge", text: doc.format }), save), msg, area));
+}
 
 async function loadActFrame() {
   try {

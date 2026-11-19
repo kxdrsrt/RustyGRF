@@ -133,6 +133,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_act_edit(arg(a, "index")?, arg(a, "action")?, arg(a, "frame")?, &edit)?;
             to_json(s.pending())
         }),
+        "text_for_edit" => with(state, |s| to_json(s.text_for_edit(arg(a, "index")?)?)),
+        "stage_text_edit" => with(state, |s| {
+            s.stage_text_edit(arg(a, "index")?, &arg::<String>(a, "text")?)?;
+            to_json(s.pending())
+        }),
         "stage_act_interval" => with(state, |s| {
             s.stage_act_interval(arg(a, "index")?, arg(a, "action")?, arg(a, "ms")?)?;
             to_json(s.pending())

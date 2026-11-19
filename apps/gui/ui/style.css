@@ -217,6 +217,8 @@ dialog progress { width: min(420px, 80vw); height: 10px; accent-color: var(--acc
 .figactions { display: flex; gap: 4px; }
 
 dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
+.texted textarea { width: 100%; height: 60vh; box-sizing: border-box; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; tab-size: 4; resize: vertical; }
+.texted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .acted { display: grid; grid-template-columns: minmax(260px, 40%) 1fr; gap: 16px; align-items: start; }
 .acted .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; grid-column: 1 / -1; }
 .acted .stage { position: relative; display: inline-block; line-height: 0; min-width: 120px; min-height: 120px; }

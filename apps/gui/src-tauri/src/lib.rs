@@ -290,6 +290,26 @@ async fn stage_act_edit(
     .await
 }
 
+/// The whole content of a text or Lua entry as editable text.
+#[tauri::command]
+async fn text_for_edit(state: State<'_, AppState>, index: usize) -> Res<backend::TextForEdit> {
+    with_session(&state, move |s| s.text_for_edit(index)).await
+}
+
+/// Replaces a text or Lua entry by edited text (staged); compiled Lua is compiled again.
+#[tauri::command]
+async fn stage_text_edit(
+    state: State<'_, AppState>,
+    index: usize,
+    text: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_text_edit(index, &text)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Sets the frame interval (milliseconds) of an action of the animation `index`.
 #[tauri::command]
 async fn stage_act_interval(
@@ -461,6 +481,8 @@ pub fn run() {
             stage_act_interval,
             act_frame,
             stage_act_edit,
+            text_for_edit,
+            stage_text_edit,
             pending,
             discard_pending,
             history,
