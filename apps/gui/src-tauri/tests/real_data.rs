@@ -316,3 +316,101 @@ fn edits_a_real_archive() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_folder_tree_holds_every_entry_once_and_opens_completely() {
+    use rustygrf_gui_lib::view::ViewSpec;
+    use std::collections::{HashMap, HashSet};
+    let Some(mut s) = open() else { return };
+    let total = s.info().entries;
+    let tree = ViewSpec {
+        layout: "tree".into(),
+        ..ViewSpec::default()
+    };
+    // closed: only the top folder line(s)
+    let closed = s.set_view(0, tree.clone()).unwrap();
+    assert_eq!(closed.matches, total);
+    let top = s.page_view(0, 0, 50);
+    assert!(top.iter().all(|r| r.folder && !r.expanded) && closed.rows == top.len());
+    assert_eq!(top.iter().map(|r| r.count).sum::<usize>(), total);
+
+    // everything open: each entry once, under the folder its name says
+    let rows = s.tree_set_all(0, true).unwrap();
+    let mut lines = Vec::with_capacity(rows);
+    let mut at = 0;
+    while at < rows {
+        let page = s.page_view(0, at, 500);
+        assert!(!page.is_empty());
+        at += page.len();
+        lines.extend(page);
+    }
+    assert_eq!(lines.len(), rows);
+    let files: Vec<_> = lines.iter().filter(|r| !r.folder).collect();
+    assert_eq!(files.len(), total, "every entry is shown");
+    let unique: HashSet<usize> = files.iter().map(|r| r.index).collect();
+    assert_eq!(unique.len(), total, "no entry twice");
+
+    // depth follows the path, and a file is listed after its own folder line
+    let mut stack: Vec<String> = Vec::new(); // folder keys by depth
+    let mut counted: HashMap<String, usize> = HashMap::new();
+    for r in &lines {
+        let key = r.name.to_lowercase();
+        if r.folder {
+            stack.truncate(usize::from(r.depth));
+            let parent = stack.last().cloned().unwrap_or_default();
+            assert!(
+                parent.is_empty() || key.starts_with(&format!("{parent}\\")),
+                "{} is not below {parent}",
+                r.name
+            );
+            assert_eq!(
+                key.split('\\').count(),
+                usize::from(r.depth) + 1,
+                "{}",
+                r.name
+            );
+            stack.push(key);
+        } else {
+            let dir = key.rsplit_once('\\').map_or("", |(d, _)| d).to_string();
+            let owner = if usize::from(r.depth) == 0 {
+                String::new()
+            } else {
+                stack[usize::from(r.depth) - 1].clone()
+            };
+            assert_eq!(dir, owner, "{} is listed under the wrong folder", r.name);
+            *counted.entry(owner).or_default() += 1;
+        }
+    }
+    // a folder's count is the number of files in it and below
+    for r in lines.iter().filter(|r| r.folder) {
+        let key = r.name.to_lowercase();
+        let below: usize = counted
+            .iter()
+            .filter(|(d, _)| **d == key || d.starts_with(&format!("{key}\\")))
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(r.count, below, "count of {}", r.name);
+    }
+
+    // close all again, then reveal one deep entry: only its way opens
+    assert_eq!(s.tree_set_all(0, false).unwrap(), closed.rows);
+    let target = find(&mut s, "firepit.spr");
+    s.set_view(0, tree).unwrap();
+    let at = s.locate(0, Some(target), None).unwrap();
+    let line = at.line.expect("revealed");
+    assert_eq!(s.page_view(0, line, 1)[0].index, target);
+    // exactly the folders on the way are open (data, sprite and the monster folder)
+    let mut open_folders = Vec::new();
+    let mut from = 0;
+    while from < at.rows {
+        let page = s.page_view(0, from, 500);
+        from += page.len();
+        open_folders.extend(page.into_iter().filter(|r| r.folder && r.expanded));
+    }
+    assert_eq!(
+        open_folders.len(),
+        3,
+        "{:?}",
+        open_folders.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+}

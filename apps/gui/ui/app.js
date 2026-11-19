@@ -6,7 +6,19 @@ const ROW_H = 24;
 const OVERSCAN = 6;
 const $ = (id) => document.getElementById(id);
 
-const ICONS = { image: "▨", sprite: "◆", animation: "▶", palette: "◐", map: "▦", model: "◇", audio: "♪", text: "≡", effect: "✦" };
+const SVGNS = "http://www.w3.org/2000/svg";
+/** An icon from the symbol sprite in index.html. */
+function svgIcon(name, cls = "") {
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("class", `ic ${cls}`.trim());
+  svg.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS(SVGNS, "use");
+  use.setAttribute("href", `#i-${name}`);
+  svg.append(use);
+  return svg;
+}
+const KIND_ICON = { image: "image", sprite: "sprite", animation: "animation", palette: "palette", map: "map", model: "model", audio: "audio", text: "text", effect: "effect", imf: "file", file: "file", video: "video" };
+const kindIcon = (kind) => el("span", { class: `icon k-${KIND_ICON[kind] || "file"}` }, svgIcon(KIND_ICON[kind] || "file"));
 
 const S = {
   info: null,
@@ -25,13 +37,16 @@ const S = {
 
 function el(tag, attrs = {}, ...children) {
   const n = document.createElement(tag);
+  let iconName = null;
   for (const [k, v] of Object.entries(attrs)) {
     if (k === "class") n.className = v;
+    else if (k === "icon") iconName = v;
     else if (k === "text") n.textContent = v;
     else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
     else if (v !== false && v != null) n.setAttribute(k, v === true ? "" : v);
   }
   for (const c of children.flat()) if (c != null) n.append(c);
+  if (iconName) n.prepend(svgIcon(iconName));
   return n;
 }
 
@@ -303,8 +318,8 @@ function mainRow(r, pos) {
     return el(
       "div",
       { class: `row tree folder${sel}`, style: `top:${pos * ROW_H}px;${indent}`, title: r.name, "data-pos": pos },
-      el("span", { class: "icon twisty", "data-twist": "1", text: r.expanded ? "▾" : "▸" }),
-      el("span", { class: "name" }, baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
+      el("span", { class: `icon twisty${r.expanded ? " open" : ""}`, "data-twist": "1" }, svgIcon("chevron")),
+      el("span", { class: "name" }, svgIcon(r.expanded ? "folder-open" : "folder", "folder-ic"), baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
       el("span", { class: "size", text: fmtBytes(r.bytes) }),
     );
   }
@@ -313,7 +328,7 @@ function mainRow(r, pos) {
   const base = baseOf(r.name);
   const dir = dirOf(r.name);
   const cls = `row${sel}${state}${V.layout === "details" || V.layout === "folders" ? " details" : ""}${tree ? " tree" : ""}`;
-  const icon = el("span", { class: "icon", text: ICONS[r.kind] || "·" });
+  const icon = kindIcon(r.kind);
   if (V.layout === "details" || V.layout === "folders") {
     return el(
       "div",
@@ -339,8 +354,8 @@ function folderRow(r, pos) {
   return el(
     "div",
     { class: `row tree folder${on ? " selected" : ""}`, style: `top:${pos * ROW_H}px;padding-left:${8 + r.depth * 16}px`, title: r.name, "data-pos": pos },
-    el("span", { class: "icon twisty", "data-twist": "1", text: r.expanded ? "▾" : "▸" }),
-    el("span", { class: "name" }, baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
+    el("span", { class: `icon twisty${r.expanded ? " open" : ""}`, "data-twist": "1" }, svgIcon("chevron")),
+    el("span", { class: "name" }, svgIcon(r.expanded ? "folder-open" : "folder", "folder-ic"), baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
     el("span", { class: "size", text: "" }),
   );
 }
@@ -490,12 +505,12 @@ function syncViewBar() {
   $("btn-expand").hidden = !(V.layout === "tree" || folders);
   $("btn-collapse").hidden = !(V.layout === "tree" || folders);
   $("sort").value = V.sort;
-  $("sort-dir").textContent = V.desc ? "↓" : "↑";
+  $("sort-dir-use").setAttribute("href", V.desc ? "#i-sort-desc" : "#i-sort-asc");
   $("size-filter").value = V.size;
   for (const b of document.querySelectorAll("#colhead button")) b.classList.toggle("on", b.dataset.sort === V.sort);
-  const kinds = $("kind-filter").querySelector("summary");
+  const kinds = $("kind-label");
   kinds.textContent = V.kinds.length ? `Type: ${V.kinds.length === 1 ? (KINDS.find((k) => k[0] === V.kinds[0]) || [0, V.kinds[0]])[1] : `${V.kinds.length} kinds`}` : "Type: all";
-  kinds.classList.toggle("active", V.kinds.length > 0);
+  $("kind-filter").querySelector("summary").classList.toggle("active", V.kinds.length > 0);
   $("viewport").setAttribute("role", V.layout === "tree" ? "tree" : "listbox");
   for (const b of document.querySelectorAll("#view-seg button")) b.setAttribute("aria-pressed", String(b.dataset.layout === V.layout));
   for (const b of document.querySelectorAll("#preview-seg button")) b.setAttribute("aria-pressed", String(b.dataset.preview === V.preview));
@@ -629,7 +644,7 @@ function renderPreview(p, row, meta) {
     case "text": {
       const pre = el("pre", { text: p.text });
       const note = el("div", { class: "muted" }, "Encoding: ", el("span", { class: "badge", text: p.encoding }), p.truncated ? " (shortened)" : "");
-      const edit = el("button", { type: "button", class: "small", text: "Edit…", title: "Edit the text; compiled Lua is compiled again (staged, saved with Changes…)", onclick: () => openTextEditor(row) });
+      const edit = el("button", { type: "button", class: "small", icon: "edit", text: "Edit…", title: "Edit the text; compiled Lua is compiled again (staged, saved with Changes…)", onclick: () => openTextEditor(row) });
       return [el("div", { class: "controls" }, edit), note, pre];
     }
     case "frames":
@@ -638,7 +653,7 @@ function renderPreview(p, row, meta) {
           ? el(
               "div",
               { class: "controls" },
-              el("button", { type: "button", class: "small", text: "Adjust…", title: "Shift hue, scale saturation and brightness of a range of colours (staged)", onclick: () => adjustPalette(row) }),
+              el("button", { type: "button", class: "small", icon: "palette", text: "Adjust…", title: "Shift hue, scale saturation and brightness of a range of colours (staged)", onclick: () => adjustPalette(row) }),
               el("span", { class: "muted", text: "Click a colour to change it." }),
             )
           : null,
@@ -646,8 +661,8 @@ function renderPreview(p, row, meta) {
           ? el(
               "div",
               { class: "controls" },
-              el("button", { type: "button", class: "small", text: "Add image…", title: "Append a PNG as a new image (staged)", onclick: () => addImage(row) }),
-              el("button", { type: "button", class: "small", text: "Set palette…", title: "Use the colours of a .pal file (staged)", onclick: () => setPalette(row) }),
+              el("button", { type: "button", class: "small", icon: "add", text: "Add image…", title: "Append a PNG as a new image (staged)", onclick: () => addImage(row) }),
+              el("button", { type: "button", class: "small", icon: "palette", text: "Set palette…", title: "Use the colours of a .pal file (staged)", onclick: () => setPalette(row) }),
             )
           : null,
         el(
@@ -682,8 +697,8 @@ function renderPreview(p, row, meta) {
         { class: "controls" },
         el("label", { text: "Action " }, sel),
         el("span", { class: "muted", text: `${p.frames} frame(s), ${p.interval_ms} ms each` }),
-        el("button", { type: "button", class: "small", text: "Edit frames…", title: "Edit layers, anchors and frames of this animation (staged)", onclick: () => openActEditor(row, p.action) }),
-        el("button", { type: "button", class: "small", text: "Set interval…", title: "Change the frame time of this action (staged, saved with Changes…)", onclick: () => setInterval_(row, p.action, p.interval_ms) }),
+        el("button", { type: "button", class: "small", icon: "edit", text: "Edit frames…", title: "Edit layers, anchors and frames of this animation (staged)", onclick: () => openActEditor(row, p.action) }),
+        el("button", { type: "button", class: "small", icon: "animation", text: "Set interval…", title: "Change the frame time of this action (staged, saved with Changes…)", onclick: () => setInterval_(row, p.action, p.interval_ms) }),
       );
       return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: `warning: ${p.note}` }) : null];
     }
@@ -774,7 +789,7 @@ function updateEditBar() {
   const cur = S.selected != null ? S.rows[S.selected - S.offset] : null;
   $("btn-replace").disabled = !cur || cur.folder;
   $("btn-remove").disabled = !S.info;
-  $("btn-changes").textContent = `Changes (${S.changes.length})…`;
+  $("changes-label").textContent = `Changes (${S.changes.length})…`;
   if (S.info) {
     invoke("history")
       .then((h) => {
