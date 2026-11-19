@@ -10,8 +10,9 @@ const ICONS = { image: "▨", sprite: "◆", animation: "▶", palette: "◐", m
 
 const S = {
   info: null,
-  total: 0,
-  offset: 0, // position of rows[0] in the filtered list
+  total: 0, // lines in the list (folders count in a tree)
+  matches: 0, // entries that match the search and filters
+  offset: 0, // position of rows[0] in the list
   rows: [],
   selected: null, // position in the filtered list
   query: "",
@@ -137,8 +138,11 @@ async function openPath(path, force = false) {
   }
   document.title = `${S.info.file_name} - RustyGRF`;
   $("empty").hidden = true;
-  $("viewport").hidden = false;
-  for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes"]) $(id).disabled = false;
+  $("lists").hidden = false;
+  for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes", "sort", "sort-dir", "size-filter"]) $(id).disabled = false;
+  V.folder = null;
+  buildKindFilter();
+  syncViewBar();
   S.changes = [];
   S.changed = new Map();
   updateEditBar();
@@ -152,105 +156,396 @@ async function openPath(path, force = false) {
   $("viewport").focus();
 }
 
-async function runSearch(q) {
-  S.query = q;
-  S.total = await invoke("search", { query: q });
-  S.selected = null;
-  updateEditBar();
-  S.rows = [];
-  S.offset = 0;
-  $("spacer").style.height = `${S.total * ROW_H}px`;
-  $("viewport").scrollTop = 0;
-  $("count").textContent = q ? `${fmtNum(S.total)} of ${fmtNum(S.info.entries)}` : `${fmtNum(S.total)} entries`;
-  clearPreview();
-  await loadWindow();
-}
+// ---------- lists ----------
 
-function visibleRange() {
-  const vp = $("viewport");
-  const first = Math.max(0, Math.floor(vp.scrollTop / ROW_H) - OVERSCAN);
-  const last = Math.min(S.total, Math.ceil((vp.scrollTop + vp.clientHeight) / ROW_H) + OVERSCAN);
-  return [first, last];
-}
+const KINDS = [["image", "Images"], ["sprite", "Sprites"], ["animation", "Animations"], ["palette", "Palettes"], ["map", "Maps"], ["model", "Models"], ["audio", "Audio"], ["text", "Text and Lua"], ["effect", "Effects"], ["file", "Other"]];
+const SIZE_UNITS = { k: 1024, m: 1024 * 1024 };
+const PREFS_KEY = "rustygrf-view";
 
-async function loadWindow() {
-  if (S.loading) {
-    S.pending = true;
-    return;
-  }
-  S.loading = true;
+const V = Object.assign(
+  { layout: "list", sort: "archive", desc: false, kinds: [], size: "", recursive: false, preview: "right", folder: null, listW: null, previewH: null, foldersW: null },
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  })(),
+);
+V.folder = null; // the chosen folder is per archive
+const savePrefs = () => {
   try {
-    do {
-      S.pending = false;
-      const [first, last] = visibleRange();
-      const want = Math.max(last - first, 20);
-      const offset = Math.max(0, first - want);
-      const limit = want * 3;
-      if (S.total === 0) {
-        S.rows = [];
-        S.offset = 0;
-      } else {
-        S.rows = await invoke("page", { offset, limit });
-        S.offset = offset;
-      }
-      render();
-    } while (S.pending);
-  } catch (e) {
-    setStatus(`Error: ${errText(e)}`);
-  } finally {
-    S.loading = false;
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...V, folder: null }));
+  } catch {}
+};
+
+const F = { total: 0, offset: 0, rows: [], selected: null, loading: false, pending: false }; // the folder pane
+
+/** A virtual list: only the visible lines exist; pages come from the backend (`page_view`). */
+class VList {
+  constructor(st, ids, view, renderRow, onPick) {
+    Object.assign(this, { st, view, renderRow, onPick });
+    this.vp = $(ids.vp);
+    this.spacer = $(ids.spacer);
+    this.rowsEl = $(ids.rows);
   }
-}
-
-function render() {
-  const [first, last] = visibleRange();
-  const rows = $("rows");
-  rows.style.top = "0";
-  const out = [];
-  for (let pos = first; pos < last; pos++) {
-    const r = S.rows[pos - S.offset];
-    if (!r) continue;
-    const cut = r.name.lastIndexOf("\\");
-    const base = cut >= 0 ? r.name.slice(cut + 1) : r.name;
-    const dir = cut >= 0 ? r.name.slice(0, cut) : "";
-    const row = el(
-      "div",
-      { class: `row${pos === S.selected ? " selected" : ""}${S.changed.has(changeKey(r.name)) ? ` changed ${S.changed.get(changeKey(r.name))}` : ""}`, style: `top:${pos * ROW_H}px`, title: r.name, "data-pos": pos },
-      el("span", { class: "icon", text: ICONS[r.kind] || "·" }),
-      el("span", { class: "name" }, base, el("span", { class: "muted", text: dir ? `  ${dir}` : "" })),
-      el("span", { class: "size", text: fmtBytes(r.size) }),
-    );
-    out.push(row);
+  range() {
+    const first = Math.max(0, Math.floor(this.vp.scrollTop / ROW_H) - OVERSCAN);
+    const last = Math.min(this.st.total, Math.ceil((this.vp.scrollTop + this.vp.clientHeight) / ROW_H) + OVERSCAN);
+    return [first, last];
   }
-  rows.replaceChildren(...out);
-}
-
-function onScroll() {
-  render();
-  const [first, last] = visibleRange();
-  const have = S.rows.length;
-  const lo = S.offset;
-  const hi = S.offset + have;
-  const needLow = first < lo && lo > 0;
-  const needHigh = last > hi && hi < S.total;
-  if (needLow || needHigh) loadWindow();
-}
-
-function select(pos, scrollIntoView = true) {
-  if (S.total === 0) return;
-  pos = Math.max(0, Math.min(S.total - 1, pos));
-  S.selected = pos;
-  updateEditBar();
-  const vp = $("viewport");
-  if (scrollIntoView) {
+  row(pos) {
+    return this.st.rows[pos - this.st.offset];
+  }
+  async load() {
+    const st = this.st;
+    if (st.loading) {
+      st.pending = true;
+      return;
+    }
+    st.loading = true;
+    try {
+      do {
+        st.pending = false;
+        const [first, last] = this.range();
+        const want = Math.max(last - first, 20);
+        const offset = Math.max(0, first - want);
+        if (st.total === 0) {
+          st.rows = [];
+          st.offset = 0;
+        } else {
+          st.rows = await invoke("page_view", { view: this.view, offset, limit: want * 3 });
+          st.offset = offset;
+        }
+        this.draw();
+      } while (st.pending);
+    } catch (e) {
+      setStatus(`Error: ${errText(e)}`);
+    } finally {
+      st.loading = false;
+    }
+  }
+  draw() {
+    const [first, last] = this.range();
+    const out = [];
+    for (let pos = first; pos < last; pos++) {
+      const r = this.row(pos);
+      if (r) out.push(this.renderRow(r, pos));
+    }
+    this.rowsEl.style.top = "0";
+    this.rowsEl.replaceChildren(...out);
+  }
+  scrolled() {
+    this.draw();
+    const st = this.st;
+    const [first, last] = this.range();
+    if ((first < st.offset && st.offset > 0) || (last > st.offset + st.rows.length && st.offset + st.rows.length < st.total)) this.load();
+  }
+  async reset(total, keepScroll = false) {
+    const st = this.st;
+    st.total = total;
+    st.rows = [];
+    st.offset = 0;
+    this.spacer.style.height = `${total * ROW_H}px`;
+    if (!keepScroll) this.vp.scrollTop = 0;
+    await this.load();
+  }
+  scrollTo(pos) {
     const top = pos * ROW_H;
+    const vp = this.vp;
     if (top < vp.scrollTop) vp.scrollTop = top;
     else if (top + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = top + ROW_H - vp.clientHeight;
   }
-  render();
-  const r = S.rows[pos - S.offset];
-  if (r) showPreview(r);
-  else loadWindow().then(() => S.rows[pos - S.offset] && showPreview(S.rows[pos - S.offset]));
+  async pick(pos, scroll = true) {
+    const st = this.st;
+    if (st.total === 0) return;
+    pos = Math.max(0, Math.min(st.total - 1, pos));
+    st.selected = pos;
+    if (scroll) this.scrollTo(pos);
+    this.draw();
+    let r = this.row(pos);
+    if (!r) {
+      await this.load();
+      r = this.row(pos);
+    }
+    if (r) this.onPick(r, pos);
+  }
+}
+
+const baseOf = (name) => name.slice(name.lastIndexOf("\\") + 1);
+const dirOf = (name) => (name.includes("\\") ? name.slice(0, name.lastIndexOf("\\")) : "");
+const extOf = (name) => (baseOf(name).includes(".") ? baseOf(name).split(".").pop() : "");
+
+function mainRow(r, pos) {
+  const sel = pos === S.selected ? " selected" : "";
+  const tree = V.layout === "tree";
+  const indent = tree ? `padding-left:${8 + r.depth * 16}px;` : "";
+  if (r.folder) {
+    return el(
+      "div",
+      { class: `row tree folder${sel}`, style: `top:${pos * ROW_H}px;${indent}`, title: r.name, "data-pos": pos },
+      el("span", { class: "icon twisty", "data-twist": "1", text: r.expanded ? "▾" : "▸" }),
+      el("span", { class: "name" }, baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
+      el("span", { class: "size", text: fmtBytes(r.bytes) }),
+    );
+  }
+  const key = changeKey(r.name);
+  const state = S.changed.has(key) ? ` changed ${S.changed.get(key)}` : "";
+  const base = baseOf(r.name);
+  const dir = dirOf(r.name);
+  const cls = `row${sel}${state}${V.layout === "details" || V.layout === "folders" ? " details" : ""}${tree ? " tree" : ""}`;
+  const icon = el("span", { class: "icon", text: ICONS[r.kind] || "·" });
+  if (V.layout === "details" || V.layout === "folders") {
+    return el(
+      "div",
+      { class: cls, style: `top:${pos * ROW_H}px`, title: r.name, "data-pos": pos },
+      icon,
+      el("span", { class: "name" }, base, V.layout === "details" && dir ? el("span", { class: "muted", text: `  ${dir}` }) : null),
+      el("span", { class: "ext", text: extOf(r.name) }),
+      el("span", { class: "size", text: fmtBytes(r.size) }),
+      el("span", { class: "stored", text: fmtBytes(r.stored) }),
+    );
+  }
+  return el(
+    "div",
+    { class: cls, style: `top:${pos * ROW_H}px;${indent}`, title: r.name, "data-pos": pos },
+    icon,
+    el("span", { class: "name" }, base, !tree && dir ? el("span", { class: "muted", text: `  ${dir}` }) : null),
+    el("span", { class: "size", text: fmtBytes(r.size) }),
+  );
+}
+
+function folderRow(r, pos) {
+  const on = V.folder != null && r.name.toLowerCase() === V.folder.toLowerCase();
+  return el(
+    "div",
+    { class: `row tree folder${on ? " selected" : ""}`, style: `top:${pos * ROW_H}px;padding-left:${8 + r.depth * 16}px`, title: r.name, "data-pos": pos },
+    el("span", { class: "icon twisty", "data-twist": "1", text: r.expanded ? "▾" : "▸" }),
+    el("span", { class: "name" }, baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
+    el("span", { class: "size", text: "" }),
+  );
+}
+
+const mainList = new VList(S, { vp: "viewport", spacer: "spacer", rows: "rows" }, 0, mainRow, (r) => {
+  updateEditBar();
+  if (V.preview === "off") return;
+  if (r.folder) showFolderPreview(r);
+  else showPreview(r);
+});
+const folderList = new VList(F, { vp: "folder-viewport", spacer: "folder-spacer", rows: "folder-rows" }, 1, folderRow, (r, pos) => {
+  V.folder = r.name;
+  F.selected = pos;
+  folderList.draw();
+  $("folder-all").classList.remove("on");
+  applyView({ keepSelection: false, pane: false });
+});
+
+const visibleRange = () => mainList.range();
+const loadWindow = () => mainList.load();
+const render = () => mainList.draw();
+const onScroll = () => mainList.scrolled();
+const select = (pos, scroll = true) => mainList.pick(pos, scroll);
+
+const isTreeLayout = () => V.layout === "tree";
+
+function sizeLimits() {
+  const m = /^(?:(\d+)([km]))?-(?:(\d+)([km]))?$/.exec(V.size);
+  if (!m) return [0, 0];
+  const n = (v, u) => (v ? Number(v) * SIZE_UNITS[u] : 0);
+  return [n(m[1], m[2]), n(m[3], m[4])];
+}
+
+function mainSpec(autoExpand) {
+  const [min, max] = sizeLimits();
+  const folders = V.layout === "folders";
+  return {
+    query: S.query,
+    kinds: V.kinds,
+    min_size: min,
+    max_size: max,
+    sort: V.sort,
+    desc: V.desc,
+    layout: isTreeLayout() ? "tree" : "flat",
+    folder: folders ? V.folder : null,
+    recursive: V.recursive,
+    auto_expand: autoExpand,
+  };
+}
+
+const filtersActive = () => V.kinds.length > 0 || V.size !== "" || S.query !== "";
+
+/** Arranges the lists after the search, filters, sort or layout changed. */
+async function applyView({ keepSelection = true, autoExpand = false, pane = true } = {}) {
+  if (!S.info) return;
+  const before = keepSelection && S.selected != null ? mainList.row(S.selected) : null;
+  const sum = await invoke("set_view", { view: 0, spec: mainSpec(autoExpand) });
+  S.matches = sum.matches;
+  S.selected = null;
+  updateEditBar();
+  let rows = sum.rows;
+  let line = null;
+  if (before && !before.folder) {
+    const at = await invoke("locate", { view: 0, entry: before.index, folder: null });
+    if (at.line != null) {
+      rows = at.rows;
+      line = at.line;
+    }
+  }
+  await mainList.reset(rows);
+  if (line != null) {
+    S.selected = line;
+    mainList.scrollTo(line);
+    mainList.draw();
+  } else {
+    clearPreview();
+  }
+  if (V.layout === "folders" && pane) await applyFolderPane(autoExpand);
+  $("count").textContent = filtersActive() ? `${fmtNum(S.matches)} of ${fmtNum(S.info.entries)}` : `${fmtNum(S.matches)} entries`;
+  $("btn-reset-filters").disabled = !filtersActive();
+  const note = V.layout === "folders" && S.query ? " (search covers all folders)" : "";
+  if (note) $("count").textContent += note;
+}
+
+async function applyFolderPane(autoExpand) {
+  const [min, max] = sizeLimits();
+  const sum = await invoke("set_view", { view: 1, spec: { query: S.query, kinds: V.kinds, min_size: min, max_size: max, sort: "name", layout: "folders", auto_expand: autoExpand } });
+  F.selected = null;
+  await folderList.reset(sum.rows, !autoExpand);
+  $("folder-all").classList.toggle("on", V.folder == null);
+}
+
+async function runSearch(q) {
+  S.query = q;
+  await applyView({ keepSelection: false, autoExpand: true });
+}
+
+async function toggleFolder(list, pos) {
+  const r = list.row(pos);
+  if (!r?.folder) return;
+  const total = await invoke("tree_toggle", { view: list.view, path: r.name });
+  const top = list.vp.scrollTop;
+  list.st.total = total;
+  list.spacer.style.height = `${total * ROW_H}px`;
+  list.st.rows = [];
+  list.vp.scrollTop = top;
+  await list.load();
+  const cur = list === mainList && list.st.selected != null ? list.row(list.st.selected) : null;
+  if (cur?.folder && V.preview !== "off") showFolderPreview(cur);
+}
+
+async function expandAll(open) {
+  const list = V.layout === "folders" ? folderList : mainList;
+  const total = await invoke("tree_set_all", { view: list.view, open });
+  list.st.total = total;
+  list.spacer.style.height = `${total * ROW_H}px`;
+  list.st.rows = [];
+  list.vp.scrollTop = 0;
+  await list.load();
+  if (list === mainList) {
+    S.selected = null;
+    updateEditBar();
+  }
+}
+
+function setLayout(layout) {
+  V.layout = layout;
+  savePrefs();
+  syncViewBar();
+  if (S.info) applyView({ autoExpand: layout === "folders" || layout === "tree" });
+}
+
+function syncViewBar() {
+  for (const b of document.querySelectorAll("#view-seg button")) b.classList.toggle("on", b.dataset.layout === V.layout);
+  for (const b of document.querySelectorAll("#preview-seg button")) b.classList.toggle("on", b.dataset.preview === V.preview);
+  const folders = V.layout === "folders";
+  $("lists").classList.toggle("with-folders", folders);
+  $("folder-pane").hidden = !folders;
+  $("split-folders").hidden = !folders;
+  $("colhead").hidden = !(V.layout === "details" || folders);
+  $("recursive-wrap").hidden = !folders;
+  $("recursive").checked = V.recursive;
+  $("btn-expand").hidden = !(V.layout === "tree" || folders);
+  $("btn-collapse").hidden = !(V.layout === "tree" || folders);
+  $("sort").value = V.sort;
+  $("sort-dir").textContent = V.desc ? "↓" : "↑";
+  $("size-filter").value = V.size;
+  for (const b of document.querySelectorAll("#colhead button")) b.classList.toggle("on", b.dataset.sort === V.sort);
+  const kinds = $("kind-filter").querySelector("summary");
+  kinds.textContent = V.kinds.length ? `Type: ${V.kinds.length === 1 ? (KINDS.find((k) => k[0] === V.kinds[0]) || [0, V.kinds[0]])[1] : `${V.kinds.length} kinds`}` : "Type: all";
+  kinds.classList.toggle("active", V.kinds.length > 0);
+  const main = document.querySelector("main");
+  main.className = `pv-${V.preview}${folders ? " lay-folders" : ""}`;
+  applyPaneSizes();
+}
+
+function applyPaneSizes() {
+  const main = document.querySelector("main");
+  main.style.removeProperty("--list-w");
+  main.style.removeProperty("--prev-h");
+  if (V.preview === "right" && V.listW) main.style.setProperty("--list-w", `${V.listW}px`);
+  if (V.preview === "bottom" && V.previewH) main.style.setProperty("--prev-h", `${V.previewH}px`);
+  if (V.foldersW) $("lists").style.setProperty("--folders-w", `${V.foldersW}px`);
+}
+
+function setPreviewMode(mode) {
+  V.preview = mode;
+  savePrefs();
+  syncViewBar();
+  if (mode !== "off") {
+    const r = S.selected != null ? mainList.row(S.selected) : null;
+    if (r) (r.folder ? showFolderPreview(r) : showPreview(r));
+  }
+}
+
+function buildKindFilter() {
+  const box = $("kind-list");
+  box.replaceChildren(
+    ...KINDS.map(([k, label]) => el("label", {}, el("input", { type: "checkbox", value: k, checked: V.kinds.includes(k), onchange: onKindChange }), label)),
+    el("div", { class: "links" }, el("a", { text: "All", onclick: () => setKinds([]) }), el("a", { text: "Only images", onclick: () => setKinds(["image"]) })),
+  );
+}
+
+function onKindChange() {
+  setKinds([...document.querySelectorAll("#kind-list input:checked")].map((i) => i.value));
+}
+
+function setKinds(kinds) {
+  V.kinds = kinds;
+  savePrefs();
+  buildKindFilter();
+  syncViewBar();
+  if (S.info) applyView({ autoExpand: true });
+}
+
+function setSort(key, desc) {
+  V.sort = key;
+  if (desc !== undefined) V.desc = desc;
+  savePrefs();
+  syncViewBar();
+  if (S.info) applyView();
+}
+
+function resetFilters() {
+  V.kinds = [];
+  V.size = "";
+  S.query = "";
+  $("search").value = "";
+  savePrefs();
+  buildKindFilter();
+  syncViewBar();
+  applyView({ keepSelection: false, autoExpand: true });
+}
+
+/** A line shown for a folder selected in the tree. */
+function showFolderPreview(r) {
+  ++S.previewToken;
+  S.viewer?.destroy();
+  S.viewer = null;
+  $("preview-head").replaceChildren(el("div", { class: "title", text: r.name }), el("div", { class: "meta", text: `Folder — ${fmtNum(r.count)} file(s), ${fmtBytes(r.bytes)} unpacked` }));
+  $("preview-body").replaceChildren(
+    el("div", { class: "controls" }, el("button", { type: "button", class: "small", text: r.expanded ? "Close" : "Open", onclick: () => toggleFolder(mainList, S.selected) })),
+    el("p", { class: "placeholder", text: "Extract… and Remove act on this folder when it is selected." }),
+  );
 }
 
 // ---------- preview ----------
@@ -409,18 +704,24 @@ function renderPreview(p, row, meta) {
 
 // ---------- actions ----------
 
+/** The entries a selected line stands for: the file itself, or everything below a folder. */
+async function entriesOf(row) {
+  return row.folder ? invoke("folder_entries", { view: 0, path: row.name }) : [row.index];
+}
+
 async function doExtract() {
   if (!S.info) return;
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   const buttons = [];
-  if (sel) buttons.push({ label: "Selected entry", value: "one", primary: true });
-  buttons.push({ label: `All ${fmtNum(S.total)} in the list`, value: "all", primary: !sel });
+  if (sel) buttons.push({ label: sel.folder ? `Folder (${fmtNum(sel.count)} files)` : "Selected entry", value: "one", primary: true });
+  buttons.push({ label: `All ${fmtNum(S.matches)} in the list`, value: "all", primary: !sel });
   buttons.push({ label: "Cancel", value: null });
-  const what = await ask("Extract", el("p", { text: S.query ? `The list is filtered by "${S.query}".` : "The list shows the whole archive." }), buttons);
+  const what = await ask("Extract", el("p", { text: filtersActive() ? "The list is filtered; \"all\" means the entries that match." : "The list shows the whole archive." }), buttons);
   if (!what) return;
   const dest = await T.dialog.open({ directory: true, multiple: false, title: "Extract into folder" });
   if (!dest) return;
-  const indices = what === "one" ? [sel.index] : [];
+  const indices = what === "one" ? await entriesOf(sel) : [];
+  if (what === "one" && !indices.length) return note("Extract", "This folder holds no files.");
   setStatus("Extracting …");
   let rename = false;
   for (;;) {
@@ -444,7 +745,8 @@ async function doExtract() {
 // ---------- editing (changes are collected and saved as a new archive) ----------
 
 function updateEditBar() {
-  $("btn-replace").disabled = S.selected == null;
+  const cur = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  $("btn-replace").disabled = !cur || cur.folder;
   $("btn-remove").disabled = !S.info;
   $("btn-changes").textContent = `Changes (${S.changes.length})…`;
   if (S.info) {
@@ -480,7 +782,7 @@ async function doHistory(redo) {
 /** Shows the selected entry again, so it reflects the staged changes. */
 function refreshPreview(action) {
   const r = S.selected != null ? S.rows[S.selected - S.offset] : null;
-  if (r) showPreview(r, action);
+  if (r && !r.folder && V.preview !== "off") showPreview(r, action);
 }
 
 async function replaceImage(row, frame) {
@@ -795,7 +1097,7 @@ async function doAdd() {
   const file = await T.dialog.open({ multiple: false, directory: false, title: "File to add" });
   if (!file) return;
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
-  const folder = sel ? sel.name.slice(0, sel.name.lastIndexOf("\\") + 1) : "data\\";
+  const folder = sel ? (sel.folder ? `${sel.name}\\` : sel.name.slice(0, sel.name.lastIndexOf("\\") + 1)) : "data\\";
   const input = el("input", { type: "text", class: "field", value: folder + file.split(/[\\/]/).pop(), spellcheck: "false" });
   const go = await ask("Add file", [el("p", { text: "Path inside the archive (an existing path is replaced):" }), input], [{ label: "Add", value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
@@ -810,14 +1112,16 @@ async function doAdd() {
 async function doRemove() {
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   const buttons = [];
-  if (sel) buttons.push({ label: "Selected entry", value: "one", primary: true });
-  buttons.push({ label: `All ${fmtNum(S.total)} in the list`, value: "all", primary: !sel });
+  if (sel) buttons.push({ label: sel.folder ? `Folder (${fmtNum(sel.count)} files)` : "Selected entry", value: "one", primary: true });
+  buttons.push({ label: `All ${fmtNum(S.matches)} in the list`, value: "all", primary: !sel });
   buttons.push({ label: "Cancel", value: null });
   const what = await ask("Remove from the saved archive", el("p", { text: "Nothing is deleted now: the entries are left out when you save the changes as a new archive." }), buttons);
   if (!what) return;
   try {
-    setPending(await invoke("stage_remove", { indices: what === "one" ? [sel.index] : [] }));
-    setStatus(`${what === "one" ? "1 entry" : `${fmtNum(S.total)} entries`} marked for removal`);
+    const list = what === "one" ? await entriesOf(sel) : [];
+    if (what === "one" && !list.length) return note("Remove", "This folder holds no files.");
+    setPending(await invoke("stage_remove", { indices: list }));
+    setStatus(`${what === "one" ? `${fmtNum(list.length)} ${list.length === 1 ? "entry" : "entries"}` : `${fmtNum(S.matches)} entries`} marked for removal`);
     refreshPreview();
   } catch (e) {
     await note("Could not stage the removal", errText(e), true);
@@ -1040,25 +1344,129 @@ $("names").addEventListener("change", async (e) => {
     setStatus(`Error: ${errText(err)}`);
   }
 });
-$("viewport").addEventListener("scroll", onScroll, { passive: true });
-$("viewport").addEventListener("click", (e) => {
-  const row = e.target.closest(".row");
-  if (row) select(Number(row.dataset.pos), false);
+function wireList(list) {
+  const { vp } = list;
+  vp.addEventListener("scroll", () => list.scrolled(), { passive: true });
+  vp.addEventListener("click", async (e) => {
+    const row = e.target.closest(".row");
+    if (!row) return;
+    const pos = Number(row.dataset.pos);
+    await list.pick(pos, false);
+    if (e.target.closest("[data-twist]")) await toggleFolder(list, pos);
+  });
+  vp.addEventListener("dblclick", (e) => {
+    const row = e.target.closest(".row");
+    if (row && list.row(Number(row.dataset.pos))?.folder) toggleFolder(list, Number(row.dataset.pos));
+  });
+  vp.addEventListener("keydown", async (e) => {
+    const st = list.st;
+    const page = Math.max(1, Math.floor(vp.clientHeight / ROW_H) - 1);
+    const cur = st.selected ?? -1;
+    const r = cur >= 0 ? list.row(cur) : null;
+    if (r?.folder && (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      if (e.key === "ArrowRight" && r.expanded) return list.pick(cur + 1);
+      if (e.key === "ArrowLeft" && !r.expanded) {
+        for (let q = cur - 1; q >= 0; q--) {
+          const up = list.row(q);
+          if (up?.folder && up.depth < r.depth) return list.pick(q);
+        }
+        return;
+      }
+      if ((e.key === "ArrowRight" && !r.expanded) || (e.key === "ArrowLeft" && r.expanded) || e.key === "Enter" || e.key === " ") return toggleFolder(list, cur);
+    }
+    const moves = { ArrowDown: cur + 1, ArrowUp: cur - 1, PageDown: cur + page, PageUp: cur - page, Home: 0, End: st.total - 1 };
+    if (e.key in moves) {
+      e.preventDefault();
+      list.pick(cur < 0 && e.key === "ArrowDown" ? 0 : moves[e.key]);
+    }
+  });
+}
+wireList(mainList);
+wireList(folderList);
+
+for (const b of document.querySelectorAll("#view-seg button")) b.addEventListener("click", () => setLayout(b.dataset.layout));
+for (const b of document.querySelectorAll("#preview-seg button")) b.addEventListener("click", () => setPreviewMode(b.dataset.preview));
+for (const b of document.querySelectorAll("#colhead button")) b.addEventListener("click", () => setSort(b.dataset.sort, V.sort === b.dataset.sort ? !V.desc : false));
+$("sort").addEventListener("change", (e) => setSort(e.target.value, false));
+$("sort-dir").addEventListener("click", () => setSort(V.sort, !V.desc));
+$("size-filter").addEventListener("change", (e) => {
+  V.size = e.target.value;
+  savePrefs();
+  applyView({ autoExpand: true });
 });
-$("viewport").addEventListener("keydown", (e) => {
-  const page = Math.max(1, Math.floor($("viewport").clientHeight / ROW_H) - 1);
-  const cur = S.selected ?? -1;
-  const moves = { ArrowDown: cur + 1, ArrowUp: cur - 1, PageDown: cur + page, PageUp: cur - page, Home: 0, End: S.total - 1 };
-  if (e.key in moves) {
+$("recursive").addEventListener("change", (e) => {
+  V.recursive = e.target.checked;
+  savePrefs();
+  applyView({ keepSelection: false, pane: false });
+});
+$("folder-all").addEventListener("click", () => {
+  V.folder = null;
+  F.selected = null;
+  folderList.draw();
+  $("folder-all").classList.add("on");
+  applyView({ keepSelection: false, pane: false });
+});
+$("btn-expand").addEventListener("click", () => expandAll(true));
+$("btn-collapse").addEventListener("click", () => expandAll(false));
+$("btn-reset-filters").addEventListener("click", resetFilters);
+document.addEventListener("click", (e) => {
+  const d = $("kind-filter");
+  if (d.open && !d.contains(e.target)) d.open = false;
+});
+
+// drag the dividers between the panes; the sizes are remembered
+function dragSplit(handle, onMove, onDone) {
+  handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
-    select(cur < 0 && e.key === "ArrowDown" ? 0 : moves[e.key]);
-  }
-});
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("drag");
+    const move = (ev) => onMove(ev);
+    const up = () => {
+      handle.classList.remove("drag");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      onDone();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+}
+dragSplit(
+  $("split-main"),
+  (ev) => {
+    const main = document.querySelector("main").getBoundingClientRect();
+    if (V.preview === "bottom") V.previewH = Math.round(Math.min(main.height - 120, Math.max(120, main.bottom - ev.clientY)));
+    else V.listW = Math.round(Math.min(main.width - 240, Math.max(260, ev.clientX - main.left)));
+    applyPaneSizes();
+  },
+  () => {
+    savePrefs();
+    mainList.scrolled();
+  },
+);
+dragSplit(
+  $("split-folders"),
+  (ev) => {
+    const box = $("lists").getBoundingClientRect();
+    V.foldersW = Math.round(Math.min(box.width - 260, Math.max(140, ev.clientX - box.left)));
+    applyPaneSizes();
+  },
+  () => {
+    savePrefs();
+    folderList.scrolled();
+    mainList.scrolled();
+  },
+);
 window.addEventListener("resize", () => {
-  render();
-  onScroll();
+  mainList.scrolled();
+  folderList.scrolled();
 });
 window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+    e.preventDefault();
+    setPreviewMode(V.preview === "off" ? "right" : "off");
+  }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "o") {
     e.preventDefault();
     chooseArchive();
@@ -1080,6 +1488,8 @@ if (T.event?.listen) {
 }
 
 clearPreview();
+syncViewBar();
+buildKindFilter();
 
 invoke("startup_path")
   .then(async (p) => {

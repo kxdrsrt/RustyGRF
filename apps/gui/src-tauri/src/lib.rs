@@ -3,6 +3,7 @@
 pub mod act_editor;
 pub mod backend;
 pub mod pal_editor;
+pub mod view;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -72,6 +73,57 @@ async fn open_archive(
 #[tauri::command]
 async fn search(state: State<'_, AppState>, query: String) -> Res<usize> {
     with_session(&state, move |s| Ok(s.search(&query))).await
+}
+
+/// Arranges list `view` (0 main, 1 folder pane): filter, sort, flat or tree.
+#[tauri::command]
+async fn set_view(
+    state: State<'_, AppState>,
+    view: usize,
+    spec: view::ViewSpec,
+) -> Res<backend::ViewSummary> {
+    with_session(&state, move |s| s.set_view(view, spec)).await
+}
+
+#[tauri::command]
+async fn page_view(
+    state: State<'_, AppState>,
+    view: usize,
+    offset: usize,
+    limit: usize,
+) -> Res<Vec<Row>> {
+    with_session(&state, move |s| {
+        Ok(s.page_view(view, offset, limit.min(500)))
+    })
+    .await
+}
+
+/// Opens or closes a folder of a tree list; returns the number of lines.
+#[tauri::command]
+async fn tree_toggle(state: State<'_, AppState>, view: usize, path: String) -> Res<usize> {
+    with_session(&state, move |s| s.tree_toggle(view, &path)).await
+}
+
+#[tauri::command]
+async fn tree_set_all(state: State<'_, AppState>, view: usize, open: bool) -> Res<usize> {
+    with_session(&state, move |s| s.tree_set_all(view, open)).await
+}
+
+/// The line of an entry or folder in list `view` (a tree opens the way to it first).
+#[tauri::command]
+async fn locate(
+    state: State<'_, AppState>,
+    view: usize,
+    entry: Option<usize>,
+    folder: Option<String>,
+) -> Res<backend::Located> {
+    with_session(&state, move |s| s.locate(view, entry, folder.as_deref())).await
+}
+
+/// The entries below a folder of a tree list.
+#[tauri::command]
+async fn folder_entries(state: State<'_, AppState>, view: usize, path: String) -> Res<Vec<usize>> {
+    with_session(&state, move |s| s.folder_entries(view, &path)).await
 }
 
 #[tauri::command]
@@ -494,6 +546,12 @@ pub fn run() {
             search,
             page,
             set_names,
+            set_view,
+            page_view,
+            tree_toggle,
+            tree_set_all,
+            locate,
+            folder_entries,
             details,
             preview,
             extract,

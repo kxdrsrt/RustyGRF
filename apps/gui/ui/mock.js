@@ -10,6 +10,21 @@ if (!window.__TAURI__) {
     all.push({ index: i, name: `data\\${["sprite", "texture", "model", "wav", "luafiles514"][i % 5]}\\folder_${i % 37}\\item_${i}.${ext}`, size: (i * 7919) % 90000, kind: { spr: "sprite", act: "animation", bmp: "image", txt: "text", gat: "map", rsw: "map", rsm: "model", wav: "audio", lub: "text", pal: "palette", tga: "image" }[ext] });
   }
   let filtered = all;
+  const views = [];
+  // the visible lines of a mock tree (folders first, then files; same shape as the real backend)
+  const mockLines = (v) => {
+    const out = [];
+    const files = v.spec.layout === "tree";
+    const visit = (n, depth) => {
+      out.push({ index: 4294967295, name: n.path, size: 0, kind: "folder", stored: 0, depth, folder: true, expanded: v.expanded.has(n.key), count: n.count, bytes: n.bytes });
+      if (!v.expanded.has(n.key)) return;
+      n.folders.forEach((c) => visit(c, depth + 1));
+      if (files) n.files.forEach((r) => out.push({ ...r, stored: Math.floor(r.size / 2), depth: depth + 1, folder: false, expanded: false, count: 0, bytes: r.size }));
+    };
+    v.tree.root.folders.forEach((c) => visit(c, 0));
+    if (files) v.tree.root.files.forEach((r) => out.push({ ...r, stored: Math.floor(r.size / 2), depth: 0, folder: false, expanded: false, count: 0, bytes: r.size }));
+    v.lines = out;
+  };
 
   const swatch = (w, h, color, grid) => {
     const c = document.createElement("canvas");
@@ -64,6 +79,94 @@ if (!window.__TAURI__) {
             return all.length;
           case "open_archive":
             return { path: a.path, file_name: "mock.grf", format: "GRF 0x200", entries: all.length, files: all.length, file_size: 4155996888, encryption: null };
+          case "set_view": {
+            const sp = a.spec;
+            let idx = all;
+            const q = sp.query.toLowerCase().replaceAll("*", "");
+            if (q) idx = idx.filter((r) => r.name.toLowerCase().includes(q));
+            if (sp.kinds.length) idx = idx.filter((r) => sp.kinds.includes(r.kind === "text" && false ? "x" : r.kind));
+            if (sp.min_size) idx = idx.filter((r) => r.size >= sp.min_size);
+            if (sp.max_size) idx = idx.filter((r) => r.size <= sp.max_size);
+            if (sp.folder && !q) idx = idx.filter((r) => (sp.recursive ? r.name.toLowerCase().startsWith(sp.folder.toLowerCase() + "\\") : r.name.toLowerCase().startsWith(sp.folder.toLowerCase() + "\\") && !r.name.slice(sp.folder.length + 1).includes("\\")));
+            const base = (n) => n.slice(n.lastIndexOf("\\") + 1);
+            const keys = { name: (r) => base(r.name).toLowerCase(), path: (r) => r.name.toLowerCase(), type: (r) => r.name.split(".").pop(), size: (r) => r.size, stored: (r) => Math.floor(r.size / 2), offset: (r) => r.index };
+            idx = [...idx];
+            if (keys[sp.sort]) idx.sort((x, y) => (keys[sp.sort](x) > keys[sp.sort](y) ? 1 : keys[sp.sort](x) < keys[sp.sort](y) ? -1 : x.index - y.index));
+            if (sp.desc) idx.reverse();
+            const v = (views[a.view] ||= { expanded: new Set() });
+            v.spec = sp;
+            if (sp.layout === "flat") {
+              v.tree = null;
+              v.flat = idx;
+              if (a.view === 0) filtered = idx;
+              return { rows: idx.length, matches: idx.length };
+            }
+            const nodes = new Map();
+            const node = (path) => {
+              if (!path) return root;
+              const k = path.toLowerCase();
+              if (!nodes.has(k)) {
+                const cut = path.lastIndexOf("\\");
+                const n = { path, key: k, folders: [], files: [], count: 0, bytes: 0 };
+                nodes.set(k, n);
+                node(cut >= 0 ? path.slice(0, cut) : "").folders.push(n);
+              }
+              return nodes.get(k);
+            };
+            const root = { path: "", key: "", folders: [], files: [], count: 0, bytes: 0 };
+            for (const r of idx) node(r.name.includes("\\") ? r.name.slice(0, r.name.lastIndexOf("\\")) : "").files.push(r);
+            const sum = (n) => {
+              n.count = n.files.length;
+              n.bytes = n.files.reduce((t, r) => t + r.size, 0);
+              n.folders.sort((x, y) => (x.path.toLowerCase() > y.path.toLowerCase() ? 1 : -1));
+              for (const c of n.folders) {
+                sum(c);
+                n.count += c.count;
+                n.bytes += c.bytes;
+              }
+            };
+            sum(root);
+            v.tree = { root, nodes };
+            if (sp.auto_expand) v.expanded = sp.layout === "tree" && idx.length <= 3000 ? new Set(nodes.keys()) : new Set();
+            if (a.view === 0) filtered = idx;
+            mockLines(v);
+            return { rows: v.lines.length, matches: idx.length };
+          }
+          case "page_view": {
+            const v = views[a.view] || { flat: all, tree: null };
+            if (!v.tree) return (v.flat || all).slice(a.offset, a.offset + a.limit).map((r) => ({ ...r, stored: Math.floor(r.size / 2), depth: 0, folder: false, expanded: false, count: 0, bytes: r.size }));
+            return v.lines.slice(a.offset, a.offset + a.limit);
+          }
+          case "tree_toggle": {
+            const v = views[a.view];
+            const k = a.path.toLowerCase();
+            if (!v.expanded.delete(k)) v.expanded.add(k);
+            mockLines(v);
+            return v.lines.length;
+          }
+          case "tree_set_all": {
+            const v = views[a.view];
+            v.expanded = a.open ? new Set(v.tree.nodes.keys()) : new Set();
+            mockLines(v);
+            return v.lines.length;
+          }
+          case "locate": {
+            const v = views[a.view];
+            if (!v.tree) return { line: a.entry == null ? null : v.flat.findIndex((r) => r.index === a.entry), rows: v.flat.length };
+            const path = a.entry != null ? all[a.entry].name : a.folder || "";
+            const parts = path.split("\\");
+            for (let i = 1; i < parts.length; i++) v.expanded.add(parts.slice(0, i).join("\\").toLowerCase());
+            mockLines(v);
+            return { line: v.lines.findIndex((r) => (a.entry != null ? r.index === a.entry : r.folder && r.name.toLowerCase() === path.toLowerCase())), rows: v.lines.length };
+          }
+          case "folder_entries": {
+            const v = views[a.view];
+            const n = v.tree.nodes.get(a.path.toLowerCase());
+            const out = [];
+            const walk = (x) => (out.push(...x.files.map((r) => r.index)), x.folders.forEach(walk));
+            if (n) walk(n);
+            return out;
+          }
           case "search": {
             const q = a.query.toLowerCase();
             filtered = !q ? all : all.filter((r) => r.name.toLowerCase().includes(q.replaceAll("*", "")));

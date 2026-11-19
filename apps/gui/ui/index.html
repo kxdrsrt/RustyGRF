@@ -37,17 +37,85 @@
     <button id="btn-changes" disabled title="Review and save the pending changes as a new archive">Changes (0)…</button>
   </div>
 
-  <main>
+  <div class="toolbar viewbar" aria-label="View">
+    <span class="muted">View</span>
+    <div class="seg" id="view-seg" role="group" aria-label="List layout">
+      <button type="button" data-layout="list" title="Flat list: name, folder, size">List</button>
+      <button type="button" data-layout="details" title="Flat table with sortable columns">Details</button>
+      <button type="button" data-layout="tree" title="Folder tree with files">Tree</button>
+      <button type="button" data-layout="folders" title="Folders on the left, the files of the chosen folder on the right">Folders</button>
+    </div>
+    <label class="muted" for="sort">Sort
+      <select id="sort" disabled>
+        <option value="archive">Stored order</option>
+        <option value="name">Name</option>
+        <option value="path">Path</option>
+        <option value="type">Type</option>
+        <option value="size">Size</option>
+        <option value="stored">Stored size</option>
+        <option value="offset">Position in file</option>
+      </select>
+    </label>
+    <button id="sort-dir" type="button" disabled title="Ascending or descending">↑</button>
+    <details id="kind-filter" class="pop">
+      <summary class="btnlike" title="Show only some kinds of file">Type: all</summary>
+      <div class="popbody" id="kind-list"></div>
+    </details>
+    <label class="muted" for="size-filter">Size
+      <select id="size-filter" disabled>
+        <option value="">any</option>
+        <option value="1k-">over 1 KB</option>
+        <option value="100k-">over 100 KB</option>
+        <option value="1m-">over 1 MB</option>
+        <option value="10m-">over 10 MB</option>
+        <option value="-1k">under 1 KB</option>
+        <option value="-100k">under 100 KB</option>
+        <option value="-1m">under 1 MB</option>
+      </select>
+    </label>
+    <label id="recursive-wrap" class="muted" hidden title="Also list the files of the subfolders"><input type="checkbox" id="recursive"> Subfolders</label>
+    <button id="btn-expand" type="button" hidden title="Open every folder">Expand all</button>
+    <button id="btn-collapse" type="button" hidden title="Close every folder">Collapse all</button>
+    <button id="btn-reset-filters" type="button" disabled title="Clear search, type and size filters">Reset</button>
+    <span class="spacer"></span>
+    <span class="muted">Preview</span>
+    <div class="seg" id="preview-seg" role="group" aria-label="Preview position">
+      <button type="button" data-preview="right" title="Preview beside the list">Right</button>
+      <button type="button" data-preview="bottom" title="Preview below the list">Bottom</button>
+      <button type="button" data-preview="off" title="Hide the preview (Cmd/Ctrl+Shift+P)">Off</button>
+    </div>
+  </div>
+
+  <main class="pv-right">
     <section id="list-pane" aria-label="Entries">
       <div id="empty" class="empty">
         <h1>RustyGRF</h1>
         <p>Open a GRF archive, or drop it on this window.</p>
         <button id="btn-open-2" class="primary">Open archive…</button>
       </div>
-      <div id="viewport" hidden tabindex="0">
-        <div id="spacer"><div id="rows"></div></div>
+      <div id="lists" hidden>
+        <div id="folder-pane" hidden aria-label="Folders">
+          <button type="button" id="folder-all" class="folder-all" title="Show the files of every folder">All files</button>
+          <div id="folder-viewport" tabindex="0">
+            <div id="folder-spacer"><div id="folder-rows"></div></div>
+          </div>
+        </div>
+        <div id="split-folders" class="split v" hidden role="separator" aria-orientation="vertical"></div>
+        <div id="files-pane">
+          <div id="colhead" hidden>
+            <span></span>
+            <button type="button" data-sort="name">Name</button>
+            <button type="button" data-sort="type">Type</button>
+            <button type="button" data-sort="size">Size</button>
+            <button type="button" data-sort="stored">Stored</button>
+          </div>
+          <div id="viewport" tabindex="0">
+            <div id="spacer"><div id="rows"></div></div>
+          </div>
+        </div>
       </div>
     </section>
+    <div id="split-main" class="split v" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
     <section id="preview-pane" aria-label="Preview">
       <div id="preview-head"></div>
       <div id="preview-body"></div>

@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::act_editor::{self, ActEdit, ActFrameView};
 use crate::pal_editor::{self, PalEdit};
+use crate::view::{self, Line, Meta, Tree, ViewSpec};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_core::build::{BuildOptions, build};
@@ -169,7 +170,10 @@ pub struct Session {
     arc: Archive,
     mode: NameMode,
     names: Vec<String>,
+    /// The entries matching the main list (any layout), for "all in the list".
     filtered: Vec<usize>,
+    /// The main list (0) and the folder pane (1).
+    views: [ViewState; 2],
     pending: Vec<Change>,
     /// Earlier states of `pending` (newest last) for undo, and states undone for redo.
     undo: Vec<Vec<Change>>,
@@ -177,6 +181,30 @@ pub struct Session {
     keys: OnceLock<HashMap<Vec<u8>, usize>>,
     /// The key of GRF Editor's encryption, if the archive was opened with one.
     crypt_key: Option<rgrf_core::grfcrypt::Key>,
+}
+
+/// One arranged list: its settings, and either the flat order or a folder tree with its open folders.
+#[derive(Default)]
+struct ViewState {
+    spec: ViewSpec,
+    flat: Vec<usize>,
+    tree: Option<Tree>,
+    lines: Vec<Line>,
+    expanded: std::collections::HashSet<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq, Default)]
+pub struct Located {
+    pub line: Option<usize>,
+    pub rows: usize,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct ViewSummary {
+    /// Lines the list shows (folders count in a tree).
+    pub rows: usize,
+    /// Entries that match.
+    pub matches: usize,
 }
 
 /// A change waiting to be saved into a new archive (the open archive is never modified).
@@ -263,11 +291,22 @@ pub struct EncryptionOut {
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct Row {
+    /// The entry; `FOLDER_ROW` for a folder line.
     pub index: usize,
     pub name: String,
     pub size: u32,
     pub kind: &'static str,
+    pub stored: u32,
+    /// Tree layouts: indentation, and for folders the state and totals.
+    pub depth: u16,
+    pub folder: bool,
+    pub expanded: bool,
+    pub count: usize,
+    pub bytes: u64,
 }
+
+/// `Row::index` of a folder line (no entry has this number).
+pub const FOLDER_ROW: usize = u32::MAX as usize;
 
 #[derive(Serialize, Debug)]
 pub struct Details {
@@ -898,6 +937,7 @@ impl Session {
             mode,
             names,
             filtered,
+            views: Default::default(),
             pending: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1391,6 +1431,7 @@ impl Session {
         self.mode = m;
         self.names = Self::display_names(&self.arc, m);
         self.filtered = (0..self.names.len()).collect();
+        self.views = Default::default();
         Ok(())
     }
 
@@ -1413,25 +1454,226 @@ impl Session {
         }
     }
 
-    /// Sets the filter (empty = everything; `*` and `?` make a glob, else a substring) and returns
-    /// the number of matches.
+    /// Sets the filter of the main list (empty = everything; `*` and `?` make a glob, else a
+    /// substring) and returns the number of matches.
     pub fn search(&mut self, query: &str) -> usize {
-        self.filtered = self.arc.select(Some(query), self.mode);
-        self.filtered.len()
+        let spec = ViewSpec {
+            query: query.to_string(),
+            layout: "flat".into(),
+            ..ViewSpec::default()
+        };
+        self.set_view(0, spec).map_or(0, |s| s.matches)
     }
 
     pub fn page(&self, offset: usize, limit: usize) -> Vec<Row> {
-        self.filtered
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|&i| Row {
+        self.page_view(0, offset, limit)
+    }
+
+    fn meta_of(&self, i: usize) -> Meta {
+        let e = &self.arc.entries()[i];
+        Meta {
+            size: e.size,
+            stored: e.zsize,
+            offset: e.abs_offset(),
+        }
+    }
+
+    /// Arranges list `view` (0 main, 1 folder pane): filter, sort and layout.
+    pub fn set_view(&mut self, view: usize, spec: ViewSpec) -> Result<ViewSummary, String> {
+        if view >= 2 {
+            return Err("no such list".into());
+        }
+        let mut idx: Vec<usize> = if spec.query.is_empty() {
+            (0..self.names.len()).collect()
+        } else {
+            self.arc.select(Some(&spec.query), self.mode)
+        };
+        if let (Some(folder), "flat", true) =
+            (&spec.folder, spec.layout.as_str(), spec.query.is_empty())
+        {
+            view::in_folder(&mut idx, &self.names, folder, spec.recursive);
+        }
+        let meta = |i: usize| self.meta_of(i);
+        view::filter_indices(&mut idx, &self.names, &meta, &kind_of, &spec);
+        view::sort_indices(&mut idx, &self.names, &meta, &spec.sort, spec.desc);
+        let matches = idx.len();
+        let tree_layout = matches!(spec.layout.as_str(), "tree" | "folders");
+        let (tree, lines, flat) = if tree_layout {
+            let folders_desc = spec.desc && matches!(spec.sort.as_str(), "name" | "path");
+            (
+                Some(Tree::build(&self.names, &idx, &meta, folders_desc)),
+                Vec::new(),
+                Vec::new(),
+            )
+        } else {
+            (None, Vec::new(), idx.clone())
+        };
+        let st = &mut self.views[view];
+        if let Some(t) = &tree {
+            if spec.auto_expand {
+                st.expanded = if spec.layout == "tree" && matches <= view::AUTO_EXPAND_LIMIT {
+                    t.all_keys()
+                } else {
+                    Default::default()
+                };
+            }
+            st.lines = view::visible(t, &st.expanded, spec.layout == "tree");
+        } else {
+            st.lines = lines;
+        }
+        st.tree = tree;
+        st.flat = flat;
+        let rows = if st.tree.is_some() {
+            st.lines.len()
+        } else {
+            st.flat.len()
+        };
+        st.spec = spec;
+        if view == 0 {
+            self.filtered = idx;
+        }
+        Ok(ViewSummary { rows, matches })
+    }
+
+    pub fn page_view(&self, view: usize, offset: usize, limit: usize) -> Vec<Row> {
+        let Some(st) = self.views.get(view) else {
+            return Vec::new();
+        };
+        let file_row = |i: usize, depth: u16| {
+            let e = &self.arc.entries()[i];
+            Row {
                 index: i,
                 name: self.names[i].clone(),
-                size: self.arc.entries()[i].size,
+                size: e.size,
                 kind: kind_of(&self.names[i]),
-            })
-            .collect()
+                stored: e.zsize,
+                depth,
+                folder: false,
+                expanded: false,
+                count: 0,
+                bytes: u64::from(e.size),
+            }
+        };
+        match &st.tree {
+            None => {
+                // before the first `set_view` the list is the whole archive
+                if st.spec.layout.is_empty() && st.flat.is_empty() && self.views_unset(view) {
+                    return self
+                        .filtered
+                        .iter()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|&i| file_row(i, 0))
+                        .collect();
+                }
+                st.flat
+                    .iter()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|&i| file_row(i, 0))
+                    .collect()
+            }
+            Some(t) => st
+                .lines
+                .iter()
+                .skip(offset)
+                .take(limit)
+                .map(|l| match *l {
+                    Line::File { entry, depth } => file_row(entry, depth),
+                    Line::Folder { node, depth } => {
+                        let n = &t.nodes[node];
+                        Row {
+                            index: FOLDER_ROW,
+                            name: n.path.clone(),
+                            size: 0,
+                            kind: "folder",
+                            stored: 0,
+                            depth,
+                            folder: true,
+                            expanded: st.expanded.contains(&n.key),
+                            count: n.total_files,
+                            bytes: n.total_bytes,
+                        }
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn views_unset(&self, view: usize) -> bool {
+        view == 0 && self.views[0].spec == ViewSpec::default()
+    }
+
+    fn relayout(&mut self, view: usize) -> usize {
+        let st = &mut self.views[view];
+        if let Some(t) = &st.tree {
+            st.lines = view::visible(t, &st.expanded, st.spec.layout == "tree");
+            st.lines.len()
+        } else {
+            st.flat.len()
+        }
+    }
+
+    /// Opens or closes one folder of a tree list; returns the number of lines.
+    pub fn tree_toggle(&mut self, view: usize, path: &str) -> Result<usize, String> {
+        let st = self.views.get_mut(view).ok_or("no such list")?;
+        let key = path.trim_matches('\\').to_lowercase();
+        if !st.expanded.remove(&key) {
+            st.expanded.insert(key);
+        }
+        Ok(self.relayout(view))
+    }
+
+    /// Opens or closes every folder of a tree list.
+    pub fn tree_set_all(&mut self, view: usize, open: bool) -> Result<usize, String> {
+        let st = self.views.get_mut(view).ok_or("no such list")?;
+        st.expanded = match (&st.tree, open) {
+            (Some(t), true) => t.all_keys(),
+            _ => Default::default(),
+        };
+        Ok(self.relayout(view))
+    }
+
+    /// The line of an entry (or of a folder, by path) in list `view`. In a tree list the folders
+    /// above it are opened first, so it is always visible; `rows` is the number of lines after that.
+    pub fn locate(
+        &mut self,
+        view: usize,
+        entry: Option<usize>,
+        folder: Option<&str>,
+    ) -> Result<Located, String> {
+        let path = match (entry, folder) {
+            (Some(i), _) => self.names.get(i).cloned().ok_or("no such entry")?,
+            (None, Some(f)) => f.to_string(),
+            _ => return Ok(Located::default()),
+        };
+        let st = self.views.get_mut(view).ok_or("no such list")?;
+        if st.tree.is_none() {
+            return Ok(Located {
+                line: entry.and_then(|e| st.flat.iter().position(|&x| x == e)),
+                rows: st.flat.len(),
+            });
+        }
+        st.expanded.extend(view::ancestors(&path));
+        let rows = self.relayout(view);
+        let st = &self.views[view];
+        let Some(t) = &st.tree else {
+            return Ok(Located::default());
+        };
+        let want = path.trim_matches('\\').to_lowercase();
+        let line = st.lines.iter().position(|l| match *l {
+            Line::File { entry: e, .. } => Some(e) == entry,
+            Line::Folder { node, .. } => entry.is_none() && t.nodes[node].key == want,
+        });
+        Ok(Located { line, rows })
+    }
+
+    /// The entries below a folder of a tree list (all matches for an empty path).
+    pub fn folder_entries(&self, view: usize, path: &str) -> Result<Vec<usize>, String> {
+        let st = self.views.get(view).ok_or("no such list")?;
+        let t = st.tree.as_ref().ok_or("this list has no folders")?;
+        let n = t.find(path).ok_or("no such folder")?;
+        Ok(t.files_below(n))
     }
 
     pub fn details(&self, index: usize) -> Result<Details, String> {
@@ -2342,6 +2584,117 @@ mod tests {
             .iter()
             .position(|n| n.to_ascii_lowercase().ends_with(name))
             .unwrap()
+    }
+
+    #[test]
+    fn lists_are_filtered_sorted_and_shown_as_a_tree() {
+        let (dir, grf) = sample("views");
+        let mut s = Session::open(&grf).unwrap();
+        let spec = |f: &dyn Fn(&mut ViewSpec)| {
+            let mut v = ViewSpec {
+                layout: "flat".into(),
+                ..ViewSpec::default()
+            };
+            f(&mut v);
+            v
+        };
+        // sorting by size puts the smallest first and descending reverses it
+        let up = s.set_view(0, spec(&|v| v.sort = "size".into())).unwrap();
+        assert_eq!((up.rows, up.matches), (7, 7));
+        let sizes: Vec<u32> = s.page_view(0, 0, 10).iter().map(|r| r.size).collect();
+        assert!(sizes.windows(2).all(|w| w[0] <= w[1]), "{sizes:?}");
+        s.set_view(0, spec(&|v| (v.sort = "size".into(), v.desc = true).0))
+            .unwrap();
+        let sizes: Vec<u32> = s.page_view(0, 0, 10).iter().map(|r| r.size).collect();
+        assert!(sizes.windows(2).all(|w| w[0] >= w[1]), "{sizes:?}");
+        // a type filter keeps only that kind; "all in the list" follows it
+        let t = s
+            .set_view(0, spec(&|v| v.kinds = vec!["text".into()]))
+            .unwrap();
+        assert_eq!(t.matches, 2);
+        assert_eq!(s.filtered().len(), 2);
+        assert!(s.page_view(0, 0, 10).iter().all(|r| r.kind == "text"));
+        // two lists are independent
+        let both = s.set_view(1, spec(&|_| {})).unwrap();
+        assert_eq!(both.rows, 7);
+        assert_eq!(s.filtered().len(), 2);
+
+        // a tree: folders first, files below open folders, counts include subfolders
+        let tree = |q: &str, auto: bool| ViewSpec {
+            query: q.into(),
+            layout: "tree".into(),
+            auto_expand: auto,
+            ..ViewSpec::default()
+        };
+        let closed = s.set_view(0, tree("", false)).unwrap();
+        let rows = s.page_view(0, 0, 100);
+        assert_eq!(rows.len(), closed.rows);
+        assert!(
+            rows.iter()
+                .filter(|r| r.folder)
+                .all(|r| r.index == FOLDER_ROW && !r.expanded)
+        );
+        let top: Vec<&Row> = rows.iter().filter(|r| r.depth == 0).collect();
+        let files_top = top.iter().filter(|r| !r.folder).count();
+        let counted: usize = top.iter().filter(|r| r.folder).map(|r| r.count).sum();
+        assert_eq!(counted + files_top, 7, "every entry is in the tree once");
+        // opening everything shows all seven files
+        s.tree_set_all(0, true).unwrap();
+        let all = s.page_view(0, 0, 100);
+        assert_eq!(all.iter().filter(|r| !r.folder).count(), 7);
+        // a search opens the folders by itself
+        let found = s.set_view(0, tree("*.txt", true)).unwrap();
+        assert_eq!(found.matches, 2);
+        assert_eq!(
+            s.page_view(0, 0, 100).iter().filter(|r| !r.folder).count(),
+            2
+        );
+        // reveal: collapse, then open the way to one entry
+        s.set_view(0, tree("", true)).unwrap();
+        s.tree_set_all(0, false).unwrap();
+        let target = find(&s, ".txt");
+        let at = s.locate(0, Some(target), None).unwrap();
+        let line = at.line.unwrap();
+        assert_eq!(s.page_view(0, line, 1)[0].index, target);
+        assert!(at.rows > line);
+        // in a flat list it is the position in the order
+        s.set_view(
+            0,
+            ViewSpec {
+                layout: "flat".into(),
+                sort: "size".into(),
+                ..ViewSpec::default()
+            },
+        )
+        .unwrap();
+        let flat = s.locate(0, Some(target), None).unwrap();
+        assert_eq!(s.page_view(0, flat.line.unwrap(), 1)[0].index, target);
+        s.set_view(0, tree("", true)).unwrap();
+        s.tree_set_all(0, false).unwrap();
+        // a folder's entries, and a folder toggle
+        let folder = s
+            .page_view(0, 0, 100)
+            .into_iter()
+            .find(|r| r.folder)
+            .unwrap();
+        let below = s.folder_entries(0, &folder.name).unwrap();
+        assert_eq!(below.len(), folder.count);
+        let before = s.page_view(0, 0, 500).len();
+        let after = s.tree_toggle(0, &folder.name).unwrap();
+        assert_ne!(before, after);
+        // the folder pane lists folders only
+        s.set_view(
+            1,
+            ViewSpec {
+                layout: "folders".into(),
+                auto_expand: true,
+                ..ViewSpec::default()
+            },
+        )
+        .unwrap();
+        assert!(s.page_view(1, 0, 100).iter().all(|r| r.folder));
+        assert!(s.set_view(2, spec(&|_| {})).is_err());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -65,6 +65,27 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(info)
         }
         "search" => with(state, |s| to_json(s.search(&arg::<String>(a, "query")?))),
+        "set_view" => with(state, |s| {
+            let spec: rustygrf_gui_lib::view::ViewSpec = arg(a, "spec")?;
+            to_json(s.set_view(arg(a, "view")?, spec)?)
+        }),
+        "page_view" => with(state, |s| {
+            let limit: usize = arg(a, "limit")?;
+            to_json(s.page_view(arg(a, "view")?, arg(a, "offset")?, limit.min(500)))
+        }),
+        "tree_toggle" => with(state, |s| {
+            to_json(s.tree_toggle(arg(a, "view")?, &arg::<String>(a, "path")?)?)
+        }),
+        "tree_set_all" => with(state, |s| {
+            to_json(s.tree_set_all(arg(a, "view")?, arg(a, "open")?)?)
+        }),
+        "locate" => with(state, |s| {
+            let folder: Option<String> = arg(a, "folder")?;
+            to_json(s.locate(arg(a, "view")?, arg(a, "entry")?, folder.as_deref())?)
+        }),
+        "folder_entries" => with(state, |s| {
+            to_json(s.folder_entries(arg(a, "view")?, &arg::<String>(a, "path")?)?)
+        }),
         "page" => with(state, |s| {
             to_json(s.page(arg(a, "offset")?, arg::<usize>(a, "limit")?.min(500)))
         }),

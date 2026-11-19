@@ -24,7 +24,8 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Karten: GAT-Vorschau, Karten-Editor (Zellen), `MapExtractor` | `map info|png|check` | ✅ GAT/RSW lesen, schreiben, Bild, Ressourcen-Check (M7e); Zellen bearbeiten ✅ (`map gat-set`, Rechteck: Typ und/oder Höhe; GUI mit Mausauswahl 🔨), Karte extrahieren 🔨 |
 | 3D: RSM, STR (`OpenGLViewport`) | `map info` (RSM-Struktur und Texturen), `map check` | ✅ RSM strukturell lesen (M7e); STR-Vorschau als GIF (vereinfacht) ✅; RSM-3D-Ansicht mit Knotenanimation ✅ (654 animierte Modelle); Karten-3D (Gelände, Modelle, Wasser) ✅; Wasser als Bildzyklus ✅, bewegte Modelle in Karten ✅, Wasserwellen 🔨 |
 | Audio/Video (`PreviewWav`, `PreviewBink`) | GUI: WAV/MP3/OGG abspielen (ADPCM → PCM) | ✅ Audio; Bink-Video ❓ |
-| `ThumbDb`, `TypeExplorer`, Raw-/Ordnerstruktur, Ressourcen-Indexer | `ls`, `info` teilweise | ❓ |
+| Ordnerstruktur (Baumansicht), Sortierung, Filter | `ls` | ✅ GUI: Ansichten List, Details, Tree, Folders; Sortierung nach 7 Kriterien; Filter nach Typ und Größe; Vorschau rechts/unten/aus (siehe `apps/gui/README.md`) |
+| `ThumbDb`, `TypeExplorer`, Ressourcen-Indexer | `ls`, `info` teilweise | ❓ |
 | Hex-Ansicht (Be.HexBox), `MagicEdit` | GUI: erste 512 Byte als Hexdump für unbekannte Dateien | ✅ Ansicht; Bearbeiten ❓ |
 | GrfCL (Kommandozeile) | `rgrf` | ✅ (Vergleich in `BENCHMARKS.md`) |
 
