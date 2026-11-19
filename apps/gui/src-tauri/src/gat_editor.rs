@@ -21,15 +21,14 @@ pub fn apply(data: &[u8], edit: &GatEdit) -> Result<(Vec<u8>, usize), String> {
     if edit.kind.is_none() && edit.height.is_none() {
         return Err("choose a type and/or a height to set".into());
     }
-    if let Some(h) = edit.height {
-        if !h.is_finite() || h.abs() > 10_000.0 {
-            return Err("the height must be a reasonable number".into());
-        }
+    if edit
+        .height
+        .is_some_and(|h| !h.is_finite() || h.abs() > 10_000.0)
+    {
+        return Err("the height must be a reasonable number".into());
     }
-    if let Some(k) = edit.kind {
-        if !(0..=6).contains(&k) {
-            return Err("the cell type is 0 to 6".into());
-        }
+    if edit.kind.is_some_and(|k| !(0..=6).contains(&k)) {
+        return Err("the cell type is 0 to 6".into());
     }
     let mut g = Gat::parse(data).map_err(|e| e.to_string())?;
     let changed = g
