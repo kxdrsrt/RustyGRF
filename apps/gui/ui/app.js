@@ -2,7 +2,7 @@
 
 const T = window.__TAURI__;
 const invoke = (cmd, args) => T.core.invoke(cmd, args);
-const ROW_H = 24;
+let ROW_H = 24; // changed by the list density setting
 const OVERSCAN = 6;
 const $ = (id) => document.getElementById(id);
 
@@ -63,10 +63,20 @@ const errText = (e) => (typeof e === "string" ? e : e?.message || JSON.stringify
 
 // ---------- dialogs ----------
 
-function ask(title, body, buttons) {
+/** The icon of a message: what the title and the buttons suggest. */
+function dialogKind(title, buttons) {
+  if (/^(could not|cannot|error)|failed|damaged/i.test(title)) return "error";
+  if (/^(remove|open another|discard|overwrite|delete)/i.test(title)) return "warning";
+  if (/encrypted|password/i.test(title)) return "lock";
+  if (/^(extracted|saved|done|verified|written)/i.test(title)) return "success";
+  return buttons.length > 1 ? "question" : "info";
+}
+
+function ask(title, body, buttons, kind) {
   return new Promise((resolve) => {
     const dlg = $("dlg");
-    $("dlg-title").textContent = title;
+    const k = kind || dialogKind(title, buttons);
+    $("dlg-title").replaceChildren(svgIcon(k, `dlg-ic k-${k}`), title);
     const b = $("dlg-body");
     b.replaceChildren(...(Array.isArray(body) ? body : [body]).filter(Boolean));
     const actions = $("dlg-actions");
@@ -89,7 +99,7 @@ function ask(title, body, buttons) {
 }
 
 const note = (title, text, isError = false) =>
-  ask(title, el("p", { class: isError ? "error" : "", text }), [{ label: "OK", value: true, primary: true }]);
+  ask(title, el("p", { class: isError ? "error" : "", text }), [{ label: "OK", value: true, primary: true }], isError ? "error" : undefined);
 
 // ---------- archive ----------
 
@@ -139,7 +149,7 @@ async function openWithKey(path) {
 }
 
 async function openPath(path, force = false) {
-  if (!force && S.changes.length) {
+  if (!force && S.changes.length && SET.warnDiscard) {
     const go = await ask("Open another archive?", el("p", { text: `${fmtNum(S.changes.length)} pending change(s) in the open archive will be lost.` }), [{ label: "Open anyway", value: true }, { label: "Cancel", value: null, primary: true }]);
     if (!go) return;
   }
@@ -162,8 +172,11 @@ async function openPath(path, force = false) {
   S.changed = new Map();
   updateEditBar();
   $("search").value = "";
-  $("names").value = "cp949";
+  $("names").value = SET.names;
   S.query = "";
+  if (SET.names !== "cp949") await invoke("set_names", { mode: SET.names });
+  SET.lastArchive = path;
+  saveSettings();
   await runSearch("");
   setStatus(
     `${S.info.file_name}: ${S.info.format}, ${fmtNum(S.info.files)} files, ${fmtBytes(S.info.file_size)}`,
@@ -1540,6 +1553,8 @@ async function doBuild() {
   const method = el("select", {}, el("option", { value: "zlib", text: "zlib (every client)", selected: true }), el("option", { value: "zopfli", text: "zopfli (smaller, slow, zlib-compatible)" }), el("option", { value: "lzma", text: "LZMA (only clients with LZMA support)" }));
   const format = el("select", {}, el("option", { value: "0x200", text: "0x200 (every client)", selected: true }), el("option", { value: "0x300", text: "0x300 (64-bit offsets, for archives over 4 GB)" }), el("option", { value: "0x103", text: "0x103 (old format, scrambled, for very old clients)" }), el("option", { value: "0x102", text: "0x102 (old format, scrambled)" }));
   const dedupe = el("input", { type: "checkbox" });
+  method.value = SET.method;
+  format.value = SET.format;
   const body = [
     el("p", { text: `Pack ${src}` }),
     el("div", { class: "form" }, el("label", { text: "Compression " }, method), el("label", { text: "Format " }, format), el("label", {}, dedupe, " Share identical files")),
@@ -1673,10 +1688,114 @@ async function doVerify() {
   }
 }
 
+// ---------- settings ----------
+
+const SETTINGS_KEY = "rustygrf-settings";
+const DEFAULTS = { theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, method: "zlib", format: "0x200", lastArchive: "" };
+const SET = (() => {
+  try {
+    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+  } catch {
+    return { ...DEFAULTS };
+  }
+})();
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(SET));
+  } catch {}
+}
+const DENSITY = { compact: 22, normal: 24, comfortable: 30 };
+
+/** Puts the settings on the page; called at start and after each change. */
+function applySettings() {
+  const root = document.documentElement;
+  const flag = (name, on, value = "") => (on ? root.setAttribute(name, value) : root.removeAttribute(name));
+  flag("data-theme", SET.theme !== "system", SET.theme);
+  flag("data-accent", SET.accent !== "orange", SET.accent);
+  flag("data-fontsize", SET.fontsize !== "normal", SET.fontsize);
+  flag("data-plainicons", SET.plainIcons);
+  flag("data-motion", SET.motion === "off", "off");
+  const rowH = DENSITY[SET.density] || 24;
+  if (rowH !== ROW_H) {
+    ROW_H = rowH;
+    root.style.setProperty("--row", `${rowH}px`);
+    if (typeof mainList !== "undefined" && S.info) {
+      mainList.reset(S.total, true);
+      folderList.reset(F.total, true);
+    }
+  } else root.style.setProperty("--row", `${rowH}px`);
+}
+
+function openSettings() {
+  const dlg = $("settings-dlg");
+  $("settings-title").replaceChildren(svgIcon("settings", "dlg-ic"), "Settings");
+  const change = (key, value) => {
+    SET[key] = value;
+    saveSettings();
+    applySettings();
+  };
+  const row = (label, control, hint) => el("div", { class: "srow" }, el("label", { text: label }), control, hint ? el("div", { class: "hint", text: hint }) : null);
+  const pick = (key, options, hint) => {
+    const sel = el("select", { "aria-label": key }, options.map(([v, t]) => el("option", { value: v, text: t, selected: SET[key] === v })));
+    sel.addEventListener("change", () => change(key, sel.value));
+    return sel;
+  };
+  const check = (key, text) => {
+    const i = el("input", { type: "checkbox", checked: !!SET[key] });
+    i.addEventListener("change", () => change(key, i.checked));
+    return el("label", { class: "check" }, i, text);
+  };
+  const accents = el("div", { class: "accents", role: "group", "aria-label": "Accent colour" }, [["orange", "#ea580c"], ["blue", "#3b82f6"], ["green", "#22a553"], ["purple", "#8b5cf6"]].map(([name, col]) => {
+    const b = el("button", { type: "button", title: name, "aria-label": name, "aria-pressed": String(SET.accent === name), class: SET.accent === name ? "on" : "", style: `background:${col}` });
+    b.addEventListener("click", () => {
+      change("accent", name);
+      for (const x of accents.children) {
+        x.classList.toggle("on", x === b);
+        x.setAttribute("aria-pressed", String(x === b));
+      }
+    });
+    return b;
+  }));
+  $("settings-body").replaceChildren(
+    el(
+      "div",
+      { class: "settings" },
+      el("h3", { text: "Appearance" }),
+      row("Theme", pick("theme", [["system", "Follow the system"], ["light", "Light"], ["dark", "Dark"]])),
+      row("Accent colour", accents),
+      row("Text size", pick("fontsize", [["small", "Small"], ["normal", "Normal"], ["large", "Large"]])),
+      row("List density", pick("density", [["compact", "Compact"], ["normal", "Normal"], ["comfortable", "Comfortable"]])),
+      row("File icons", check("plainIcons", "Plain icons (no colours by file type)")),
+      row("Animations", pick("motion", [["system", "Follow the system"], ["off", "Off"]]), "Turns off the arrow and other transitions."),
+      el("h3", { text: "When opening an archive" }),
+      row("File names", pick("names", [["cp949", "Korean (CP949)"], ["cp1252", "Latin-1 (as GRF Editor shows them)"], ["utf8", "UTF-8"]])),
+      row("List layout", pick("layout", [["last", "As last used"], ["list", "List"], ["details", "Details"], ["tree", "Tree"], ["folders", "Folders"]]), "Takes effect the next time the app starts."),
+      row("Preview", pick("preview", [["last", "As last used"], ["right", "Right"], ["bottom", "Bottom"], ["off", "Off"]]), "Takes effect the next time the app starts."),
+      row("Start-up", check("reopen", "Open the last archive again")),
+      row("Changes", check("warnDiscard", "Ask before pending changes are discarded")),
+      el("h3", { text: "Building archives" }),
+      row("Compression", pick("method", [["zlib", "zlib (every client)"], ["zopfli", "zopfli (smaller, slow)"], ["lzma", "LZMA (needs client support)"]])),
+      row("Format", pick("format", [["0x200", "0x200 (every client)"], ["0x300", "0x300 (over 4 GB)"], ["0x103", "0x103 (very old clients)"], ["0x102", "0x102 (very old clients)"]]), "Default of the Build… dialog; you can still change it there."),
+      el("p", { class: "muted", text: `Settings are stored in this app only. Shortcut: ${/Mac/.test(navigator.platform) ? "Cmd" : "Ctrl"}+, opens this window.` }),
+    ),
+  );
+  $("settings-actions").replaceChildren(
+    el("button", { type: "button", icon: "reset", text: "Reset to defaults", onclick: () => {
+      Object.assign(SET, DEFAULTS, { lastArchive: SET.lastArchive });
+      saveSettings();
+      applySettings();
+      openSettings();
+    } }),
+    el("button", { type: "button", class: "primary", icon: "success", text: "Done", onclick: () => dlg.close() }),
+  );
+  if (!dlg.open) dlg.showModal();
+}
+
 // ---------- wiring ----------
 
 let searchTimer = 0;
 $("btn-open").addEventListener("click", chooseArchive);
+$("btn-settings").addEventListener("click", openSettings);
 $("btn-open-2").addEventListener("click", chooseArchive);
 $("btn-merge").addEventListener("click", doMerge);
 $("btn-replace").addEventListener("click", doReplace);
@@ -1874,6 +1993,10 @@ window.addEventListener("resize", () => {
   folderList.scrolled();
 });
 window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+    e.preventDefault();
+    openSettings();
+  }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
     e.preventDefault();
     setPreviewMode(V.preview === "off" ? "right" : "off");
@@ -1898,12 +2021,22 @@ if (T.event?.listen) {
   });
 }
 
+// buttons whose words are hidden in narrow windows keep their name for screen readers and tooltips
+for (const b of document.querySelectorAll("button")) {
+  const t = b.querySelector("span:not(.sr)")?.textContent?.trim();
+  if (t && !b.hasAttribute("aria-label")) b.setAttribute("aria-label", t.replace(/…$/, ""));
+  if (t && !b.title) b.title = t;
+}
+if (SET.layout !== "last") V.layout = SET.layout;
+if (SET.preview !== "last") V.preview = SET.preview;
+applySettings();
 clearPreview();
 syncViewBar();
 buildKindFilter();
 
 invoke("startup_path")
   .then(async (p) => {
+    if (!p && SET.reopen && SET.lastArchive) return openPath(SET.lastArchive);
     if (!p) return;
     await openPath(p);
     const q = await invoke("startup_select");
