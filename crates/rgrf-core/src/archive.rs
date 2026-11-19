@@ -73,6 +73,9 @@ impl Archive<Source> {
             return Ok(Self::from_parts(src, c));
         }
         if rgz::is_gzip(&head[..n]) {
+            // the gzip stream is read from the start; positional reads move the cursor on Windows
+            let mut file = file;
+            std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0))?;
             let (c, data) = rgz::read_container(&file)?;
             return Ok(Self::from_parts(Source::Memory(data), c));
         }
