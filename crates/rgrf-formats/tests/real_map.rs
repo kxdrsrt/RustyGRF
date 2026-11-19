@@ -554,3 +554,85 @@ fn every_gnd_parses_with_valid_indices() {
         &bad[..bad.len().min(5)]
     );
 }
+
+#[test]
+fn texture_animations_of_rsm2_are_measured() {
+    use rgrf_formats::rsm_model::parse;
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let mut idx = arc.select(Some("*.rsm"), NameMode::Cp1252);
+    idx.extend(arc.select(Some("*.rsm2"), NameMode::Cp1252));
+    // kind -> (tracks, min value, max value, max frame, max keys)
+    let stats = Mutex::new(BTreeMap::<i32, (usize, f32, f32, i32, usize)>::new());
+    let models = std::sync::atomic::AtomicUsize::new(0);
+    let sample = Mutex::new(Vec::<String>::new());
+    idx.par_iter().for_each(|&i| {
+        let data = arc.read(i).unwrap().data;
+        let m = parse(&data).unwrap();
+        let mut any = false;
+        for n in &m.nodes {
+            for a in &n.tex_anims {
+                for t in &a.tracks {
+                    any = true;
+                    let mut st = stats.lock().unwrap();
+                    let e = st.entry(t.kind).or_insert((0, f32::MAX, f32::MIN, 0, 0));
+                    e.0 += 1;
+                    e.4 = e.4.max(t.keys.len());
+                    for &(f, v) in &t.keys {
+                        e.1 = e.1.min(v);
+                        e.2 = e.2.max(v);
+                        e.3 = e.3.max(f);
+                    }
+                    if sample.lock().unwrap().len() < 12 {
+                        sample.lock().unwrap().push(format!(
+                            "{} (length {}, rate {}, nodes {}) tex {} kind {} keys {:?}",
+                            arc.entries()[i].name.display(NameMode::Cp1252),
+                            m.animation_length,
+                            m.frame_rate,
+                            m.nodes.len(),
+                            a.texture,
+                            t.kind,
+                            &t.keys[..t.keys.len().min(4)]
+                        ));
+                    }
+                }
+            }
+        }
+        if any {
+            models.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+    let mut animated_models = std::collections::HashSet::new();
+    for &i in &idx {
+        let m = parse(&arc.read(i).unwrap().data).unwrap();
+        if rgrf_formats::rsm_model::has_texture_animation(&m) {
+            let n = arc.entries()[i].name.display(NameMode::Cp1252);
+            animated_models.insert(n.rsplit('\\').next().unwrap().to_ascii_lowercase());
+        }
+    }
+    let mut maps = Vec::new();
+    for i in arc.select(Some("*.rsw"), NameMode::Cp1252) {
+        let data = arc.read(i).unwrap().data;
+        let low = String::from_utf8_lossy(&data).to_ascii_lowercase();
+        let n = animated_models
+            .iter()
+            .filter(|m| low.contains(m.as_str()))
+            .count();
+        if n > 0 {
+            maps.push(format!(
+                "{} ({n})",
+                arc.entries()[i].name.display(NameMode::Cp1252)
+            ));
+        }
+    }
+    eprintln!(
+        "maps with texture-animated models: {:?}",
+        &maps[..maps.len().min(10)]
+    );
+    eprintln!(
+        "models with texture animation: {}, (kind: tracks, min, max, last frame, most keys) {:?}\n{:#?}",
+        models.load(std::sync::atomic::Ordering::Relaxed),
+        stats.into_inner().unwrap(),
+        sample.into_inner().unwrap()
+    );
+}

@@ -62,6 +62,30 @@ struct TexturePool {
     by_key: HashMap<Vec<u8>, usize>,
 }
 
+/// The texture-coordinate transforms over the loop for the part of `node` that uses `texture`,
+/// when that texture moves; the node's texture number is returned with them.
+fn uv_samples(
+    model: &rsm_model::Model,
+    node: usize,
+    texture: &[u8],
+    duration: f32,
+    samples: usize,
+) -> Option<(usize, Vec<f32>)> {
+    let ti = model.nodes[node]
+        .textures
+        .iter()
+        .position(|t| t == texture)?;
+    if !rsm_model::texture_moves(model, node, ti) {
+        return None;
+    }
+    let v = (0..samples)
+        .flat_map(|k| {
+            rsm_model::uv_transform_at(model, node, ti, duration * k as f32 / samples as f32)
+        })
+        .collect();
+    Some((ti, v))
+}
+
 /// A moving model of a map: the triangles of all nodes in node space, merged by texture with a node
 /// number per vertex, and the node matrices over the loop (already turned like the static models:
 /// y up, standing on 0, then y negated for the map's instance matrices).
@@ -79,14 +103,22 @@ fn animated_def(
         normals: Vec<f32>,
         uvs: Vec<f32>,
         nodes: Vec<f32>,
+        /// (node, texture number) and the transforms, for a texture that moves: such parts are
+        /// not merged with others
+        uv: Option<((usize, usize), Vec<f32>)>,
     }
+    let samples = sample_count(duration);
     let mut merged: Vec<Merged> = Vec::new();
     for ni in 0..model.nodes.len() {
         for p in rsm_model::node_parts(model, ni) {
             let texture = pool.get(s, keys, b"data\\texture\\", &p.texture);
+            let uv =
+                uv_samples(model, ni, &p.texture, duration, samples).map(|(ti, v)| ((ni, ti), v));
             let at = merged
                 .iter()
-                .position(|m| m.texture == texture)
+                .position(|m| {
+                    m.texture == texture && m.uv.as_ref().map(|u| u.0) == uv.as_ref().map(|u| u.0)
+                })
                 .unwrap_or_else(|| {
                     merged.push(Merged {
                         texture,
@@ -94,6 +126,7 @@ fn animated_def(
                         normals: Vec::new(),
                         uvs: Vec::new(),
                         nodes: Vec::new(),
+                        uv,
                     });
                     merged.len() - 1
                 });
@@ -105,7 +138,6 @@ fn animated_def(
             m.uvs.extend(p.uvs);
         }
     }
-    let samples = sample_count(duration);
     let view = rsm_model::view_matrix(model);
     let flip_y = [
         1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -129,6 +161,7 @@ fn animated_def(
                 normals: f32s(&m.normals),
                 uvs: f32s(&m.uvs),
                 nodes: Some(f32s(&m.nodes)),
+                uv_anim: m.uv.as_ref().map(|u| f32s(&u.1)),
             })
             .collect(),
         anim: Some(ModelAnimOut {
@@ -417,6 +450,10 @@ pub struct ModelPartOut {
     /// The node of every vertex (`f32`, base64), only for parts of moving models in a map.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nodes: Option<String>,
+    /// For a texture that moves (RSM 2.3): per animation sample six `f32` (`a b c d tx ty`,
+    /// base64) with `u' = a u + b v + tx`, `v' = c u + d v + ty`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uv_anim: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -2197,6 +2234,7 @@ impl Session {
                             normals: f32s(&flip_y(&p.normals)),
                             uvs: f32s(&p.uvs),
                             nodes: None,
+                            uv_anim: None,
                         })
                         .collect();
                     models.push(ModelDefOut { parts, anim: None });
@@ -2286,6 +2324,8 @@ impl Session {
                     normals: f32s(&p.normals),
                     uvs: f32s(&p.uvs),
                     nodes: None,
+                    uv_anim: uv_samples(&model, ni, &p.texture, duration, samples)
+                        .map(|(_, v)| f32s(&v)),
                 })
                 .collect();
             let mut matrices: Vec<f32> = Vec::with_capacity(samples * 16);

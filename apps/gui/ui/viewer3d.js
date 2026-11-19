@@ -7,8 +7,9 @@ const Viewer3D = (() => {
   const VS = `#version 300 es
 in vec3 aPos; in vec3 aNormal; in vec2 aUv;
 uniform mat4 uMvp; uniform mat4 uModel; uniform mat3 uNormalMat;
+uniform vec4 uUvA; uniform vec2 uUvT;
 out vec3 vNormal; out vec2 vUv;
-void main() { vNormal = uNormalMat * mat3(uModel) * aNormal; vUv = aUv; gl_Position = uMvp * uModel * vec4(aPos, 1.0); }`;
+void main() { vNormal = uNormalMat * mat3(uModel) * aNormal; vUv = vec2(uUvA.x * aUv.x + uUvA.y * aUv.y + uUvT.x, uUvA.z * aUv.x + uUvA.w * aUv.y + uUvT.y); gl_Position = uMvp * uModel * vec4(aPos, 1.0); }`;
   const FS = `#version 300 es
 precision mediump float;
 in vec3 vNormal; in vec2 vUv;
@@ -143,7 +144,7 @@ void main() {
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     const loc = (n) => gl.getUniformLocation(prog, n);
-    const U = { mvp: loc("uMvp"), model: loc("uModel"), nm: loc("uNormalMat"), tex: loc("uTex"), has: loc("uHasTex"), lit: loc("uLit"), light: loc("uLight"), alpha: loc("uAlpha"), flat: loc("uFlat") };
+    const U = { mvp: loc("uMvp"), model: loc("uModel"), nm: loc("uNormalMat"), tex: loc("uTex"), has: loc("uHasTex"), lit: loc("uLit"), light: loc("uLight"), alpha: loc("uAlpha"), flat: loc("uFlat"), uvA: loc("uUvA"), uvT: loc("uUvT") };
 
     const textures = model.textures.map((t) => {
       if (!t.png) return null;
@@ -180,7 +181,7 @@ void main() {
       attr("aPos", pos, 3);
       attr("aNormal", f32(p.normals), 3);
       attr("aUv", f32(p.uvs), 2);
-      return { vao, count: pos.length / 3, texture: textures[p.texture] || null };
+      return { vao, count: pos.length / 3, texture: textures[p.texture] || null, uv: p.uv_anim ? f32(p.uv_anim) : null };
     }
 
     const c = [0, 1, 2].map((i) => (model.min[i] + model.max[i]) / 2);
@@ -231,6 +232,13 @@ void main() {
         for (const p of node.parts) {
           gl.bindVertexArray(p.vao);
           gl.uniform1i(U.has, p.texture ? 1 : 0);
+          gl.uniform4f(U.uvA, 1, 0, 0, 1);
+          gl.uniform2f(U.uvT, 0, 0);
+          if (p.uv) {
+            const o = sample * 6;
+            gl.uniform4f(U.uvA, p.uv[o], p.uv[o + 1], p.uv[o + 2], p.uv[o + 3]);
+            gl.uniform2f(U.uvT, p.uv[o + 4], p.uv[o + 5]);
+          }
           gl.uniform3f(U.flat, 0.7, 0.7, 0.75);
           if (p.texture) gl.bindTexture(gl.TEXTURE_2D, p.texture);
           if (opts.wire) {
@@ -291,18 +299,23 @@ in vec3 aPos; in vec3 aNormal; in vec2 aUv; in float aNode; in float aSpeed;
 in vec4 aM0; in vec4 aM1; in vec4 aM2; in vec4 aM3;
 uniform mat4 uVp; uniform bool uAnim; uniform sampler2D uMats;
 uniform float uDuration; uniform float uSamples; uniform float uTime;
+uniform bool uUvAnim; uniform sampler2D uUvs;
 out vec3 vNormal; out vec2 vUv;
 void main() {
   mat4 m = mat4(aM0, aM1, aM2, aM3);
-  vec4 p = vec4(aPos, 1.0); vec3 n = aNormal;
+  vec4 p = vec4(aPos, 1.0); vec3 n = aNormal; vec2 uv = aUv;
   if (uAnim) {
     float at = mod(uTime * aSpeed, uDuration);
     int s = min(int(at / uDuration * uSamples), int(uSamples) - 1);
     int row = int(aNode + 0.5);
     mat4 a = mat4(texelFetch(uMats, ivec2(s * 4, row), 0), texelFetch(uMats, ivec2(s * 4 + 1, row), 0), texelFetch(uMats, ivec2(s * 4 + 2, row), 0), texelFetch(uMats, ivec2(s * 4 + 3, row), 0));
     p = a * p; n = mat3(a) * n;
+    if (uUvAnim) {
+      vec4 q = texelFetch(uUvs, ivec2(s * 2, 0), 0); vec4 r = texelFetch(uUvs, ivec2(s * 2 + 1, 0), 0);
+      uv = vec2(q.x * aUv.x + q.y * aUv.y + r.x, q.z * aUv.x + q.w * aUv.y + r.y);
+    }
   }
-  vNormal = mat3(m) * n; vUv = aUv;
+  vNormal = mat3(m) * n; vUv = uv;
   gl_Position = uVp * m * p;
 }`;
   const MODEL_FS = `#version 300 es
@@ -318,15 +331,16 @@ void main() {
   vec3 l = uLit ? clamp(uAmb + uDif * ndl, 0.0, 1.0) : vec3(1.0);
   outColor = vec4(t.rgb * l, 1.0);
 }`;
-  // The surface rises and falls in waves: a sine of the time and of the tile the point lies in
-  // (uWave = height, speed in degrees per 1/60 s, pitch in degrees per tile).
+  // The surface rises and falls in waves, as in the client (checked against roBrowser's Water.js: phase = speed * frame - 180 + pitch * (x + z) / 2 in degrees, frame at 60 per second, height = raw / 5)
+  // a sine of the time and of the position
+  // (uWave = height, speed in degrees per 1/60 s, pitch in degrees per 2 units).
   const WATER_VS = `#version 300 es
 in vec3 aPos; in vec2 aUv;
-uniform mat4 uVp; uniform float uTime; uniform vec3 uWave; uniform float uTile; out vec2 vUv;
+uniform mat4 uVp; uniform float uTime; uniform vec3 uWave; out vec2 vUv;
 void main() {
   vUv = aUv;
-  float tiles = aPos.x / uTile - aPos.z / uTile;
-  float ang = radians(uTime * 0.06 * uWave.y + tiles * uWave.z);
+  float tiles = (aPos.x - aPos.z) / 2.0;
+  float ang = radians(uTime * 0.06 * uWave.y - 180.0 + tiles * uWave.z);
   gl_Position = uVp * vec4(aPos.x, aPos.y + uWave.x * sin(ang), aPos.z, 1.0);
 }`;
   const WATER_FS = `#version 300 es
@@ -527,7 +541,20 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
           gl.vertexAttribPointer(l, 4, gl.FLOAT, false, 64, k * 16);
           gl.vertexAttribDivisor(l, 1);
         }
-        modelParts.push({ vao, count: pos.length / 3, instances: perModel[mi].length / 16, tex: textures[p.texture], anim });
+        let uvTex = null;
+        if (anim && p.uv_anim) {
+          uvTex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, uvTex);
+          const six = f32(p.uv_anim);
+          const padded = new Float32Array(anim.samples * 8);
+          for (let k = 0; k < anim.samples; k++) padded.set(six.subarray(k * 6, k * 6 + 6), k * 8);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, anim.samples * 2, 1, 0, gl.RGBA, gl.FLOAT, padded);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        }
+        modelParts.push({ vao, count: pos.length / 3, instances: perModel[mi].length / 16, tex: textures[p.texture], anim, uvTex });
       }
     });
 
@@ -614,6 +641,11 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
             gl.uniform1f(u(mp, "uDuration"), p.anim.duration); gl.uniform1f(u(mp, "uSamples"), p.anim.samples);
             gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, p.anim.tex); gl.activeTexture(gl.TEXTURE0);
           }
+          gl.uniform1i(u(mp, "uUvAnim"), p.uvTex ? 1 : 0);
+          if (p.uvTex) {
+            gl.uniform1i(u(mp, "uUvs"), 3);
+            gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, p.uvTex); gl.activeTexture(gl.TEXTURE0);
+          }
           gl.uniform1i(u(mp, "uHasTex"), p.tex ? 1 : 0);
           if (p.tex) gl.bindTexture(gl.TEXTURE_2D, p.tex);
           gl.drawArraysInstanced(gl.TRIANGLES, 0, p.count, p.instances);
@@ -626,7 +658,6 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
         gl.uniform1i(u(wp, "uTex"), 0); gl.uniform1i(u(wp, "uHasTex"), wtex ? 1 : 0);
         gl.uniform1f(u(wp, "uTime"), opts.animate ? performance.now() - clock : 0);
         gl.uniform3f(u(wp, "uWave"), water.wave[0], water.wave[1], water.wave[2]);
-        gl.uniform1f(u(wp, "uTile"), water.tile);
         gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
         gl.bindVertexArray(water.vao);
         if (wtex) gl.bindTexture(gl.TEXTURE_2D, wtex);

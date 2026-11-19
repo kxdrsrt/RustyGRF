@@ -42,6 +42,22 @@ pub struct Node {
     pub rot_keys: Vec<(i32, [f32; 4])>,
     pub pos_keys: Vec<(i32, [f32; 3])>,
     pub scale_keys: Vec<(i32, [f32; 3])>,
+    /// From version 2.3: moving texture coordinates, per texture of the node.
+    pub tex_anims: Vec<TexAnim>,
+}
+
+/// The texture animation of one texture index of a node (version 2.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TexAnim {
+    pub texture: i32,
+    pub tracks: Vec<TexTrack>,
+}
+
+/// One animated value of a texture: its kind and (frame, value) key frames.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TexTrack {
+    pub kind: i32,
+    pub keys: Vec<(i32, f32)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -224,16 +240,24 @@ fn read_node(r: &mut Reader<'_>, v: Version, model_textures: &[Vec<u8>]) -> Resu
             pos_keys.push((frame, [k[0], k[1], k[2]]));
         }
     }
+    let mut tex_anims = Vec::new();
     if v >= V2_3 {
         let n = r.count("texture animation", 8)?;
         for _ in 0..n {
-            r.skip(4)?;
+            let texture = r.i32()?;
             let kinds = r.count("texture animation kind", 8)?;
+            let mut tracks = Vec::new();
             for _ in 0..kinds {
-                r.skip(4)?;
+                let kind = r.i32()?;
                 let frames = r.count("texture key frame", 8)?;
-                r.skip(frames * 8)?;
+                let mut keys = Vec::with_capacity(frames);
+                for _ in 0..frames {
+                    let frame = r.i32()?;
+                    keys.push((frame, r.f32()?));
+                }
+                tracks.push(TexTrack { kind, keys });
             }
+            tex_anims.push(TexAnim { texture, tracks });
         }
     }
     Ok(Node {
@@ -252,6 +276,7 @@ fn read_node(r: &mut Reader<'_>, v: Version, model_textures: &[Vec<u8>]) -> Resu
         rot_keys,
         pos_keys,
         scale_keys,
+        tex_anims,
     })
 }
 
@@ -555,12 +580,75 @@ fn key_ms(m: &Model, frame: i32) -> f32 {
     }
 }
 
+/// Whether any texture of the model has a moving texture coordinate (version 2.3).
+pub fn has_texture_animation(m: &Model) -> bool {
+    m.nodes.iter().any(|n| {
+        n.tex_anims
+            .iter()
+            .any(|a| a.tracks.iter().any(|t| t.keys.len() > 1))
+    })
+}
+
+/// Whether texture number `texture` of `node` moves.
+pub fn texture_moves(m: &Model, node: usize, texture: usize) -> bool {
+    m.nodes[node]
+        .tex_anims
+        .iter()
+        .any(|a| a.texture as usize == texture && a.tracks.iter().any(|t| t.keys.len() > 1))
+}
+
+/// The texture-coordinate transform of texture number `texture` of `node` at `t_ms` of the loop, as
+/// `[a, b, c, d, tx, ty]` with `u' = a u + b v + tx`, `v' = c u + d v + ty`. Track kinds as
+/// measured in the kRO models: 0 and 1 move u and v, 2 and 3 scale them, 4 turns by an angle in
+/// radians (scale and turn about the middle of the texture). Between key frames the value is
+/// interpolated linearly and held beyond the first and last key.
+pub fn uv_transform_at(m: &Model, node: usize, texture: usize, t_ms: f32) -> [f32; 6] {
+    let mut val = [0.0, 0.0, 1.0, 1.0, 0.0];
+    for a in &m.nodes[node].tex_anims {
+        if a.texture as usize != texture {
+            continue;
+        }
+        for tr in &a.tracks {
+            let Some(slot) = usize::try_from(tr.kind).ok().filter(|&k| k < 5) else {
+                continue;
+            };
+            let Some(first) = tr.keys.first() else {
+                continue;
+            };
+            let mut v = first.1;
+            for w in tr.keys.windows(2) {
+                let (t0, t1) = (key_ms(m, w[0].0), key_ms(m, w[1].0));
+                if t_ms >= t0 {
+                    v = if t_ms >= t1 || t1 <= t0 {
+                        w[1].1
+                    } else {
+                        w[0].1 + (w[1].1 - w[0].1) * (t_ms - t0) / (t1 - t0)
+                    };
+                }
+            }
+            val[slot] = v;
+        }
+    }
+    let [tu, tv, su, sv, rot] = val;
+    let (sn, cs) = rot.sin_cos();
+    let (a, b, c, d) = (cs * su, -sn * sv, sn * su, cs * sv);
+    [
+        a,
+        b,
+        c,
+        d,
+        0.5 - (a + b) * 0.5 + tu,
+        0.5 - (c + d) * 0.5 + tv,
+    ]
+}
+
 /// Length of the animation loop in milliseconds (0 when the model does not move).
 pub fn duration_ms(m: &Model) -> f32 {
     let moves = m
         .nodes
         .iter()
-        .any(|n| n.rot_keys.len() > 1 || n.pos_keys.len() > 1 || n.scale_keys.len() > 1);
+        .any(|n| n.rot_keys.len() > 1 || n.pos_keys.len() > 1 || n.scale_keys.len() > 1)
+        || has_texture_animation(m);
     if !moves {
         return 0.0;
     }
@@ -573,6 +661,12 @@ pub fn duration_ms(m: &Model) -> f32 {
                 .map(|k| k.0)
                 .chain(n.pos_keys.iter().map(|k| k.0))
                 .chain(n.scale_keys.iter().map(|k| k.0))
+                .chain(
+                    n.tex_anims
+                        .iter()
+                        .flat_map(|a| &a.tracks)
+                        .flat_map(|t| t.keys.iter().map(|k| k.0)),
+                )
         })
         .max()
         .unwrap_or(0);
@@ -811,6 +905,39 @@ mod tests {
         let mut a = vec![0u8; n];
         a[..s.len()].copy_from_slice(s.as_bytes());
         a
+    }
+
+    #[test]
+    fn texture_coordinates_scroll_scale_and_turn() {
+        let mut m = parse(&model(&[("a", "", [0.0; 3], [[0.0; 3]; 3])])).unwrap();
+        assert!(!has_texture_animation(&m));
+        let track = |kind, keys: &[(i32, f32)]| TexTrack {
+            kind,
+            keys: keys.to_vec(),
+        };
+        m.nodes[0].tex_anims = vec![TexAnim {
+            texture: 0,
+            tracks: vec![
+                track(1, &[(0, 0.0), (100, -1.0)]),
+                track(4, &[(0, 0.0), (100, std::f32::consts::PI)]),
+            ],
+        }];
+        assert!(has_texture_animation(&m));
+        assert!(texture_moves(&m, 0, 0) && !texture_moves(&m, 0, 1));
+        assert!(duration_ms(&m) >= 100.0);
+        // halfway: scrolled by -0.5 in v and turned by a quarter circle about the middle
+        let t = uv_transform_at(&m, 0, 0, 50.0);
+        let map = |u: f32, v: f32| (t[0] * u + t[1] * v + t[4], t[2] * u + t[3] * v + t[5]);
+        let (u, v) = map(0.5, 0.5);
+        assert!((u - 0.5).abs() < 1e-5 && (v - 0.0).abs() < 1e-5, "{u} {v}");
+        let (u, v) = map(1.0, 0.5);
+        assert!((u - 0.5).abs() < 1e-5 && (v - 0.5).abs() < 1e-5, "{u} {v}");
+        // held after the last key; a texture without tracks stays put
+        assert!((uv_transform_at(&m, 0, 0, 500.0)[5] - (0.5 - (-0.5) + -1.0 + 0.0)).abs() < 1e-4);
+        assert_eq!(
+            uv_transform_at(&m, 0, 3, 50.0),
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        );
     }
 
     /// Version 1.4 model: `nodes` are (name, parent, pos, vertices); one triangle per node.

@@ -435,3 +435,26 @@ fn water_waves_of_real_maps_have_plausible_values() {
     }
     assert!(seen >= 2, "maps with water were checked");
 }
+
+#[test]
+fn a_map_with_moving_textures_sends_their_transforms() {
+    let Some(mut s) = open() else { return };
+    let i = find(&mut s, r"data\ba_maison.rsw");
+    let Preview::Scene { models, .. } = s.preview(i, None).unwrap() else {
+        panic!("not a scene");
+    };
+    let mut seen = 0;
+    for m in &models {
+        let Some(a) = &m.anim else { continue };
+        for p in m.parts.iter().filter(|p| p.uv_anim.is_some()) {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(p.uv_anim.as_ref().unwrap())
+                .unwrap();
+            assert_eq!(bytes.len(), a.samples * 6 * 4, "six numbers per sample");
+            seen += 1;
+        }
+    }
+    eprintln!("ba_maison: {seen} parts with moving textures");
+    assert!(seen > 0);
+}
