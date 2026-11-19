@@ -12,7 +12,9 @@ Inspiration und Dank
 Lua
   crates/rgrf-formats/src/luacomp.rs ist ein Port von Lexer, Parser und
   Codegenerator von Lua 5.1.5 (Copyright (C) 1994-2012 Lua.org, PUC-Rio,
-  MIT-Lizenz, Text in THIRD-PARTY.md). Das Pruefwerkzeug tools/lua-verify
+  MIT-Lizenz, Text in THIRD-PARTY.md), luacomp50.rs ebenso von Lua 5.0.3
+  (Copyright (C) 1994-2006 Tecgraf, PUC-Rio, dieselbe MIT-Lizenz). Das
+  Pruefwerkzeug tools/lua-verify
   baut Lua 5.0.3 und 5.1 aus den Quelltexten von lua.org und wird nicht
   ausgeliefert.
 

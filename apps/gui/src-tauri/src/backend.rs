@@ -1219,24 +1219,28 @@ impl Session {
         let out = if data.starts_with(b"\x1bLua") {
             let old = rgrf_formats::luac::parse_any(&data)
                 .map_err(|e| format!("this compiled Lua cannot be read: {e}"))?;
-            if lua_version(&old) == "5.0" {
-                return Err("compiling Lua 5.0 is not available in the editor yet".into());
-            }
             let stripped = old.main.source.is_empty() && old.main.lines.is_empty();
             let cp949 = |run: &str| {
                 GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec())
             };
-            let mut chunk = rgrf_formats::luacomp::compile_text(
-                text,
-                &old.main.source,
-                rgrf_formats::luacomp::TextEncoding::Auto,
-                &cp949,
-            )
-            .map_err(|e| e.to_string())?;
-            if stripped {
-                rgrf_formats::luacomp::strip(&mut chunk);
-            }
-            let lub = rgrf_formats::luac::dump32(&chunk);
+            let enc = rgrf_formats::luacomp::TextEncoding::Auto;
+            let lub = if lua_version(&old) == "5.0" {
+                let mut chunk =
+                    rgrf_formats::luacomp50::compile_text(text, &old.main.source, enc, &cp949)
+                        .map_err(|e| e.to_string())?;
+                if stripped {
+                    rgrf_formats::luacomp50::strip(&mut chunk);
+                }
+                rgrf_formats::luac50::dump32(&chunk)
+            } else {
+                let mut chunk =
+                    rgrf_formats::luacomp::compile_text(text, &old.main.source, enc, &cp949)
+                        .map_err(|e| e.to_string())?;
+                if stripped {
+                    rgrf_formats::luacomp::strip(&mut chunk);
+                }
+                rgrf_formats::luac::dump32(&chunk)
+            };
             rgrf_formats::luac::check_bytecode(&lub)
                 .map_err(|e| format!("internal error, the result is invalid: {e}"))?;
             what.push("Lua recompiled from edited text".into());
@@ -2419,6 +2423,14 @@ mod tests {
         fs::write(src.join("t.lub"), luac::dump32(&chunk)).unwrap();
         luacomp::strip(&mut chunk);
         fs::write(src.join("s.lub"), luac::dump32(&chunk)).unwrap();
+        let chunk50 = rgrf_formats::luacomp50::compile_text(
+            lua,
+            b"@t50.lua",
+            luacomp::TextEncoding::Auto,
+            &cp949,
+        )
+        .unwrap();
+        fs::write(src.join("t50.lub"), rgrf_formats::luac50::dump32(&chunk50)).unwrap();
         let out = dir.join("t.grf");
         build(
             &dir.join("src"),
@@ -2450,6 +2462,21 @@ mod tests {
         assert!(
             rgrf_formats::luadec::decompile(&new, &|b| String::from_utf8_lossy(b).into_owned())
                 .contains("a + 2")
+        );
+
+        // Lua 5.0 is compiled as 5.0
+        let t50 = find(&s, "t50.lub");
+        let doc = s.text_for_edit(t50).unwrap();
+        assert_eq!(doc.format, "Lua 5.0 bytecode");
+        s.stage_text_edit(t50, &doc.text.replace("a + 1", "a + 3"))
+            .unwrap();
+        let (_, bytes, _) = s.working_bytes(t50).unwrap();
+        assert_eq!(bytes[4], 0x50, "still Lua 5.0 bytecode");
+        let new = luac::parse_any(&bytes).unwrap();
+        assert_eq!(new.main.source, b"@t50.lua");
+        assert!(
+            rgrf_formats::luadec::decompile(&new, &|b| String::from_utf8_lossy(b).into_owned())
+                .contains("a + 3")
         );
 
         // a stripped file stays stripped

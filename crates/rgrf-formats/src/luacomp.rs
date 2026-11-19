@@ -2654,6 +2654,15 @@ pub fn compile_text(
     encoding: TextEncoding,
     cp949: &dyn Fn(&str) -> Option<Vec<u8>>,
 ) -> Result<Chunk, CompileError> {
+    compile(&text_bytes(text, encoding, cp949), source)
+}
+
+/// The source bytes of a text typed as Unicode (shared with the Lua 5.0 compiler).
+pub(crate) fn text_bytes<'a>(
+    text: &'a str,
+    encoding: TextEncoding,
+    cp949: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> std::borrow::Cow<'a, [u8]> {
     let utf8 = match encoding {
         TextEncoding::Utf8 => true,
         TextEncoding::Cp949 => false,
@@ -2663,7 +2672,7 @@ pub fn compile_text(
             .is_some_and(|l| l.starts_with("--") && l.contains("strings: UTF-8")),
     };
     if utf8 || text.is_ascii() {
-        return compile(text.as_bytes(), source);
+        return std::borrow::Cow::Borrowed(text.as_bytes());
     }
     let mut bytes = Vec::with_capacity(text.len());
     let mut run = String::new();
@@ -2689,7 +2698,7 @@ pub fn compile_text(
         }
     }
     flush(&mut run, &mut bytes);
-    compile(&bytes, source)
+    std::borrow::Cow::Owned(bytes)
 }
 
 /// Removes the debug information (`luac -s`): line numbers, local and upvalue names, source name.

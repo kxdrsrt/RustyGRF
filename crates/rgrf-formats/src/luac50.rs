@@ -104,6 +104,8 @@ impl Instr {
 struct Reader<'a> {
     d: &'a [u8],
     at: usize,
+    /// Size of `size_t` and of an instruction: 4 (the client) or 8 (a 64-bit Lua).
+    word: usize,
 }
 
 impl Reader<'_> {
@@ -127,8 +129,23 @@ impl Reader<'_> {
         }
         Ok(n)
     }
+    fn size(&mut self) -> Result<usize, LuacError> {
+        let b = self.take(self.word)?;
+        let mut v = [0u8; 8];
+        v[..b.len()].copy_from_slice(b);
+        usize::try_from(u64::from_le_bytes(v)).map_err(|_| LuacError::Truncated)
+    }
+    fn instruction(&mut self) -> Result<u32, LuacError> {
+        let b = self.take(self.word)?;
+        if b[4.min(b.len())..].iter().any(|&x| x != 0) {
+            return Err(LuacError::Unsupported(
+                "instruction wider than 32 bits".into(),
+            ));
+        }
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
     fn string(&mut self) -> Result<Vec<u8>, LuacError> {
-        let len = self.u32()? as usize;
+        let len = self.size()?;
         if len == 0 {
             return Ok(Vec::new());
         }
@@ -186,10 +203,10 @@ fn read_function(r: &mut Reader<'_>, depth: usize) -> Result<Function, LuacError
     for _ in 0..n {
         protos.push(read_function(r, depth + 1)?);
     }
-    let n = r.count(4)?;
+    let n = r.count(r.word)?;
     let mut code = Vec::with_capacity(n);
     for _ in 0..n {
-        code.push(r.u32()?);
+        code.push(r.instruction()?);
     }
     Ok(Function {
         source,
@@ -207,7 +224,8 @@ fn read_function(r: &mut Reader<'_>, depth: usize) -> Result<Function, LuacError
     })
 }
 
-/// Reads a Lua 5.0 chunk; the whole file must be used (trailing bytes are an error).
+/// Reads a Lua 5.0 chunk (the client's 32-bit layout, or the 64-bit one of [`dump`]); the whole
+/// file must be used (trailing bytes are an error).
 pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
     if bytes.len() < 4 || &bytes[..4] != b"\x1bLua" {
         return Err(LuacError::NotBytecode);
@@ -218,12 +236,17 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
             bytes.get(4).copied().unwrap_or(0)
         )));
     }
-    // endianness 1, int 4, size_t 4, instruction 4, OP/A/B/C 6/8/9/9, number 8, then the test number
-    const HEADER: [u8; 10] = [1, 4, 4, 4, 6, 8, 9, 9, 8, 0];
+    // endianness 1, int 4, size_t and instruction 4 (or 8), OP/A/B/C 6/8/9/9, number 8, then the
+    // test number
     let head = bytes.get(5..14).ok_or(LuacError::Truncated)?;
-    if head != &HEADER[..9] {
+    let word = usize::from(head[2]);
+    if head[3] != head[2]
+        || !matches!(word, 4 | 8)
+        || head[..2] != [1, 4]
+        || head[4..] != [6, 8, 9, 9, 8]
+    {
         return Err(LuacError::Unsupported(
-            "sizes other than little-endian, int/size_t/instruction 4, OP/A/B/C 6/8/9/9, double"
+            "sizes other than little-endian, int 4, size_t/instruction 4 or 8, OP/A/B/C 6/8/9/9, double"
                 .into(),
         ));
     }
@@ -233,7 +256,11 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
             "number format is not a double".into(),
         ));
     }
-    let mut r = Reader { d: bytes, at: 22 };
+    let mut r = Reader {
+        d: bytes,
+        at: 22,
+        word,
+    };
     let main = read_function(&mut r, 0)?;
     if r.at != bytes.len() {
         return Err(LuacError::Unsupported(format!(
@@ -247,20 +274,34 @@ pub fn parse(bytes: &[u8]) -> Result<Chunk, LuacError> {
 /// Writes a 5.0 chunk in the layout of a 64-bit Lua 5.0 (int 4, size_t 8, instruction 8), so that
 /// such a Lua can load the client's 32-bit files (used by the verification tool `tools/lua-verify`).
 pub fn dump(chunk: &Chunk) -> Vec<u8> {
+    dump_layout(chunk, 8)
+}
+
+/// Writes a 5.0 chunk in the client's 32-bit layout (int 4, size_t 4, instruction 4): the bytes a
+/// 32-bit `luac` 5.0 makes, and the format of the `.lub` files in the archives.
+pub fn dump32(chunk: &Chunk) -> Vec<u8> {
+    dump_layout(chunk, 4)
+}
+
+/// `word` is the size of `size_t` and of an instruction (4 or 8).
+fn dump_layout(chunk: &Chunk, word: u8) -> Vec<u8> {
     fn int(out: &mut Vec<u8>, v: usize) {
         out.extend((v as u32).to_le_bytes());
     }
+    fn size(out: &mut Vec<u8>, v: usize, word: u8) {
+        out.extend(&(v as u64).to_le_bytes()[..usize::from(word)]);
+    }
     // Size 0 would load as a NULL string; only the source may be NULL (it then takes the parent's).
-    fn string(out: &mut Vec<u8>, s: &[u8]) {
-        out.extend(((s.len() + 1) as u64).to_le_bytes());
+    fn string(out: &mut Vec<u8>, s: &[u8], word: u8) {
+        size(out, s.len() + 1, word);
         out.extend(s);
         out.push(0);
     }
-    fn function(out: &mut Vec<u8>, f: &Function) {
+    fn function(out: &mut Vec<u8>, f: &Function, word: u8) {
         if f.source.is_empty() {
-            out.extend(0u64.to_le_bytes());
+            size(out, 0, word);
         } else {
-            string(out, &f.source);
+            string(out, &f.source, word);
         }
         int(out, f.line_defined as usize);
         out.extend([f.upvalue_count, f.params, f.is_vararg, f.max_stack]);
@@ -270,13 +311,13 @@ pub fn dump(chunk: &Chunk) -> Vec<u8> {
         }
         int(out, f.locals.len());
         for l in &f.locals {
-            string(out, &l.name);
+            string(out, &l.name, word);
             int(out, l.start as usize);
             int(out, l.end as usize);
         }
         int(out, f.upvalue_names.len());
         for n in &f.upvalue_names {
-            string(out, n);
+            string(out, n, word);
         }
         int(out, f.constants.len());
         for k in &f.constants {
@@ -290,23 +331,24 @@ pub fn dump(chunk: &Chunk) -> Vec<u8> {
                 }
                 Constant::Str(s) => {
                     out.push(4);
-                    string(out, s);
+                    string(out, s, word);
                 }
             }
         }
         int(out, f.protos.len());
         for p in &f.protos {
-            function(out, p);
+            function(out, p, word);
         }
         int(out, f.code.len());
         for c in &f.code {
-            out.extend(u64::from(*c).to_le_bytes());
+            out.extend(&u64::from(*c).to_le_bytes()[..usize::from(word)]);
         }
     }
-    // ESC Lua, 5.0, little-endian, int 4, size_t 8, instruction 8, OP/A/B/C 6/8/9/9, number 8
-    let mut out = b"\x1bLua\x50\x01\x04\x08\x08\x06\x08\x09\x09\x08".to_vec();
+    // ESC Lua, 5.0, little-endian, int 4, size_t and instruction `word`, OP/A/B/C 6/8/9/9, number 8
+    let mut out = b"\x1bLua\x50\x01\x04".to_vec();
+    out.extend([word, word, 0x06, 0x08, 0x09, 0x09, 0x08]);
     out.extend(TEST_NUMBER_BITS.to_le_bytes());
-    function(&mut out, &chunk.main);
+    function(&mut out, &chunk.main, word);
     out
 }
 
@@ -580,6 +622,15 @@ mod tests {
         assert_eq!(&code[..4], &le(3));
         let return_op = u64::from(op(27, 0, 0, 1)).to_le_bytes();
         assert_eq!(&code[20..], &return_op);
+    }
+
+    #[test]
+    fn dump32_writes_the_client_layout_back() {
+        let bytes = sample();
+        assert_eq!(dump32(&parse(&bytes).unwrap()), bytes);
+        // and the 64-bit layout reads back as the same chunk
+        let c = parse(&bytes).unwrap();
+        assert_eq!(parse(&dump(&c)).unwrap(), c);
     }
 
     #[test]

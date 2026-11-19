@@ -22,8 +22,8 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 
 Stand 2026-11-16: `cargo deny check` (Lizenzen, Verbote, Quellen, Advisories) ohne Befund. Transitive Abhängigkeiten stehen in `Cargo.lock`; erlaubte Lizenzen in `deny.toml`.
 
-## Lua 5.1.5 (Quelltext portiert in `crates/rgrf-formats/src/luacomp.rs`)
-Lexer, Parser und Codegenerator sind aus `llex.c`, `lparser.c` und `lcode.c` von Lua 5.1.5 nach Rust übertragen. Lua ist unter der MIT-Lizenz veröffentlicht:
+## Lua 5.1.5 und 5.0.3 (Quelltext portiert in `crates/rgrf-formats/src/luacomp.rs` und `luacomp50.rs`)
+Lexer, Parser und Codegenerator sind aus `llex.c`, `lparser.c` und `lcode.c` von Lua 5.1.5 (`luacomp.rs`) und von Lua 5.0.3 (`luacomp50.rs`) nach Rust übertragen. Lua 5.1 und 5.0 sind unter derselben MIT-Lizenz veröffentlicht (Lua 5.0.3: Copyright (C) 1994-2006 Tecgraf, PUC-Rio; Lua 5.1.5: Copyright (C) 1994-2012 Lua.org, PUC-Rio):
 
 > Copyright (C) 1994-2012 Lua.org, PUC-Rio.
 >

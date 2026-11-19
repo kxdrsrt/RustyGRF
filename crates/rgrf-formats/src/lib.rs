@@ -11,6 +11,7 @@ pub mod lua;
 pub mod luac;
 pub mod luac50;
 pub mod luacomp;
+pub mod luacomp50;
 pub mod luadec;
 pub mod pal;
 pub mod png_io;
