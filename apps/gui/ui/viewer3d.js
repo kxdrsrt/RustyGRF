@@ -58,8 +58,15 @@ void main() {
   }
 
   /** Mouse and keyboard control of a camera that turns around `target`: drag = turn, shift/right/middle drag or arrows = move, wheel = zoom, double click = reset. */
-  function orbit(canvas, cam, home, radius, draw) {
+  /** Mouse and keyboard control of `cam`. Returns `reset()` and `atHome()`; `view.onchange` is called after every move. */
+  function orbit(canvas, cam, home, radius, draw0) {
     let drag = null;
+    const view = {
+      onchange: null,
+      atHome: () => Math.abs(cam.yaw - home.yaw) < 1e-3 && Math.abs(cam.pitch - home.pitch) < 1e-3 && Math.abs(cam.dist / home.dist - 1) < 1e-3 && cam.target.every((v, i) => Math.abs(v - home.target[i]) < home.dist * 1e-3),
+      reset() { Object.assign(cam, { yaw: home.yaw, pitch: home.pitch, dist: home.dist, target: [...home.target] }); draw(); },
+    };
+    const draw = () => { draw0(); view.onchange?.(); };
     canvas.tabIndex = 0;
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     canvas.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button !== 0 }; canvas.setPointerCapture(e.pointerId); canvas.focus(); });
@@ -93,7 +100,8 @@ void main() {
       draw();
     });
     canvas.addEventListener("wheel", (e) => { e.preventDefault(); cam.dist = Math.max(radius * 0.05, Math.min(radius * 30, cam.dist * Math.exp(e.deltaY * 0.001))); draw(); }, { passive: false });
-    canvas.addEventListener("dblclick", () => { Object.assign(cam, { yaw: home.yaw, pitch: home.pitch, dist: home.dist, target: [...home.target] }); draw(); });
+    canvas.addEventListener("dblclick", () => view.reset());
+    return view;
   }
 
   function eyeOf(cam) {
@@ -253,7 +261,7 @@ void main() {
     }
 
     const home = { yaw: 0.6, pitch: 0.35, dist: radius * 2.6, target: [...c] };
-    orbit(canvas, cam, home, radius, draw);
+    const view = orbit(canvas, cam, home, radius, draw);
     const ro = new ResizeObserver(draw);
     ro.observe(canvas);
     draw();
@@ -261,6 +269,7 @@ void main() {
 
     return {
       canvas,
+      view,
       set(name, value) { opts[name] = value; if (name === "animate") startLoop(); draw(); },
       /** Index of the animation sample shown right now (for tests). */
       sample: sampleNow,
@@ -605,7 +614,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     function startLoop() {
       if (timer === null && moving()) timer = requestAnimationFrame(loop);
     }
-    orbit(canvas, cam, home, size, draw);
+    const view = orbit(canvas, cam, home, size, draw);
 
     // `pixels` draws at a given pixel size (a picture to save) instead of the size on screen;
     // requestAnimationFrame passes a time stamp here, which is not a size
@@ -675,6 +684,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     startLoop();
     return {
       canvas,
+      view,
       set(name, value) { opts[name] = value; startLoop(); draw(); },
       get: (name) => opts[name],
       /** The view as it is now, `scale` times the size on screen (at most what WebGL can draw), as a PNG data URL. */

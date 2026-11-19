@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 9);
+    assert_eq!(ro.len(), 10);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 16);
+    assert_eq!(names(&rw).len(), 17);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -640,4 +640,43 @@ fn image_reduce_writes_8_bit_bmps_and_dry_run_only_reports() {
         (v["kind"].clone(), v["bits"].clone(), v["colors"].clone()),
         ("bmp".into(), 8.into(), 200.into())
     );
+}
+
+#[test]
+fn client_refs_needs_all_archives_and_counts_per_kind() {
+    use rgrf_formats::act::{Act, Action, Frame, Layer, V2_5};
+    let dir = tmp("client-refs");
+    let act = Act {
+        version: V2_5,
+        reserved: [0; 10],
+        actions: vec![Action {
+            frames: vec![Frame {
+                layers: vec![Layer::default()],
+                ..Frame::default()
+            }],
+            interval: 4.0,
+        }],
+        sounds: vec![],
+        trailing: vec![],
+        warnings: vec![],
+    }
+    .to_bytes(V2_5)
+    .unwrap();
+    let a = make_grf(&dir, "acts.grf", &[("data/sprite/x.act", &act)]);
+    let s = server(std::slice::from_ref(&dir), &[]);
+    // the sprite is missing here
+    let v = ok(&s, "grf_client_refs", json!({"paths": [a]}));
+    assert_eq!(v["animations_checked"], 1);
+    assert_eq!(v["by_kind"]["missing_sprite"], 1);
+    assert_eq!(v["animations_without_sprite_by_folder"][0]["count"], 1);
+    // ... and found when the archive that has it is given too
+    let b = make_grf(
+        &dir,
+        "sprites.grf",
+        &[("data/sprite/x.spr", b"not a sprite")],
+    );
+    let v = ok(&s, "grf_client_refs", json!({"paths": [a, b]}));
+    assert_eq!(v["by_kind"]["unreadable_sprite"], 1);
+    assert!(v["by_kind"]["missing_sprite"].is_null());
+    assert!(fails(&s, "grf_client_refs", json!({"paths": []})).contains("paths"));
 }

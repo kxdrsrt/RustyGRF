@@ -505,6 +505,39 @@ async fn stage_act_interval(
     .await
 }
 
+/// Opens an entry (with staged changes) with the program the system chooses for its type.
+#[tauri::command]
+async fn open_external(state: State<'_, AppState>, index: usize) -> Res<String> {
+    let path = with_session(&state, move |s| s.export_temp(index)).await?;
+    backend::open_with_system(&path)?;
+    Ok(path.display().to_string())
+}
+
+/// A page of bytes of an entry for the hex editor.
+#[tauri::command]
+async fn hex_page(
+    state: State<'_, AppState>,
+    index: usize,
+    offset: u64,
+    len: usize,
+) -> Res<backend::HexPage> {
+    with_session(&state, move |s| s.hex_page(index, offset, len)).await
+}
+
+/// Overwrites bytes of an entry (staged).
+#[tauri::command]
+async fn stage_hex(
+    state: State<'_, AppState>,
+    index: usize,
+    edits: Vec<(u64, u8)>,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, move |s| {
+        s.stage_hex(index, &edits)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// The sound an animation frame plays (`data\wav\<name>` of the open archive).
 #[tauri::command]
 async fn act_sound(state: State<'_, AppState>, name: String) -> Res<backend::SoundOut> {
@@ -860,6 +893,9 @@ pub fn run() {
             merge_archives,
             reduce_preview,
             act_sound,
+            open_external,
+            hex_page,
+            stage_hex,
             act_layer_at,
             save_picture,
             stage_reduce,

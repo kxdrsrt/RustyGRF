@@ -220,6 +220,17 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 arg(a, "y")?,
             )?)
         }),
+        "hex_page" => with(state, |s| {
+            to_json(s.hex_page(arg(a, "index")?, arg(a, "offset")?, arg(a, "len")?)?)
+        }),
+        "stage_hex" => with(state, |s| {
+            s.stage_hex(arg(a, "index")?, &arg::<Vec<(u64, u8)>>(a, "edits")?)?;
+            to_json(s.pending())
+        }),
+        // the devserver runs headless: it reports the file instead of starting a program
+        "open_external" => with(state, |s| {
+            to_json(s.export_temp(arg(a, "index")?)?.display().to_string())
+        }),
         "act_sound" => with(state, |s| to_json(s.act_sound(&arg::<String>(a, "name")?)?)),
         "reduce_preview" => with(state, |s| to_json(s.reduce_preview(arg(a, "index")?)?)),
         "stage_reduce" => with(state, |s| {

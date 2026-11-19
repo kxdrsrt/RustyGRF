@@ -663,8 +663,112 @@ async function showPreview(row, action) {
   meta.textContent = `${fmtBytes(details.size)} unpacked, ${fmtBytes(details.stored)} stored (${details.codec}), offset ${fmtNum(details.offset)}`;
   const staged = S.changed.get(changeKey(details.name));
   if (staged) meta.textContent += ` — staged: ${staged === "remove" ? "removed" : staged === "add" ? "added" : "changed"}, shown as it will be saved`;
-  head.replaceChildren(el("div", { class: "title", text: details.name }), meta);
+  const hexBtn = el("button", { type: "button", class: "small hexbtn", icon: "file", text: "Hex…", title: "Show every byte of this file and change single bytes (staged)", onclick: () => openHexEditor(row, details.name) });
+  head.replaceChildren(el("div", { class: "title", text: details.name }), meta, hexBtn);
   body.replaceChildren(...renderPreview(preview, row, meta).filter(Boolean));
+}
+
+const HEX_ROWS = 24;
+
+/** Every byte of a file, 16 per row; typing a hex value in a cell changes that byte. Apply stages all changes as one. */
+async function openHexEditor(row, title) {
+  const PAGE = HEX_ROWS * 16;
+  const edits = new Map();
+  let offset = 0;
+  let size = 0;
+  const grid = el("div", { class: "hexgrid", role: "group", "aria-label": "Bytes of the file" });
+  const where = el("span", { class: "muted", role: "status" });
+  const goto = el("input", { type: "text", class: "field", size: "10", placeholder: "offset, e.g. 0x400", "aria-label": "Go to offset" });
+  const count = el("span", { class: "muted" });
+  const prev = el("button", { type: "button", class: "small", text: "◀ Previous", onclick: () => load(offset - PAGE) });
+  const next = el("button", { type: "button", class: "small", text: "Next ▶", onclick: () => load(offset + PAGE) });
+  const hex2b = (n) => n.toString(16).padStart(2, "0");
+  const asciiOf = (b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".");
+  async function load(at) {
+    at = Math.max(0, Math.min(at, Math.max(0, size - 1)));
+    at -= at % 16;
+    const page = await invoke("hex_page", { index: row.index, offset: at, len: PAGE });
+    size = page.size;
+    offset = page.offset;
+    const bytes = Uint8Array.from(atob(page.bytes), (c) => c.charCodeAt(0));
+    grid.replaceChildren();
+    for (let r = 0; r * 16 < bytes.length; r++) {
+      const cells = [];
+      const ascii = el("span", { class: "hexascii" });
+      for (let c = 0; c < 16 && r * 16 + c < bytes.length; c++) {
+        const at2 = offset + r * 16 + c;
+        const input = el("input", { type: "text", class: "hexb", maxlength: "2", value: hex2b(edits.get(at2) ?? bytes[r * 16 + c]), "aria-label": `Byte at offset ${at2}`, spellcheck: "false", autocomplete: "off" });
+        input.classList.toggle("changed", edits.has(at2));
+        const glyph = el("span", { text: asciiOf(edits.get(at2) ?? bytes[r * 16 + c]) });
+        ascii.append(glyph);
+        input.addEventListener("focus", () => input.select());
+        input.addEventListener("input", () => {
+          const ok = /^[0-9a-f]{1,2}$/i.test(input.value);
+          input.setAttribute("aria-invalid", String(!ok));
+          if (!ok) return;
+          const v = parseInt(input.value, 16);
+          if (v === bytes[r * 16 + c]) edits.delete(at2);
+          else edits.set(at2, v);
+          input.classList.toggle("changed", edits.has(at2));
+          glyph.textContent = asciiOf(v);
+          count.textContent = edits.size ? `${edits.size} byte(s) changed` : "";
+          // two digits typed: on to the next byte
+          if (input.value.length === 2) (input.parentElement.nextElementSibling?.querySelector?.("input") ?? input.closest(".hexrow").nextElementSibling?.querySelector("input"))?.focus();
+        });
+        input.addEventListener("blur", () => {
+          if (!/^[0-9a-f]{1,2}$/i.test(input.value)) input.value = hex2b(edits.get(at2) ?? bytes[r * 16 + c]);
+          else input.value = hex2b(parseInt(input.value, 16));
+          input.setAttribute("aria-invalid", "false");
+        });
+        cells.push(el("span", { class: "hexcell" }, input));
+      }
+      grid.append(el("div", { class: "hexrow" }, el("span", { class: "hexoff", text: (offset + r * 16).toString(16).padStart(8, "0") }), ...cells, ascii));
+    }
+    where.textContent = `Offset ${offset.toString(16).padStart(8, "0")} – ${(offset + bytes.length).toString(16)} of ${size.toString(16)} (${fmtBytes(size)})`;
+    prev.disabled = offset === 0;
+    next.disabled = offset + PAGE >= size;
+  }
+  goto.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const t = goto.value.trim();
+    const n = /^0x/i.test(t) ? parseInt(t, 16) : /^[0-9a-f]+$/i.test(t) && /[a-f]/i.test(t) ? parseInt(t, 16) : parseInt(t, 10);
+    if (Number.isFinite(n)) load(n);
+  });
+  try {
+    await load(0);
+  } catch (e) {
+    return note("Cannot show the bytes", errText(e), true);
+  }
+  const dlg = $("dlg");
+  dlg.classList.add("wide");
+  const go = await ask(
+    `Bytes of ${title.split("\\").pop()}`,
+    [el("p", { class: "muted", text: "Type two hex digits to change a byte. The size of the file stays the same; changes are staged like any other and can be undone." }), el("div", { class: "controls" }, prev, next, goto, where, count), grid],
+    [{ label: "Apply changes", value: true, primary: true }, { label: "Close", value: null }],
+  );
+  dlg.classList.remove("wide");
+  if (!go || !edits.size) return;
+  try {
+    setPending(await invoke("stage_hex", { index: row.index, edits: [...edits] }));
+    setStatus(`${edits.size} byte(s) of ${title} changed (staged)`);
+    refreshPreview();
+  } catch (e) {
+    await note("Could not change the bytes", errText(e), true);
+  }
+}
+
+/** A "Reset view" button that appears once the camera has left its start position. */
+function resetViewButton(handle) {
+  const b = el("button", { type: "button", class: "small", icon: "reset", text: "Reset view", title: "Back to the start view (also: double-click the picture)", hidden: true, onclick: () => handle.v?.view.reset() });
+  // the viewer is created after the controls, so the hook is attached when it exists
+  const attach = () => {
+    const v = handle.v;
+    if (!v) return requestAnimationFrame(attach);
+    v.view.onchange = () => (b.hidden = v.view.atHome());
+  };
+  attach();
+  return b;
 }
 
 const dataUrl = (mime, data) => `data:${mime};base64,${data}`;
@@ -761,7 +865,7 @@ function renderPreview(p, row, meta) {
       const wire = el("input", { type: "checkbox", onchange: () => handle.v?.set("wire", wire.checked) });
       const animate = el("input", { type: "checkbox", checked: true, onchange: () => handle.v?.set("animate", animate.checked) });
       return [
-        el("div", { class: "controls" }, el("span", { class: "muted", text: `${fmtNum(p.triangles)} triangles — drag to turn, wheel to zoom, double-click to reset` }), el("label", {}, lit, " Lighting"), el("label", {}, wire, " Wireframe"), p.duration_ms > 0 ? el("label", {}, animate, " Animate") : null),
+        el("div", { class: "controls" }, el("span", { class: "muted", text: `${fmtNum(p.triangles)} triangles — drag to turn, wheel to zoom, double-click to reset` }), el("label", {}, lit, " Lighting"), el("label", {}, wire, " Wireframe"), p.duration_ms > 0 ? el("label", {}, animate, " Animate") : null, resetViewButton(handle)),
         host,
         infoBlock(p.info),
       ];
@@ -801,6 +905,7 @@ function renderPreview(p, row, meta) {
         toggle("Models", "models"),
         toggle("Water", "water"),
         allBtn,
+        resetViewButton(handle),
         p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle("Animate", "animate", false) : null,
         el("button", { type: "button", class: "small", icon: "image", text: "Save picture…", title: "Save the view as it is now (with what is switched off) as a PNG, larger than on screen", onclick: () => saveMapPicture(row, handle.v) }),
         el("button", { type: "button", class: "small", icon: "extract", text: "Extract map…", title: "Write this map with the files it needs into a folder; parts switched off here can be left out", onclick: () => doExtractMap(row, shown()) }),
@@ -816,6 +921,23 @@ function renderPreview(p, row, meta) {
       return [el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: "map" })), infoBlock(p.info)];
     case "info":
       return [el("pre", { text: p.lines.join("\n") })];
+    case "video": {
+      const note = el("p", { class: "muted", role: "status" });
+      const open = el("button", { type: "button", class: "small", icon: "video", text: "Open with the system's player", title: "Write the file to a temporary folder and open it with the program your system has for it", onclick: async () => {
+        try {
+          const path = await invoke("open_external", { index: row.index });
+          note.textContent = `Opened ${path}. If nothing started, your system has no player for this format (VLC and RAD Video Tools play Bink).`;
+        } catch (e) {
+          note.textContent = errText(e);
+        }
+      } });
+      return [
+        el("p", { text: `Bink video, ${p.width} × ${p.height}, ${fmtNum(p.frames)} frames at ${p.fps.toFixed(2)} fps (${(p.frames / Math.max(p.fps, 0.01)).toFixed(1)} s), ${fmtBytes(p.size)}.` }),
+        el("p", { class: "muted", text: "This window cannot play Bink, a format of its own. It stays in the archive unchanged." }),
+        el("div", { class: "controls" }, open),
+        note,
+      ];
+    }
     case "hex":
       return [el("div", { class: "muted", text: `${fmtNum(p.size)} bytes, first 512 shown` }), el("pre", { text: p.dump })];
     default:

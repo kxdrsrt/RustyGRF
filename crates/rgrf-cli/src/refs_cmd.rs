@@ -7,172 +7,31 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use rayon::prelude::*;
 use rgrf_core::{GrfPath, NameMode};
-use rgrf_formats::act::{Act, V2_1};
-use rgrf_formats::spr::Spr;
-use rgrf_formats::str_effect;
+use rgrf_formats::refs;
 use serde_json::json;
 
 use crate::map_cmd::Vfs;
 
-/// One thing wrong with a file: a short stable word and the details.
+/// One problem of a file, ready to print.
 struct Problem {
     kind: &'static str,
     file: String,
     detail: String,
 }
 
-/// An archive path as the user chose to see names.
-fn shown_path(b: &[u8], names: NameMode) -> String {
-    GrfPath::new(b.to_vec()).display(names)
-}
-
-fn key(path: &[u8]) -> Vec<u8> {
-    GrfPath::new(path.to_vec()).key()
-}
-
-fn dir_of(path: &[u8]) -> &[u8] {
-    path.iter()
-        .rposition(|&b| b == b'\\')
-        .map_or(&path[..0], |p| &path[..=p])
-}
-
-fn check_act(
-    vfs: &Vfs,
-    path: &[u8],
-    data: &[u8],
-    shown: &str,
-    names: NameMode,
-    out: &mut Vec<Problem>,
-) {
-    let mut add = |kind, detail: String| {
-        out.push(Problem {
-            kind,
-            file: shown.to_string(),
-            detail,
-        })
+fn shown(p: &refs::Problem, file: &str, names: NameMode) -> Problem {
+    let detail = match (p.path.is_empty(), p.note.is_empty()) {
+        (false, _) => GrfPath::new(p.path.clone()).display(names),
+        (true, _) => p.note.clone(),
     };
-    let act = match Act::parse(data) {
-        Ok(a) => a,
-        Err(e) => return add("unreadable_act", e.to_string()),
-    };
-    // the sprite next to it
-    let mut spr_path = path.to_vec();
-    match spr_path.iter().rposition(|&b| b == b'.') {
-        Some(dot) => spr_path.truncate(dot + 1),
-        None => return,
-    }
-    spr_path.extend(b"spr");
-    let mut counts = None;
-    match vfs.find(&key(&spr_path)) {
-        None => {
-            if !vfs.exists(&key(&spr_path)) {
-                add("missing_sprite", shown_path(&spr_path, names));
-            }
-        }
-        Some(at) => match vfs.read(at).ok().map(|d| Spr::parse(&d)) {
-            Some(Ok(s)) => counts = Some((s.indexed.len() as i64, s.rgba.len() as i64)),
-            Some(Err(e)) => add(
-                "unreadable_sprite",
-                format!("{}: {e}", shown_path(&spr_path, names)),
-            ),
-            None => add("unreadable_sprite", shown_path(&spr_path, names)),
+    Problem {
+        kind: p.kind,
+        file: file.to_string(),
+        detail: if !p.path.is_empty() && !p.note.is_empty() {
+            format!("{detail}: {}", p.note)
+        } else {
+            detail
         },
-    }
-    // images the layers ask for
-    if let Some((indexed, rgba)) = counts {
-        let mut worst: BTreeMap<i32, i64> = BTreeMap::new();
-        for (_, _, _, l) in act.layers() {
-            if l.sprite_index < 0 {
-                continue;
-            }
-            let have = if l.sprite_type == 0 { indexed } else { rgba };
-            if i64::from(l.sprite_index) >= have {
-                let w = worst.entry(l.sprite_type).or_default();
-                *w = (*w).max(i64::from(l.sprite_index));
-            }
-        }
-        for (ty, idx) in worst {
-            let (kind, have) = if ty == 0 {
-                ("palette", indexed)
-            } else {
-                ("true-colour", rgba)
-            };
-            add(
-                "image_out_of_range",
-                format!("a layer uses {kind} image {idx}, the sprite has {have}"),
-            );
-        }
-    }
-    // sounds played by a frame ("atk" marks the frame that hits and is no file); before ACT 2.1
-    // the field is not a sound number
-    let mut seen = std::collections::BTreeSet::new();
-    if act.version < V2_1 {
-        return;
-    }
-    for (_, _, f) in act
-        .actions
-        .iter()
-        .enumerate()
-        .flat_map(|(a, x)| x.frames.iter().enumerate().map(move |(n, f)| (a, n, f)))
-    {
-        let Ok(id) = usize::try_from(f.sound_id) else {
-            continue;
-        };
-        let Some(raw) = act.sounds.get(id) else {
-            add(
-                "sound_out_of_range",
-                format!(
-                    "a frame plays sound {id}, the table has {}",
-                    act.sounds.len()
-                ),
-            );
-            continue;
-        };
-        // the name as the bytes of the file, not as text: Korean names are not Latin-1
-        let name: Vec<u8> = raw.iter().copied().take_while(|&b| b != 0).collect();
-        if name.is_empty() || name.eq_ignore_ascii_case(b"atk") || !seen.insert(name.clone()) {
-            continue;
-        }
-        let mut p = b"data\\wav\\".to_vec();
-        p.extend(&name);
-        if !vfs.exists(&key(&p)) {
-            add("missing_sound", shown_path(&p, names));
-        }
-    }
-}
-
-fn check_str(
-    vfs: &Vfs,
-    path: &[u8],
-    data: &[u8],
-    shown: &str,
-    names: NameMode,
-    out: &mut Vec<Problem>,
-) {
-    let s = match str_effect::parse(data) {
-        Ok(s) => s,
-        Err(e) => {
-            out.push(Problem {
-                kind: "unreadable_effect",
-                file: shown.to_string(),
-                detail: e.to_string(),
-            });
-            return;
-        }
-    };
-    for name in str_effect::texture_names(&s) {
-        // the client looks next to the effect, then in the shared effect folder
-        let mut near = dir_of(path).to_vec();
-        near.extend(&name);
-        let mut shared = b"data\\texture\\effect\\".to_vec();
-        shared.extend(&name);
-        if !vfs.exists(&key(&near)) && !vfs.exists(&key(&shared)) {
-            out.push(Problem {
-                kind: "missing_effect_texture",
-                file: shown.to_string(),
-                detail: shown_path(&shared, names),
-            });
-        }
     }
 }
 
@@ -216,18 +75,20 @@ pub fn check(
     work.sort_by(|a, b| a.4.cmp(&b.4));
     let results: Vec<Vec<Problem>> = work
         .par_iter()
-        .map(|(n, i, kind, raw, shown)| {
-            let mut out = Vec::new();
-            match vfs.read((*n, *i)) {
-                Err(e) => out.push(Problem {
-                    kind: "unreadable_entry",
-                    file: shown.clone(),
-                    detail: e.to_string(),
-                }),
-                Ok(data) if *kind == 0 => check_act(&vfs, raw, &data, shown, names, &mut out),
-                Ok(data) => check_str(&vfs, raw, &data, shown, names, &mut out),
+        .map(|(n, i, kind, raw, file)| match vfs.read((*n, *i)) {
+            Err(e) => vec![Problem {
+                kind: "unreadable_entry",
+                file: file.clone(),
+                detail: e.to_string(),
+            }],
+            Ok(data) => {
+                let found = if *kind == 0 {
+                    refs::check_act(&vfs, raw, &data)
+                } else {
+                    refs::check_str(&vfs, raw, &data)
+                };
+                found.iter().map(|p| shown(p, file, names)).collect()
             }
-            out
         })
         .collect();
     let acts = work.iter().filter(|w| w.2 == 0).count();

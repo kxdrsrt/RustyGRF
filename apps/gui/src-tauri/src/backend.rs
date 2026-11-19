@@ -458,6 +458,55 @@ pub struct ReferenceSpec {
     pub under: bool,
 }
 
+/// Starts the program the system has for the file (not waiting for it).
+pub fn open_with_system(path: &Path) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(path);
+        c
+    } else if cfg!(target_os = "windows") {
+        // `start` takes the first quoted argument as a window title
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", ""]).arg(path);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("no program could be started for {}: {e}", path.display()))
+}
+
+/// Most bytes one hex page returns.
+const HEX_PAGE_MAX: usize = 4096;
+
+#[derive(Serialize, Debug)]
+pub struct HexPage {
+    pub offset: u64,
+    pub size: u64,
+    /// The bytes from `offset`, base64.
+    pub bytes: String,
+}
+
+/// Width, height, frame count and frames per second from the header of a Bink 1 or 2 file.
+fn bink_header(d: &[u8]) -> Option<(u32, u32, u32, f32)> {
+    if d.len() < 44 || !(d.starts_with(b"BIK") || d.starts_with(b"KB2")) {
+        return None;
+    }
+    let u = |at: usize| u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]]);
+    let (frames, width, height, num, den) = (u(8), u(20), u(24), u(28), u(32));
+    if width == 0 || height == 0 || den == 0 {
+        return None;
+    }
+    Some((width, height, frames, num as f32 / den as f32))
+}
+
 /// A sound named in an animation, as the client finds it: `data\wav\<name>`.
 #[derive(Serialize, Debug)]
 pub struct SoundOut {
@@ -789,6 +838,15 @@ pub enum Preview {
     },
     Hex {
         dump: String,
+        size: u32,
+    },
+    /// A Bink video: the browser cannot play it, so the header is shown and the file can be
+    /// opened with the system's player.
+    Video {
+        width: u32,
+        height: u32,
+        frames: u32,
+        fps: f32,
         size: u32,
     },
     Message {
@@ -2469,10 +2527,88 @@ impl Session {
                     }
                 }
             }
+            "bik" | "bk2" => match bink_header(&data) {
+                Some((width, height, frames, fps)) => Preview::Video {
+                    width,
+                    height,
+                    frames,
+                    fps,
+                    size: data.len() as u32,
+                },
+                None => Preview::Hex {
+                    dump: hex_dump(&data),
+                    size: data.len() as u32,
+                },
+            },
             _ => Preview::Hex {
                 dump: hex_dump(&data),
                 size: data.len() as u32,
             },
+        })
+    }
+
+    /// Writes an entry (with staged changes) into a temporary folder and returns its path, so
+    /// that another program can open it.
+    pub fn export_temp(&self, index: usize) -> Result<PathBuf, String> {
+        let (name, data, _) = self.working_bytes(index)?;
+        let shown = name.display(self.mode);
+        let file = shown.rsplit('\\').next().unwrap_or("file");
+        // names come from the archive: keep only what is safe as one file name
+        let safe: String = file
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || "._- ()".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let dir = std::env::temp_dir().join(format!("rustygrf-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(if safe.trim_matches('.').is_empty() {
+            "file".into()
+        } else {
+            safe
+        });
+        std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(path)
+    }
+
+    /// `len` bytes of an entry (with staged changes) from `offset`, for the hex editor.
+    pub fn hex_page(&self, index: usize, offset: u64, len: usize) -> Result<HexPage, String> {
+        let (_, data, _) = self.working_bytes(index)?;
+        let start = usize::try_from(offset).map_or(data.len(), |o| o.min(data.len()));
+        let end = (start + len.min(HEX_PAGE_MAX)).min(data.len());
+        Ok(HexPage {
+            offset: start as u64,
+            size: data.len() as u64,
+            bytes: b64(&data[start..end]),
+        })
+    }
+
+    /// Overwrites single bytes of an entry (the size never changes) and stages the result.
+    pub fn stage_hex(&mut self, index: usize, edits: &[(u64, u8)]) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, mut data, mut what) = s.working_bytes(index)?;
+            if edits.is_empty() {
+                return Err("no byte was changed".into());
+            }
+            let len = data.len();
+            for &(at, byte) in edits {
+                let slot = usize::try_from(at)
+                    .ok()
+                    .and_then(|a| data.get_mut(a))
+                    .ok_or_else(|| format!("offset {at} is outside the file ({len} bytes)"))?;
+                *slot = byte;
+            }
+            what.push(format!("{} byte(s) changed", edits.len()));
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(data),
+                what,
+            });
+            Ok(())
         })
     }
 
@@ -4021,6 +4157,46 @@ mod tests {
             .find(&GrfPath::from_display("data\\a.txt", NameMode::Cp1252).unwrap())
             .unwrap();
         assert_eq!(a.read(i).unwrap().data, b"text");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bytes_are_edited_in_place_and_the_header_of_a_video_is_read() {
+        let (dir, grf) = sample("hex");
+        let mut s = Session::open(&grf).unwrap();
+        s.search("blob.bin");
+        let i = s.page(0, 1)[0].index;
+        let page = s.hex_page(i, 90, 4096).unwrap();
+        assert_eq!((page.offset, page.size), (90, 100));
+        let bytes = B64.decode(&page.bytes).unwrap();
+        assert_eq!(bytes, (90..100u8).collect::<Vec<_>>());
+        // an offset past the end is an empty page, not an error
+        assert!(
+            B64.decode(&s.hex_page(i, 500, 16).unwrap().bytes)
+                .unwrap()
+                .is_empty()
+        );
+        s.stage_hex(i, &[(0, 0xaa), (99, 0xbb)]).unwrap();
+        assert_eq!(s.pending().len(), 1);
+        let now = B64.decode(&s.hex_page(i, 0, 4096).unwrap().bytes).unwrap();
+        assert_eq!((now[0], now[1], now[99], now.len()), (0xaa, 1, 0xbb, 100));
+        // a bad offset changes nothing, and neither does an empty edit
+        assert!(s.stage_hex(i, &[(100, 1)]).is_err());
+        assert!(s.stage_hex(i, &[]).is_err());
+        assert_eq!(s.pending().len(), 1);
+        s.undo();
+        assert!(s.pending().is_empty());
+
+        // the header of a real Bink file: 512 x 256, 450 frames, 30 fps
+        let mut bik = b"BIKi".to_vec();
+        for v in [0x21e9f0u32, 450, 0x5ed8, 450, 512, 256, 10_000_000, 333_333] {
+            bik.extend(v.to_le_bytes());
+        }
+        bik.resize(64, 0);
+        let (w, h, frames, fps) = bink_header(&bik).unwrap();
+        assert_eq!((w, h, frames), (512, 256, 450));
+        assert!((fps - 30.0).abs() < 0.01);
+        assert!(bink_header(b"BIKi").is_none() && bink_header(&[0u8; 64]).is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

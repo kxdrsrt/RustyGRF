@@ -217,6 +217,27 @@ pub const TOOLS: &[Tool] = &[
         run: map_files_tool,
     },
     Tool {
+        name: "grf_client_refs",
+        title: "Check what animations and effects name",
+        description: "Checks every animation (.act) and effect (.str) of the archives against the files that exist: the .spr next to an animation, the images its layers use (a layer asking for an image the sprite does not have), the sounds its frames play (`data\\wav\\<name>`, from ACT 2.1; \"atk\" marks the frame that hits and is no file) and the textures of an effect. Give ALL archives of the client, highest priority first (as in DATA.INI): with only one, sprites that live in another archive are reported missing. Names inside Lua tables are not checked. Missing sprites are counted per folder; they are often harmless leftovers (the kRO robe animations), so look at the other kinds first.",
+        params: &[
+            req(
+                "paths",
+                Ty::StrList,
+                "The archives of the client, highest priority first.",
+            ),
+            opt(
+                "only",
+                Ty::Enum(&["act", "str"]),
+                "Only animations (act) or only effects (str).",
+            ),
+            NAMES,
+            LIMIT,
+        ],
+        writes: false,
+        run: client_refs_tool,
+    },
+    Tool {
         name: "grf_lua_decompile",
         title: "Decompile a compiled Lua file",
         description: "Turns a compiled Lua 5.0 or 5.1 .lub entry back into source text. `complete` is false when some functions could only be shown as a commented bytecode listing (a few control-flow shapes are not understood yet); Lua 5.0 (62 files in the kRO client) is decompiled too. Set `listing` to get the plain bytecode listing instead.",
@@ -1155,6 +1176,116 @@ fn map_files_tool(ctx: &Ctx, a: &Args) -> Out {
             "path": show(&f.path), "kind": f.kind.name(), "found": f.found,
             "named_by": f.named_by.as_deref().map(show), "problem": f.problem,
         })).collect::<Vec<_>>(),
+    }))
+}
+
+fn client_refs_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rayon::prelude::*;
+    use rgrf_formats::map_files::MapSource;
+    use rgrf_formats::refs;
+    type Keyed<'a> = (&'a Archive, HashMap<Vec<u8>, Vec<usize>>);
+    struct Src<'a>(Vec<Keyed<'a>>);
+    impl Src<'_> {
+        fn find(&self, path: &[u8]) -> Option<(usize, usize)> {
+            let key = GrfPath::new(path.to_vec()).key();
+            self.0
+                .iter()
+                .enumerate()
+                .find_map(|(n, (_, m))| m.get(&key).and_then(|v| v.last()).map(|&i| (n, i)))
+        }
+    }
+    impl MapSource for Src<'_> {
+        fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+            let (n, i) = self.find(path)?;
+            let d = self.0[n].0.read(i).ok()?;
+            d.status.is_ok().then_some(d.data)
+        }
+        fn exists(&self, path: &[u8]) -> bool {
+            self.find(path).is_some()
+        }
+    }
+    let paths = a.list("paths");
+    if paths.is_empty() {
+        return Err("give at least one archive in `paths`".into());
+    }
+    let archives = paths
+        .iter()
+        .map(|p| open(ctx, p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let src = Src(archives.iter().map(|x| (x, x.index_by_key())).collect());
+    let only = a.opt_str("only");
+    let mode = names_mode(a);
+    let limit = a.opt_u64("limit").map_or(100, |n| n as usize);
+    // the files that win: the first archive that has the path
+    let mut work = Vec::new();
+    let mut seen = HashSet::new();
+    for (n, (arc, keys)) in src.0.iter().enumerate() {
+        for (key, idxs) in keys {
+            let Some(&i) = idxs.last() else { continue };
+            let e = &arc.entries()[i];
+            let ext = e
+                .name
+                .as_bytes()
+                .rsplit(|&b| b == b'.')
+                .next()
+                .map(|x| x.to_ascii_lowercase());
+            let is_act = match ext.as_deref() {
+                Some(b"act") if only.is_none_or(|o| o == "act") => true,
+                Some(b"str") if only.is_none_or(|o| o == "str") => false,
+                _ => continue,
+            };
+            if e.is_file() && seen.insert(key.clone()) {
+                work.push((n, i, is_act));
+            }
+        }
+    }
+    let found: Vec<(String, Vec<refs::Problem>)> = work
+        .par_iter()
+        .filter_map(|&(n, i, is_act)| {
+            ctx.control.check().ok()?;
+            let e = &src.0[n].0.entries()[i];
+            let data = src.0[n].0.read(i).ok()?.data;
+            let raw = e.name.as_bytes();
+            let p = if is_act {
+                refs::check_act(&src, raw, &data)
+            } else {
+                refs::check_str(&src, raw, &data)
+            };
+            (!p.is_empty()).then(|| (e.name.display(mode), p))
+        })
+        .collect();
+    ctx.control.check().map_err(err)?;
+    let acts = work.iter().filter(|w| w.2).count();
+    let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
+    let mut missing_sprites = std::collections::BTreeMap::<String, usize>::new();
+    let mut list = Vec::new();
+    let mut found = found;
+    found.sort_by(|x, y| x.0.cmp(&y.0));
+    for (file, problems) in &found {
+        for p in problems {
+            *by_kind.entry(p.kind).or_default() += 1;
+            if p.kind == "missing_sprite" {
+                let dir = file.rsplit_once('\\').map_or("", |d| d.0);
+                *missing_sprites.entry(dir.to_string()).or_default() += 1;
+            } else {
+                list.push(json!({
+                    "kind": p.kind, "file": file,
+                    "missing": (!p.path.is_empty()).then(|| GrfPath::new(p.path.clone()).display(mode)),
+                    "note": p.note,
+                }));
+            }
+        }
+    }
+    let mut folders: Vec<_> = missing_sprites.into_iter().collect();
+    folders.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
+    Ok(json!({
+        "animations_checked": acts, "effects_checked": work.len() - acts,
+        "files_with_problems": found.len(),
+        "by_kind": by_kind,
+        "problems": list.iter().take(limit).collect::<Vec<_>>(),
+        "problems_truncated": list.len() > limit,
+        "animations_without_sprite_by_folder": folders.iter().take(limit)
+            .map(|(d, n)| json!({"folder": d, "count": n})).collect::<Vec<_>>(),
     }))
 }
 

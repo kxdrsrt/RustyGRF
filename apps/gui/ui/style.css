@@ -449,3 +449,17 @@ button.small.on { background: var(--accent); border-color: var(--accent); color:
 .buildform .fl { flex: 0 0 96px; }
 .buildform select { flex: 1; min-width: 0; }
 .buildform > .hint { margin: -2px 0 6px 106px; }
+
+#preview-head .hexbtn { margin-top: 6px; }
+#dlg-body:has(.hexgrid) { max-height: calc(100vh - 170px); overflow: hidden; }
+.hexgrid { font-family: var(--mono); font-size: 12px; max-height: calc(100vh - 330px); overflow: auto; }
+.hexrow { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
+.hexoff { color: var(--muted); margin-right: 8px; }
+.hexcell { display: inline-block; }
+input.hexb { width: 2.2em; padding: 1px 2px; text-align: center; font: inherit; border: 1px solid transparent; background: transparent; color: inherit; border-radius: 3px; }
+input.hexb:hover { border-color: var(--line); }
+input.hexb:focus { border-color: var(--accent); background: var(--panel); outline: none; }
+input.hexb.changed { background: var(--select); border-color: var(--accent); }
+input.hexb[aria-invalid="true"] { border-color: #d33; }
+.hexascii { margin-left: 10px; color: var(--muted); letter-spacing: 0.05em; }
+.hexascii span { display: inline-block; width: 0.62em; }
