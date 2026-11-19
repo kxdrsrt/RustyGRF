@@ -500,6 +500,16 @@ async fn restore_draft(state: State<'_, AppState>) -> Res<backend::DraftRestored
     with_session(&state, |s| s.restore_draft()).await
 }
 
+/// Keeps the draft found when the archive was opened for a later session.
+#[tauri::command]
+async fn defer_draft(state: State<'_, AppState>) -> Res<()> {
+    with_session(&state, |s| {
+        s.defer_draft();
+        Ok(())
+    })
+    .await
+}
+
 /// Deletes the draft found when the archive was opened.
 #[tauri::command]
 async fn discard_draft(state: State<'_, AppState>) -> Res<()> {
@@ -767,6 +777,7 @@ pub fn run() {
             discard_pending,
             restore_draft,
             discard_draft,
+            defer_draft,
             history,
             undo_change,
             redo_change,

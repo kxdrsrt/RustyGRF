@@ -69,6 +69,8 @@ pub struct DraftInfo {
     pub archive_changed: bool,
     /// Replacement files from disk that no longer exist.
     pub missing_files: usize,
+    /// Further drafts set aside earlier, offered after this one.
+    pub more: usize,
 }
 
 fn secs(t: SystemTime) -> u64 {
@@ -166,15 +168,44 @@ pub fn save(root: &Path, archive: &Path, changes: &[DraftChange]) -> std::io::Re
     Ok(())
 }
 
-fn read_manifest(root: &Path, archive: &Path) -> Option<Manifest> {
-    let bytes = fs::read(folder(root, archive).join(MANIFEST)).ok()?;
+fn read_manifest(dir: &Path) -> Option<Manifest> {
+    let bytes = fs::read(dir.join(MANIFEST)).ok()?;
     let m: Manifest = serde_json::from_slice(&bytes).ok()?;
     (m.version == VERSION && !m.changes.is_empty()).then_some(m)
 }
 
-/// Whether `archive` has a draft, and what it holds.
+/// The drafts of `archive`, the one to offer first: the current draft, then the ones set aside
+/// with "later" (folder `<hash>.<time>`), newest first.
+fn candidates(root: &Path, archive: &Path) -> Vec<PathBuf> {
+    let main = folder(root, archive);
+    let prefix = format!(
+        "{}.",
+        main.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    let mut aside: Vec<(u64, PathBuf)> = fs::read_dir(root)
+        .map(|d| {
+            d.flatten()
+                .filter_map(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    let t = n.strip_prefix(&prefix)?.parse::<u64>().ok()?;
+                    Some((t, e.path()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    aside.sort_by_key(|a| std::cmp::Reverse(a.0));
+    std::iter::once(main)
+        .chain(aside.into_iter().map(|(_, p)| p))
+        .filter(|d| read_manifest(d).is_some())
+        .collect()
+}
+
+/// Whether `archive` has a draft, and what the first one to offer holds.
 pub fn info(root: &Path, archive: &Path) -> Option<DraftInfo> {
-    let m = read_manifest(root, archive)?;
+    let all = candidates(root, archive);
+    let m = read_manifest(all.first()?)?;
     Some(DraftInfo {
         changes: m.changes.len(),
         saved_at: m.saved_at,
@@ -184,14 +215,16 @@ pub fn info(root: &Path, archive: &Path) -> Option<DraftInfo> {
             .iter()
             .filter(|c| matches!(c, Stored::Put { file, .. } if !file.exists()))
             .count(),
+        more: all.len() - 1,
     })
 }
 
-/// The changes of `archive`'s draft, in order. Changes whose file or stored content is gone are
-/// left out; their number is returned too.
-pub fn load(root: &Path, archive: &Path) -> Option<(Vec<DraftChange>, usize)> {
-    let m = read_manifest(root, archive)?;
-    let dir = folder(root, archive);
+/// The changes of the first draft to offer, in order, and removes that draft (the session writes
+/// it again as its own). Changes whose file or stored content is gone are left out; their number
+/// is returned too.
+pub fn take(root: &Path, archive: &Path) -> Option<(Vec<DraftChange>, usize)> {
+    let dir = candidates(root, archive).into_iter().next()?;
+    let m = read_manifest(&dir)?;
     let mut out = Vec::with_capacity(m.changes.len());
     let mut skipped = 0;
     for c in m.changes {
@@ -219,12 +252,35 @@ pub fn load(root: &Path, archive: &Path) -> Option<(Vec<DraftChange>, usize)> {
             None => skipped += 1,
         }
     }
+    let _ = fs::remove_dir_all(&dir);
     Some((out, skipped))
 }
 
-/// Deletes `archive`'s draft.
+/// Deletes the first draft to offer.
 pub fn discard(root: &Path, archive: &Path) {
-    let _ = fs::remove_dir_all(folder(root, archive));
+    if let Some(dir) = candidates(root, archive).into_iter().next() {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
+/// Keeps the current draft for later, so the session can write its own: the folder is renamed
+/// to `<hash>.<time it was saved>`. Drafts already set aside stay as they are.
+pub fn set_aside(root: &Path, archive: &Path) -> std::io::Result<()> {
+    let main = folder(root, archive);
+    let Some(m) = read_manifest(&main) else {
+        return Ok(());
+    };
+    let mut t = m.saved_at;
+    let name = main
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut dst = root.join(format!("{name}.{t}"));
+    while dst.exists() {
+        t += 1;
+        dst = root.join(format!("{name}.{t}"));
+    }
+    fs::rename(main, dst)
 }
 
 #[cfg(test)]
@@ -270,7 +326,9 @@ mod tests {
             (i.changes, i.archive_changed, i.missing_files),
             (3, false, 0)
         );
-        assert_eq!(load(&root, &archive).unwrap(), (changes.clone(), 0));
+        assert_eq!(take(&root, &archive).unwrap(), (changes.clone(), 0));
+        assert!(info(&root, &archive).is_none(), "taken");
+        save(&root, &archive, &changes).unwrap();
 
         // writing again keeps one content file; a dropped change removes its content
         save(&root, &archive, &changes).unwrap();
@@ -297,12 +355,45 @@ mod tests {
         fs::write(&archive, b"GRF, now longer").unwrap();
         let i = info(&root, &archive).unwrap();
         assert_eq!((i.archive_changed, i.missing_files), (true, 1));
-        let (got, skipped) = load(&root, &archive).unwrap();
+        let (got, skipped) = take(&root, &archive).unwrap();
         assert_eq!((got.len(), skipped), (2, 1));
+        save(&root, &archive, &changes[1..]).unwrap();
 
         // no changes: the draft goes away
         save(&root, &archive, &[]).unwrap();
         assert!(!dir.exists() && info(&root, &archive).is_none());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn drafts_set_aside_are_offered_after_the_current_one_newest_first() {
+        let base = tmp("aside");
+        let (root, archive) = (base.join("drafts"), base.join("a.grf"));
+        fs::write(&archive, b"GRF").unwrap();
+        let one = |n: &[u8]| vec![DraftChange::Remove { name: n.to_vec() }];
+        save(&root, &archive, &one(b"first")).unwrap();
+        set_aside(&root, &archive).unwrap();
+        save(&root, &archive, &one(b"second")).unwrap();
+        set_aside(&root, &archive).unwrap();
+        save(&root, &archive, &[one(b"third"), one(b"x")].concat()).unwrap();
+        let i = info(&root, &archive).unwrap();
+        assert_eq!((i.changes, i.more), (2, 2));
+        let names = |v: Vec<DraftChange>| -> Vec<Vec<u8>> {
+            v.into_iter()
+                .map(|c| match c {
+                    DraftChange::Remove { name } => name,
+                    _ => unreachable!(),
+                })
+                .collect()
+        };
+        assert_eq!(names(take(&root, &archive).unwrap().0)[0], b"third");
+        // the two set aside in the same second keep apart; the newer comes first
+        let second = names(take(&root, &archive).unwrap().0);
+        let first = names(take(&root, &archive).unwrap().0);
+        let mut got = [second[0].clone(), first[0].clone()];
+        got.sort();
+        assert_eq!(got, [b"first".to_vec(), b"second".to_vec()]);
+        assert!(info(&root, &archive).is_none());
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -313,7 +404,7 @@ mod tests {
         let dir = folder(&root, &archive);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(MANIFEST), b"{ not json").unwrap();
-        assert!(info(&root, &archive).is_none() && load(&root, &archive).is_none());
+        assert!(info(&root, &archive).is_none() && take(&root, &archive).is_none());
         // a content name that tries to leave the draft folder is not read
         fs::write(
             dir.join(MANIFEST),
@@ -321,7 +412,7 @@ mod tests {
                "changes":[{"kind":"bytes","name":"61","blob":"../../x","what":[]}]}"#,
         )
         .unwrap();
-        assert_eq!(load(&root, &archive).unwrap(), (Vec::new(), 1));
+        assert_eq!(take(&root, &archive).unwrap(), (Vec::new(), 1));
         fs::remove_dir_all(base).unwrap();
     }
 }

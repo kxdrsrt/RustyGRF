@@ -191,7 +191,8 @@ async function offerDraft(d) {
   const body = [el("p", { text: `${fmtNum(d.changes)} change(s) from ${when} were not saved in an archive. They were kept as a draft (for example because the app closed).` })];
   if (d.archive_changed) body.push(el("p", { class: "error", text: "The archive itself has changed since then. Check the changes before you save." }));
   if (d.missing_files) body.push(el("p", { class: "muted", text: `${fmtNum(d.missing_files)} replacement file(s) no longer exist on disk and will be left out.` }));
-  body.push(el("p", { class: "muted", text: "Later keeps the draft for the next time; changes you make now are then not added to it." }));
+  if (d.more) body.push(el("p", { class: "muted", text: `${fmtNum(d.more)} older draft(s) of this archive follow, one each time you open it.` }));
+  body.push(el("p", { class: "muted", text: "Later keeps this draft for another time; the changes you make now are saved as a draft of their own." }));
   const act = await ask("Restore unsaved changes?", body, [{ label: "Restore", value: "restore", primary: true }, { label: "Discard", value: "discard" }, { label: "Later", value: null }]);
   try {
     if (act === "restore") {
@@ -203,7 +204,8 @@ async function offerDraft(d) {
       await invoke("discard_draft");
       setStatus("Draft discarded");
     } else {
-      setStatus("The draft is kept for the next time");
+      await invoke("defer_draft");
+      setStatus("The draft is kept for another time");
     }
   } catch (e) {
     await note("Could not restore the changes", errText(e), true);

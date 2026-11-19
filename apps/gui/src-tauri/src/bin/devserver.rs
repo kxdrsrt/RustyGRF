@@ -218,6 +218,10 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
         }),
         "pending" => with(state, |s| to_json(s.pending())),
         "restore_draft" => with(state, |s| to_json(s.restore_draft()?)),
+        "defer_draft" => with(state, |s| {
+            s.defer_draft();
+            Ok(Value::Null)
+        }),
         "discard_draft" => with(state, |s| {
             s.discard_draft();
             Ok(Value::Null)

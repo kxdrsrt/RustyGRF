@@ -1072,7 +1072,7 @@ impl Session {
     pub fn restore_draft(&mut self) -> Result<DraftRestored, String> {
         let root = self.draft_root.clone().ok_or("drafts are off")?;
         let (changes, skipped) =
-            crate::draft::load(&root, &self.path).ok_or("there is no draft for this archive")?;
+            crate::draft::take(&root, &self.path).ok_or("there is no draft for this archive")?;
         self.draft_offered = false;
         let restored = changes.len();
         self.transact(|s| {
@@ -1096,6 +1096,18 @@ impl Session {
             Ok(())
         })?;
         Ok(DraftRestored { restored, skipped })
+    }
+
+    /// Keeps the offered draft for a later session and saves the changes of this one again.
+    pub fn defer_draft(&mut self) {
+        if let Some(root) = &self.draft_root
+            && let Err(e) = crate::draft::set_aside(root, &self.path)
+        {
+            eprintln!("draft of {} not set aside: {e}", self.path.display());
+            return;
+        }
+        self.draft_offered = false;
+        self.persist_draft();
     }
 
     /// Deletes the offered draft; the pending changes from now on are saved as the new draft.
@@ -3612,6 +3624,40 @@ mod tests {
         let out = dir.join("out.grf");
         let r = save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
         assert_eq!((r.replaced, r.removed, r.verified), (2, 1, true));
+
+        // "later": the draft is set aside, this session saves its own, both are offered in turn
+        drop(s);
+        let mut s = Session::open(&grf).unwrap();
+        s.set_draft_root(Some(root.clone()));
+        assert_eq!(s.info().draft.unwrap().more, 0);
+        s.defer_draft();
+        let k = find(&mut s, "korean.txt");
+        s.stage_remove(&[k]).unwrap();
+        drop(s);
+        let mut s = Session::open(&grf).unwrap();
+        s.set_draft_root(Some(root.clone()));
+        let d = s.info().draft.unwrap();
+        assert_eq!((d.changes, d.more), (1, 1));
+        assert_eq!(s.restore_draft().unwrap().restored, 1);
+        drop(s);
+        let mut s = Session::open(&grf).unwrap();
+        s.set_draft_root(Some(root.clone()));
+        let d = s.info().draft.unwrap();
+        assert_eq!(
+            (d.changes, d.more),
+            (1, 1),
+            "the restored one was saved again"
+        );
+        s.discard_draft();
+        drop(s);
+        let s = Session::open(&grf);
+        let mut s = s.unwrap();
+        s.set_draft_root(Some(root.clone()));
+        assert_eq!(
+            s.info().draft.unwrap().changes,
+            3,
+            "the one set aside comes next"
+        );
 
         // a draft that is discarded is gone, and the session saves its own changes again
         drop(s);
