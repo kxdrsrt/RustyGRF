@@ -36,6 +36,8 @@ pub enum IssueKind {
     Corrupt,
     Encrypted,
     KeyBlock,
+    /// A Thor patch's `data.integrity` list disagrees with the stored data.
+    Integrity,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +147,9 @@ pub fn verify<R: ReadAt>(
     }
 
     let unreadable = check_structure(a, &mut rep);
+    if opts.decode && a.header().kind == crate::container::Kind::Thor {
+        check_thor_integrity(a, &unreadable, &mut rep);
+    }
 
     if opts.decode {
         let total = a.len() as u64;
@@ -174,6 +179,71 @@ pub fn verify<R: ReadAt>(
     rep.issues
         .sort_by_key(|i| (std::cmp::Reverse(i.severity), i.entry.unwrap_or(usize::MAX)));
     Ok(rep)
+}
+
+/// A Thor patch lists `name=0xCRC32` for its files in `data.integrity`, the CRC32 of the file
+/// content (measured on third-party patches). A list that is missing or in another shape is not an
+/// error.
+fn check_thor_integrity<R: ReadAt>(
+    a: &Archive<R>,
+    unreadable: &HashMap<usize, ()>,
+    rep: &mut VerifyReport,
+) {
+    let key = crate::name::GrfPath::new(crate::thor::INTEGRITY_FILE.as_bytes()).key();
+    let Some(list) = (0..a.len()).find(|&i| a.entries()[i].name.key() == key) else {
+        return;
+    };
+    let Ok(text) = a.read(list).map(|d| d.data) else {
+        return;
+    };
+    let mut expected: std::collections::HashMap<Vec<u8>, u32> = std::collections::HashMap::new();
+    for line in text.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(at) = line.iter().rposition(|&b| b == b'=') else {
+            continue;
+        };
+        let hex = line[at + 1..]
+            .strip_prefix(b"0x")
+            .unwrap_or(&line[at + 1..]);
+        if let Some(crc) = std::str::from_utf8(hex)
+            .ok()
+            .and_then(|h| u32::from_str_radix(h.trim(), 16).ok())
+        {
+            expected.insert(crate::name::GrfPath::new(&line[..at]).key(), crc);
+        }
+    }
+    let (mut checked, mut bad) = (0usize, 0usize);
+    for i in 0..a.len() {
+        let e = &a.entries()[i];
+        let Some(&want) = expected.get(&e.name.key()) else {
+            continue;
+        };
+        if i == list || e.is_removal() || unreadable.contains_key(&i) {
+            continue;
+        }
+        let Ok(d) = a.read(i) else { continue };
+        if !d.status.is_ok() {
+            continue;
+        }
+        checked += 1;
+        if crc32fast::hash(&d.data) != want {
+            bad += 1;
+            rep.issues.push(Issue {
+                severity: Severity::Warning,
+                kind: IssueKind::Integrity,
+                entry: Some(i),
+                message: format!("data.integrity says CRC32 {want:08x}, the content has another"),
+            });
+        }
+    }
+    if checked > 0 && bad == 0 {
+        rep.issues.push(Issue {
+            severity: Severity::Info,
+            kind: IssueKind::Integrity,
+            entry: None,
+            message: format!("data.integrity: CRC32 of {checked} files agree"),
+        });
+    }
 }
 
 fn status_issue(index: usize, s: &DecodeStatus) -> Option<Issue> {

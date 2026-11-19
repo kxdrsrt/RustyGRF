@@ -209,7 +209,7 @@ pub struct ThorOptions {
     /// Name of the target GRF; empty for the client's default.
     pub target_grf: Vec<u8>,
     pub method: Method,
-    /// Add the `data.integrity` hash list (CRC32 of every stored stream, as GRF Editor does).
+    /// Add the `data.integrity` hash list (`path=0xCRC32` of the file content, as real Thor patches have it).
     pub integrity: bool,
     pub overwrite: bool,
 }
@@ -380,7 +380,7 @@ fn write_to(
         };
         report.bytes += data.len() as u64;
         integrity.extend(name);
-        integrity.extend(format!("=0x{crc:08x}\r\n").bytes());
+        integrity.extend(format!("=0x{:08x}\r\n", crc32fast::hash(data)).bytes());
         Ok(Placed {
             name: name.to_vec(),
             at: Some(at),
@@ -520,6 +520,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
+        // the CRC32 of the content are checked and agree
+        assert!(
+            rep.issues
+                .iter()
+                .any(|i| i.kind == crate::verify::IssueKind::Integrity
+                    && i.message.contains("agree")),
+            "{:?}",
+            rep.issues
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

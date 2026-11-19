@@ -269,7 +269,7 @@ enum ThorCmd {
         /// Delete this path in the target (repeatable)
         #[arg(long = "remove")]
         remove: Vec<String>,
-        /// Add the data.integrity list of CRC32 hashes, as GRF Editor does
+        /// Add the data.integrity list of CRC32 hashes of the file contents, as real Thor patches have it
         #[arg(long)]
         integrity: bool,
         /// zlib (default, every client), zopfli (slow, smaller) or lzma (needs the LZMA cps.dll)
