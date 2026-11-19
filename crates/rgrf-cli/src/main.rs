@@ -206,6 +206,21 @@ enum Cmd {
         #[command(flatten)]
         write: WriteArgs,
     },
+    /// Write a changed copy of an archive: replace or add files from disk, remove paths. The
+    /// original is never modified; unchanged entries keep their streams (no recompression)
+    Edit {
+        grf: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Replace or add a file: ARCHIVE_PATH=FILE (repeat for several)
+        #[arg(long = "put", value_name = "ARCHIVE_PATH=FILE")]
+        put: Vec<String>,
+        /// Leave this path out of the result (repeat for several)
+        #[arg(long = "remove", value_name = "ARCHIVE_PATH")]
+        remove: Vec<String>,
+        #[command(flatten)]
+        write: WriteArgs,
+    },
     /// Build an archive from a folder (the folder is the archive root, e.g. it contains `data/`)
     Build {
         folder: PathBuf,
@@ -1722,6 +1737,20 @@ fn run(cli: &Cli) -> Result<i32> {
             output,
             write,
         } => patch_cmd(cli, old, new, output, &write.options(encrypt_key(cli)?)?),
+        Cmd::Edit {
+            grf,
+            output,
+            put,
+            remove,
+            write,
+        } => archive_edit_cmd(
+            cli,
+            grf,
+            output,
+            put,
+            remove,
+            &write.options(encrypt_key(cli)?)?,
+        ),
         Cmd::Repack {
             grf,
             output,
@@ -2491,6 +2520,61 @@ fn patch_cmd(
             r.added, r.changed, r.removed
         );
         println!("Use:      list the patch before OLD in DATA.INI");
+    }
+    Ok(0)
+}
+
+fn archive_edit_cmd(
+    cli: &Cli,
+    grf: &Path,
+    output: &Path,
+    put: &[String],
+    remove: &[String],
+    opts: &RepackOptions,
+) -> Result<i32> {
+    use rgrf_core::edit::{Edit, apply, archive_path, split_put};
+    if put.is_empty() && remove.is_empty() {
+        bail!("nothing to do: give --put ARCHIVE_PATH=FILE and/or --remove ARCHIVE_PATH");
+    }
+    let mut edits = Vec::new();
+    for spec in put {
+        let (name, file) = split_put(spec)?;
+        let data = std::fs::read(file).with_context(|| format!("cannot read {file}"))?;
+        edits.push(Edit::Put {
+            name: archive_path(name, cli.names)?,
+            data,
+        });
+    }
+    for name in remove {
+        edits.push(Edit::Remove {
+            name: archive_path(name, cli.names)?,
+        });
+    }
+    let archives = open_all(&[grf.to_path_buf()], output)?;
+    let meter = Meter::new(cli);
+    let cb = meter.callback();
+    let ctl = Control {
+        cancel: None,
+        progress: Some(&cb),
+    };
+    let started = Instant::now();
+    let r = apply(&archives[0], grf, output, &edits, opts, &ctl);
+    meter.done();
+    let r = r?;
+    let secs = started.elapsed().as_secs_f64();
+    if cli.json {
+        let mut v = write_json(&r.merge.repack, output, secs);
+        v["schema_version"] = SCHEMA_VERSION.into();
+        v["added"] = r.added.into();
+        v["replaced"] = r.replaced.into();
+        v["removed"] = r.removed.into();
+        print_json(&v)?;
+    } else {
+        write_summary(&r.merge.repack, output, secs);
+        println!(
+            "Edit:     {} added, {} replaced, {} removed",
+            r.added, r.replaced, r.removed
+        );
     }
     Ok(0)
 }

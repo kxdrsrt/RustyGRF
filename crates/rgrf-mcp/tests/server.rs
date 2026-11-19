@@ -120,7 +120,7 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 13);
+    assert_eq!(names(&rw).len(), 14);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -422,6 +422,61 @@ fn writing_tools_work_inside_the_root_and_refuse_everything_else() {
         json!({"path": out("merged.grf"), "entry": "data/hello.txt"}),
     );
     assert_eq!(v["text"], "custom hello");
+
+    // edit: replace from a file, add text, remove; the source stays unchanged
+    let new_hello = allowed.join("new-hello.txt");
+    std::fs::write(&new_hello, b"edited hello").unwrap();
+    let v = ok(
+        &s,
+        "grf_edit",
+        json!({
+            "path": p, "output": out("edited.grf"),
+            "put": [format!("/data/hello.txt={}", new_hello.display())],
+            "put_text": ["data/new/한글.txt=안녕"],
+            "text_encoding": "cp949", "names": "cp949",
+            "remove": ["data/sub/NOTES.txt"],
+        }),
+    );
+    assert_eq!(
+        (
+            v["replaced"].clone(),
+            v["added"].clone(),
+            v["removed"].clone(),
+            v["files"].clone(),
+            v["verified"].clone()
+        ),
+        (1.into(), 1.into(), 1.into(), 6.into(), true.into())
+    );
+    let v2 = ok(
+        &s,
+        "grf_read_text",
+        json!({"path": out("edited.grf"), "entry": "data/hello.txt"}),
+    );
+    assert_eq!(v2["text"], "edited hello");
+    let v2 = ok(
+        &s,
+        "grf_read_text",
+        json!({"path": out("edited.grf"), "entry": "data/new/한글.txt", "names": "cp949"}),
+    );
+    assert_eq!(v2["text"], "안녕");
+    let msg = fails(
+        &s,
+        "grf_edit",
+        json!({"path": p, "output": out("none.grf")}),
+    );
+    assert!(msg.contains("nothing to do"), "{msg}");
+    let msg = fails(
+        &s,
+        "grf_edit",
+        json!({"path": p, "output": out("edited.grf"), "remove": ["data/hello.txt"]}),
+    );
+    assert!(msg.contains("already exists"), "{msg}");
+    let msg = fails(
+        &s,
+        "grf_edit",
+        json!({"path": p, "output": out("bad.grf"), "remove": ["data/../x"]}),
+    );
+    assert!(msg.contains("not a usable archive path"), "{msg}");
 
     // patch: only what differs
     let v = ok(

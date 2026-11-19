@@ -38,6 +38,30 @@ pub struct EditReport {
     pub removed: usize,
 }
 
+/// The archive path a user typed: `/` and `\\` both work, a leading separator is dropped, and the
+/// text is turned into bytes with `mode`. Empty paths and `..` parts are refused.
+pub fn archive_path(text: &str, mode: crate::name::NameMode) -> Result<GrfPath> {
+    let norm = text.replace('/', "\\");
+    let norm = norm.trim_start_matches('\\');
+    if norm.is_empty() || norm.split('\\').any(|p| p.is_empty() || p == "..") {
+        return Err(Error::InvalidInput(format!(
+            "'{text}' is not a usable archive path"
+        )));
+    }
+    GrfPath::from_display(norm, mode).ok_or_else(|| {
+        Error::InvalidInput(format!(
+            "'{text}' cannot be written in the name mode {mode:?}"
+        ))
+    })
+}
+
+/// Splits `ARCHIVE_PATH=FILE` at the first `=`.
+pub fn split_put(spec: &str) -> Result<(&str, &str)> {
+    spec.split_once('=')
+        .filter(|(a, f)| !a.is_empty() && !f.is_empty())
+        .ok_or_else(|| Error::InvalidInput(format!("'{spec}' is not ARCHIVE_PATH=FILE")))
+}
+
 /// Writes `dst` as `src` with the edits applied. For one path the last edit wins.
 pub fn apply(
     src: &Archive,
@@ -260,5 +284,28 @@ mod tests {
             .is_err()
         );
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use crate::name::NameMode;
+
+    #[test]
+    fn typed_archive_paths_are_normalised_and_checked() {
+        let p = archive_path("/data/sprite/a.spr", NameMode::Cp1252).unwrap();
+        assert_eq!(p.as_bytes(), b"data\\sprite\\a.spr");
+        assert!(archive_path("data\\x.txt", NameMode::Cp1252).is_ok());
+        for bad in ["", "/", "data//x", "data/../x", "data\\"] {
+            assert!(archive_path(bad, NameMode::Cp1252).is_err(), "{bad}");
+        }
+        assert_eq!(
+            split_put("data/a.txt=/tmp/a=b.txt").unwrap(),
+            ("data/a.txt", "/tmp/a=b.txt")
+        );
+        assert!(
+            split_put("nofile=").is_err() && split_put("=x").is_err() && split_put("x").is_err()
+        );
     }
 }

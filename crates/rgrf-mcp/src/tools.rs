@@ -355,6 +355,45 @@ pub const TOOLS: &[Tool] = &[
         run: merge_tool,
     },
     Tool {
+        name: "grf_edit",
+        title: "Edit an archive (replace, add, remove files)",
+        description: "Writes a changed COPY of an archive: files from disk or text replace or add paths, other paths are left out. The original is never modified and unchanged entries keep their streams (no recompression), so editing a few files of a large archive is fast. Give at least one of `put`, `put_text`, `remove`.",
+        params: &[
+            req("path", Ty::Str, "The archive to edit (it stays unchanged)."),
+            opt(
+                "put",
+                Ty::StrList,
+                "Files to replace or add, each \"ARCHIVE_PATH=FILE\", e.g. \"data/clientinfo.xml=/work/clientinfo.xml\" (the file must be in a readable folder).",
+            ),
+            opt(
+                "put_text",
+                Ty::StrList,
+                "Text files to replace or add, each \"ARCHIVE_PATH=TEXT\" (use `\\n` in JSON for line breaks, no conversion is made); written in `text_encoding`.",
+            ),
+            opt(
+                "text_encoding",
+                Ty::Enum(&["utf8", "cp949", "cp1252"]),
+                "Encoding of `put_text` (default utf8).",
+            ),
+            opt(
+                "remove",
+                Ty::StrList,
+                "Archive paths to leave out of the result.",
+            ),
+            NAMES,
+            OUTPUT,
+            METHOD_OR_COPY,
+            LEVEL,
+            FORMAT,
+            ENCRYPT,
+            DEDUPE,
+            OVERWRITE,
+            DRY_RUN,
+        ],
+        writes: true,
+        run: edit_tool,
+    },
+    Tool {
         name: "grf_patch",
         title: "Create a patch archive",
         description: "Writes an archive with only the files that are new or different in `new` compared with `old`. List it before `old` in DATA.INI. Paths removed in `new` cannot be expressed in a GRF.",
@@ -903,6 +942,75 @@ fn merge_tool(ctx: &Ctx, a: &Args) -> Out {
         })
         .collect::<Vec<_>>()
         .into();
+    Ok(v)
+}
+
+fn edit_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_core::edit::{Edit, apply, archive_path, split_put};
+    let (put, put_text, remove) = (a.list("put"), a.list("put_text"), a.list("remove"));
+    if put.is_empty() && put_text.is_empty() && remove.is_empty() {
+        return Err("nothing to do: give `put`, `put_text` or `remove`".into());
+    }
+    let src = ctx.policy.read(a.str("path"))?;
+    let out = output_path(ctx, a, std::slice::from_ref(&src))?;
+    let mode = names_mode(a);
+    let mut edits = Vec::new();
+    for spec in put {
+        let (name, file) = split_put(spec).map_err(err)?;
+        let f = ctx.policy.read(file)?;
+        let len = std::fs::metadata(&f).map_err(err)?.len();
+        if len > MAX_ENTRY_BYTES {
+            return Err(format!("{file}: larger than {MAX_ENTRY_BYTES} bytes"));
+        }
+        edits.push(Edit::Put {
+            name: archive_path(name, mode).map_err(err)?,
+            data: std::fs::read(&f).map_err(|e| format!("{file}: {e}"))?,
+        });
+    }
+    let enc = match a.opt_str("text_encoding") {
+        Some("cp949") => Some(encoding_rs::EUC_KR),
+        Some("cp1252") => Some(encoding_rs::WINDOWS_1252),
+        _ => None,
+    };
+    for spec in put_text {
+        let (name, text) = split_put(spec).map_err(err)?;
+        let data = match enc {
+            None => text.as_bytes().to_vec(),
+            Some(e) => {
+                let (bytes, _, bad) = e.encode(text);
+                if bad {
+                    return Err(format!(
+                        "{name}: the text cannot be written in {}",
+                        e.name()
+                    ));
+                }
+                bytes.into_owned()
+            }
+        };
+        edits.push(Edit::Put {
+            name: archive_path(name, mode).map_err(err)?,
+            data,
+        });
+    }
+    for name in remove {
+        edits.push(Edit::Remove {
+            name: archive_path(name, mode).map_err(err)?,
+        });
+    }
+    let arc = open(ctx, a.str("path"))?;
+    let r = apply(
+        &arc,
+        &src,
+        &out,
+        &edits,
+        &repack_options(a, true)?,
+        &ctx.control,
+    )
+    .map_err(err)?;
+    let mut v = repack_json(&r.merge.repack, &out);
+    v["added"] = r.added.into();
+    v["replaced"] = r.replaced.into();
+    v["removed"] = r.removed.into();
     Ok(v)
 }
 

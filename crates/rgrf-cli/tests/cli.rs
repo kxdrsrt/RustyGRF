@@ -452,6 +452,106 @@ fn diff_merge_and_patch_on_small_archives() {
 }
 
 #[test]
+fn edit_replaces_adds_and_removes_without_touching_the_original() {
+    let dir = tmpdir("edit");
+    let put = |name: &str, data: &str| {
+        let p = dir.join("src").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, data).unwrap();
+    };
+    put("data/a.txt", "old a");
+    put("data/b.txt", "old b");
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    assert_eq!(
+        rgrf(&["build", &p("src"), "-o", &p("base.grf"), "--quiet"])
+            .status
+            .code(),
+        Some(0)
+    );
+    std::fs::write(dir.join("new.txt"), "new a").unwrap();
+    std::fs::write(dir.join("extra.txt"), "extra").unwrap();
+    let before = std::fs::read(p("base.grf")).unwrap();
+
+    let o = rgrf(&[
+        "edit",
+        &p("base.grf"),
+        "-o",
+        &p("out.grf"),
+        "--quiet",
+        "--json",
+        "--put",
+        &format!("/data/a.txt={}", p("new.txt")),
+        "--put",
+        &format!("data\\c.txt={}", p("extra.txt")),
+        "--remove",
+        "DATA/B.TXT",
+    ]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v = json(&o);
+    assert_eq!(
+        (
+            v["added"].clone(),
+            v["replaced"].clone(),
+            v["removed"].clone(),
+            v["files"].clone(),
+            v["verified"].clone()
+        ),
+        (1.into(), 1.into(), 1.into(), 2.into(), true.into())
+    );
+    assert_eq!(
+        std::fs::read(p("base.grf")).unwrap(),
+        before,
+        "the original stays unchanged"
+    );
+    let cat = |n: &str| String::from_utf8(rgrf(&["cat", &p("out.grf"), n]).stdout).unwrap();
+    assert_eq!(cat("data/a.txt"), "new a");
+    assert_eq!(cat("data/c.txt"), "extra");
+    assert!(!rgrf(&["cat", &p("out.grf"), "data/b.txt"]).status.success());
+
+    // nothing to do, existing output and the source as output are refused
+    assert_eq!(
+        rgrf(&["edit", &p("base.grf"), "-o", &p("x.grf")])
+            .status
+            .code(),
+        Some(1)
+    );
+    let put_arg = format!("data/a.txt={}", p("new.txt"));
+    assert_eq!(
+        rgrf(&[
+            "edit",
+            &p("base.grf"),
+            "-o",
+            &p("out.grf"),
+            "--put",
+            &put_arg
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+    assert_eq!(
+        rgrf(&[
+            "edit",
+            &p("base.grf"),
+            "-o",
+            &p("base.grf"),
+            "--overwrite",
+            "--put",
+            &put_arg
+        ])
+        .status
+        .code(),
+        Some(1)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn spr_info_export_build_round_trip() {
     use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version};
 
