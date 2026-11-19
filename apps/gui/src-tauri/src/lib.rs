@@ -577,34 +577,90 @@ fn startup_select() -> Option<String> {
 }
 
 const SETTINGS_MENU_ID: &str = "settings";
+const COMMAND_PREFIX: &str = "cmd:";
 
-/// The system's default menu plus a "Settings..." entry (Cmd/Ctrl+,): in the application menu on
-/// macOS, where users look for it, and in the Edit menu elsewhere.
-fn add_settings_menu(app: &AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+/// The system's default menu bar plus every toolbar command (so the toolbar is never the only
+/// place for a command), the list layouts and the preview position, and "Settings..." (in the
+/// application menu on macOS, in Edit elsewhere). The page runs the commands; a command whose
+/// button is disabled at that moment does nothing.
+fn build_menu(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
     let menu = Menu::default(app)?;
-    let item = MenuItem::with_id(
+    let item = |id: &str, text: &str, accel: Option<&str>| {
+        MenuItem::with_id(app, format!("{COMMAND_PREFIX}{id}"), text, true, accel)
+    };
+    let sep = || PredefinedMenuItem::separator(app);
+    let find = |name: &str| -> tauri::Result<Option<Submenu<tauri::Wry>>> {
+        for kind in menu.items()? {
+            if let Some(sub) = kind.as_submenu()
+                && sub.text()? == name
+            {
+                return Ok(Some(sub.clone()));
+            }
+        }
+        Ok(None)
+    };
+
+    if let Some(file) = find("File")? {
+        let entries = [
+            item("open", "Open...", None)?,
+            item("build", "Build...", None)?,
+            item("merge", "Merge...", None)?,
+            item("extract", "Extract...", None)?,
+            item("verify", "Verify", None)?,
+        ];
+        file.insert(&entries[0], 0)?;
+        file.insert(&sep()?, 1)?;
+        for (k, e) in entries[1..].iter().enumerate() {
+            file.insert(e, 2 + k)?;
+        }
+        file.insert(&sep()?, 6)?;
+    }
+    if let Some(edit) = find("Edit")? {
+        edit.append(&sep()?)?;
+        edit.append(&item("add", "Add File...", None)?)?;
+        edit.append(&item("replace", "Replace...", None)?)?;
+        edit.append(&item("remove", "Remove", None)?)?;
+        edit.append(&item("changes", "Review Changes...", None)?)?;
+    }
+    if let Some(view) = find("View")? {
+        let entries = [
+            item("layout-list", "As List", Some("CmdOrCtrl+1"))?,
+            item("layout-details", "As Details", Some("CmdOrCtrl+2"))?,
+            item("layout-tree", "As Tree", Some("CmdOrCtrl+3"))?,
+            item("layout-folders", "As Folders", Some("CmdOrCtrl+4"))?,
+        ];
+        for (k, e) in entries.iter().enumerate() {
+            view.insert(e, k)?;
+        }
+        view.insert(&sep()?, 4)?;
+        view.insert(&item("preview-right", "Preview on the Right", None)?, 5)?;
+        view.insert(&item("preview-bottom", "Preview at the Bottom", None)?, 6)?;
+        view.insert(&item("preview-off", "Hide Preview", None)?, 7)?;
+        view.insert(&sep()?, 8)?;
+    }
+
+    let settings = MenuItem::with_id(
         app,
         SETTINGS_MENU_ID,
         "Settings...",
         true,
         Some("CmdOrCtrl+,"),
     )?;
-    let sep = PredefinedMenuItem::separator(app)?;
-    let target = if cfg!(target_os = "macos") { 0 } else { 1 };
-    if let Some(sub) = menu
-        .items()?
-        .get(target)
-        .and_then(|i| i.as_submenu().cloned())
-    {
+    let home = if cfg!(target_os = "macos") {
+        find(&app.package_info().name)?
+    } else {
+        find("Edit")?
+    };
+    if let Some(sub) = home {
         // after "About" on macOS, at the end of Edit elsewhere
         let at = if cfg!(target_os = "macos") {
             1
         } else {
             sub.items()?.len()
         };
-        sub.insert(&sep, at)?;
-        sub.insert(&item, at + 1)?;
+        sub.insert(&sep()?, at)?;
+        sub.insert(&settings, at + 1)?;
     }
     app.set_menu(menu)?;
     Ok(())
@@ -626,12 +682,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
-            add_settings_menu(app.handle())?;
+            build_menu(app.handle())?;
             Ok(())
         })
         .on_menu_event(|app, event| {
-            if event.id() == SETTINGS_MENU_ID {
+            let id = event.id().as_ref();
+            if id == SETTINGS_MENU_ID {
                 let _ = app.emit("open-settings", ());
+            } else if let Some(cmd) = id.strip_prefix(COMMAND_PREFIX) {
+                let _ = app.emit("menu-command", cmd);
             }
         })
         .invoke_handler(tauri::generate_handler![

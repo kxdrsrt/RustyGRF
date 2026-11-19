@@ -73,12 +73,11 @@ html, body {
   overflow: hidden;
 }
 
-body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
 
 .muted { color: var(--muted); }
 .spacer { flex: 1; }
 
-.editbar { padding-top: 4px; padding-bottom: 4px; }
 .pending { margin: 10px 0; padding: 0; list-style: none; max-height: 40vh; overflow: auto; font-size: 13px; }
 .pending li { padding: 3px 0; display: grid; grid-template-columns: 70px 1fr; gap: 8px; }
 .pending .kind { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
@@ -230,16 +229,11 @@ select { font: inherit; color: var(--text); background: var(--panel); border: 1p
 .info { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .error { color: #c0392b; }
 
-#status {
-  padding: 4px 12px;
-  background: var(--panel);
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.statusbar { display: flex; align-items: center; gap: 14px; padding: 2px 12px; min-height: 28px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+#status { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.statusbar #count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.statusbar select { padding: 1px 4px; font-size: 12px; }
+.statusbar label { display: inline-flex; align-items: center; gap: 6px; }
 
 dialog {
   color: var(--text);
@@ -395,18 +389,35 @@ button.small.on { background: var(--accent); border-color: var(--accent); color:
 #settings-body { max-height: calc(100vh - 210px); overflow: auto; padding-right: 4px; }
 .settings select { max-width: 320px; }
 
-/* narrow windows: the buttons keep their icons, the words go (they stay as tooltips and for screen readers) */
-@media (max-width: 1180px) {
-  header.toolbar button span, .editbar button span:not(#changes-label), .viewbar #btn-expand span, .viewbar #btn-collapse span, .viewbar #btn-reset-filters span { display: none; }
-  header.toolbar button .ic, .editbar button .ic, .viewbar #btn-expand .ic, .viewbar #btn-collapse .ic, .viewbar #btn-reset-filters .ic { margin-right: 0; }
-  #search { width: min(420px, 38vw); }
+/* main toolbar: three groups (app, archive, edit), then search and the preview position.
+   Items are borderless symbols (the group is the container); words show only when there is room. */
+.maintoolbar { flex-wrap: nowrap; gap: 6px; padding: 6px 10px; }
+.maintoolbar .grp { display: flex; align-items: center; gap: 2px; flex: none; }
+.maintoolbar .grp + .grp { border-left: 1px solid var(--line); padding-left: 8px; margin-left: 2px; }
+.maintoolbar .grp button:not(.primary) { background: transparent; border-color: transparent; }
+.maintoolbar .grp button:not(.primary):hover:not(:disabled) { background: var(--hover); }
+.maintoolbar button { min-height: 30px; padding-top: 0; padding-bottom: 0; }
+.maintoolbar .grp button:not(.primary):not(:has(span:not(.badge):not(.sr):not([hidden]))) { min-width: 30px; padding-left: 6px; padding-right: 6px; }
+.maintoolbar .grp button .ic, .maintoolbar button .ic { margin-right: 0; }
+.maintoolbar .grp button span:not(.badge):not(.sr) { margin-left: 6px; }
+.maintoolbar button.primary { padding-left: 12px; padding-right: 12px; }
+.maintoolbar #search { flex: 1 1 160px; width: auto; min-width: 120px; max-width: 380px; margin-left: 4px; }
+.grpmark { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 2px; color: var(--muted); }
+@media (max-width: 1600px) { .grpmark { display: none; } }
+.badge { margin-left: 5px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--accent-text); font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.viewbar { gap: 8px; padding: 5px 10px; }
+
+/* narrow windows: icons only (names stay as tooltips and for screen readers) */
+@media (max-width: 1600px) {
+  .maintoolbar .grp button span:not(.badge):not(.sr), .viewbar #btn-expand span, .viewbar #btn-collapse span, .viewbar #btn-reset-filters span { display: none; }
+  .maintoolbar .grp button span { margin-left: 0; }
+  .viewbar #btn-expand .ic, .viewbar #btn-collapse .ic, .viewbar #btn-reset-filters .ic { margin-right: 0; }
+  .maintoolbar #btn-open span { display: inline; margin-left: 6px; }
 }
 @media (max-width: 1000px) {
   .viewbar .seg button span:not(.sr) { display: none; }
   .viewbar .seg button .ic { margin-right: 0; }
-  #changes-label { display: none; }
-  .barlabel { display: none; }
   .lbl { display: none; }
-  #search { width: min(260px, 28vw); }
-  .toolbar { padding: 6px 8px; gap: 6px; }
+  .maintoolbar { gap: 4px; padding: 6px 8px; }
+  .maintoolbar .grp + .grp { padding-left: 6px; }
 }

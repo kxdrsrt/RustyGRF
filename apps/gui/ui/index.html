@@ -63,43 +63,41 @@
   <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z"/></symbol>
   <symbol id="i-imf" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5"/></symbol>
 </svg>
-  <header class="toolbar">
-    <button id="btn-open" class="primary"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open…</span></button>
-    <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" disabled autocomplete="off" spellcheck="false">
-    <span id="count" class="muted" aria-live="polite"></span>
+  <header class="toolbar maintoolbar" role="toolbar" aria-label="Main">
+    <div class="grp" role="group" aria-label="App">
+      <button id="btn-settings" type="button" title="Settings (Cmd/Ctrl+,)" aria-label="Settings"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></button>
+      <button id="btn-open" class="primary" title="Open a GRF archive (Cmd/Ctrl+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open…</span></button>
+    </div>
+    <div class="grp" role="group" aria-label="Archive">
+      <button id="btn-build" title="Pack a folder into a new GRF"><svg class="ic" aria-hidden="true"><use href="#i-build"/></svg><span>Build…</span></button>
+      <button id="btn-merge" title="Merge several GRFs into a new one"><svg class="ic" aria-hidden="true"><use href="#i-merge"/></svg><span>Merge…</span></button>
+      <button id="btn-extract" disabled title="Extract the selected entries, or all shown"><svg class="ic" aria-hidden="true"><use href="#i-extract"/></svg><span>Extract…</span></button>
+      <button id="btn-verify" disabled title="Check the archive for errors"><svg class="ic" aria-hidden="true"><use href="#i-verify"/></svg><span>Verify</span></button>
+    </div>
+    <div class="grp" role="group" aria-label="Edit">
+      <span class="grpmark" aria-hidden="true"><svg class="ic"><use href="#i-edit"/></svg>Edit</span>
+      <button id="btn-add" disabled title="Add a file from disk under a path in the archive"><svg class="ic" aria-hidden="true"><use href="#i-add"/></svg><span>Add file…</span></button>
+      <button id="btn-replace" disabled title="Replace the selected entry with a file from disk"><svg class="ic" aria-hidden="true"><use href="#i-replace"/></svg><span>Replace…</span></button>
+      <button id="btn-remove" disabled title="Leave the selected entry out of the saved archive"><svg class="ic" aria-hidden="true"><use href="#i-remove"/></svg><span>Remove</span></button>
+      <button id="btn-undo" disabled title="Undo the last staged change (Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
+      <button id="btn-redo" disabled title="Redo (Shift+Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
+      <button id="btn-changes" disabled title="Review and save the pending changes as a new archive"><svg class="ic" aria-hidden="true"><use href="#i-changes"/></svg><span id="changes-label">Changes</span><span id="changes-badge" class="badge" hidden>0</span></button>
+    </div>
     <span class="spacer"></span>
-    <label class="muted" for="names" title="How file names are shown and searched. Extracting always writes Latin-1 names, so the result matches `rgrf build`."><span class="lbl">Names</span>
-      <select id="names" disabled>
-        <option value="cp949" selected>Korean</option>
-        <option value="cp1252">Latin-1</option>
-        <option value="utf8">UTF-8</option>
-      </select>
-    </label>
-    <button id="btn-build" title="Pack a folder into a new GRF"><svg class="ic" aria-hidden="true"><use href="#i-build"/></svg><span>Build…</span></button>
-    <button id="btn-merge" title="Merge several GRFs into a new one"><svg class="ic" aria-hidden="true"><use href="#i-merge"/></svg><span>Merge…</span></button>
-    <button id="btn-extract" disabled><svg class="ic" aria-hidden="true"><use href="#i-extract"/></svg><span>Extract…</span></button>
-    <button id="btn-verify" disabled><svg class="ic" aria-hidden="true"><use href="#i-verify"/></svg><span>Verify</span></button>
-    <button id="btn-settings" type="button" title="Settings (Cmd/Ctrl+,)" aria-label="Settings"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></button>
+    <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" aria-label="Search" disabled autocomplete="off" spellcheck="false">
+    <div class="seg" id="preview-seg" role="group" aria-label="Preview position">
+      <button type="button" data-preview="right" title="Preview beside the list" aria-label="Preview on the right"><svg class="ic" aria-hidden="true"><use href="#i-preview-right"/></svg><span class="sr">Right</span></button>
+      <button type="button" data-preview="bottom" title="Preview below the list" aria-label="Preview at the bottom"><svg class="ic" aria-hidden="true"><use href="#i-preview-bottom"/></svg><span class="sr">Bottom</span></button>
+      <button type="button" data-preview="off" title="Hide the preview (Cmd/Ctrl+Shift+P)" aria-label="Hide the preview"><svg class="ic" aria-hidden="true"><use href="#i-preview-off"/></svg><span class="sr">Off</span></button>
+    </div>
   </header>
 
-  <div class="toolbar editbar" aria-label="Edit">
-    <span class="muted barlabel"><svg class="ic" aria-hidden="true"><use href="#i-edit"/></svg>Edit</span>
-    <button id="btn-replace" disabled title="Replace the selected entry with a file from disk"><svg class="ic" aria-hidden="true"><use href="#i-replace"/></svg><span>Replace…</span></button>
-    <button id="btn-add" disabled title="Add a file from disk under a path in the archive"><svg class="ic" aria-hidden="true"><use href="#i-add"/></svg><span>Add file…</span></button>
-    <button id="btn-remove" disabled title="Leave the selected entry out of the saved archive"><svg class="ic" aria-hidden="true"><use href="#i-remove"/></svg><span>Remove</span></button>
-    <span class="spacer"></span>
-    <button id="btn-undo" disabled title="Undo the last staged change (Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
-    <button id="btn-redo" disabled title="Redo (Shift+Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
-    <button id="btn-changes" disabled title="Review and save the pending changes as a new archive"><svg class="ic" aria-hidden="true"><use href="#i-changes"/></svg><span id="changes-label">Changes (0)…</span></button>
-  </div>
-
-  <div class="toolbar viewbar" aria-label="View">
-    <span class="muted barlabel"><svg class="ic" aria-hidden="true"><use href="#i-eye"/></svg>View</span>
+  <div class="toolbar viewbar" role="toolbar" aria-label="View and filter">
     <div class="seg" id="view-seg" role="group" aria-label="List layout">
-      <button type="button" data-layout="list" title="Flat list: name, folder, size"><svg class="ic" aria-hidden="true"><use href="#i-view-list"/></svg><span>List</span></button>
-      <button type="button" data-layout="details" title="Flat table with sortable columns"><svg class="ic" aria-hidden="true"><use href="#i-view-details"/></svg><span>Details</span></button>
-      <button type="button" data-layout="tree" title="Folder tree with files"><svg class="ic" aria-hidden="true"><use href="#i-view-tree"/></svg><span>Tree</span></button>
-      <button type="button" data-layout="folders" title="Folders on the left, the files of the chosen folder on the right"><svg class="ic" aria-hidden="true"><use href="#i-view-folders"/></svg><span>Folders</span></button>
+      <button type="button" data-layout="list" title="Flat list: name, folder, size (Cmd/Ctrl+1)"><svg class="ic" aria-hidden="true"><use href="#i-view-list"/></svg><span>List</span></button>
+      <button type="button" data-layout="details" title="Flat table with sortable columns (Cmd/Ctrl+2)"><svg class="ic" aria-hidden="true"><use href="#i-view-details"/></svg><span>Details</span></button>
+      <button type="button" data-layout="tree" title="Folder tree with files (Cmd/Ctrl+3)"><svg class="ic" aria-hidden="true"><use href="#i-view-tree"/></svg><span>Tree</span></button>
+      <button type="button" data-layout="folders" title="Folders on the left, the files of the chosen folder on the right (Cmd/Ctrl+4)"><svg class="ic" aria-hidden="true"><use href="#i-view-folders"/></svg><span>Folders</span></button>
     </div>
     <label class="muted" for="sort"><span class="lbl">Sort</span>
       <select id="sort" disabled>
@@ -133,13 +131,6 @@
     <button id="btn-expand" type="button" hidden title="Open every folder"><svg class="ic" aria-hidden="true"><use href="#i-expand"/></svg><span>Expand all</span></button>
     <button id="btn-collapse" type="button" hidden title="Close every folder"><svg class="ic" aria-hidden="true"><use href="#i-collapse"/></svg><span>Collapse all</span></button>
     <button id="btn-reset-filters" type="button" disabled title="Clear search, type and size filters"><svg class="ic" aria-hidden="true"><use href="#i-reset"/></svg><span>Reset</span></button>
-    <span class="spacer"></span>
-    <span class="muted lbl">Preview</span>
-    <div class="seg" id="preview-seg" role="group" aria-label="Preview position">
-      <button type="button" data-preview="right" title="Preview beside the list" aria-label="Preview on the right"><svg class="ic" aria-hidden="true"><use href="#i-preview-right"/></svg><span class="sr">Right</span></button>
-      <button type="button" data-preview="bottom" title="Preview below the list" aria-label="Preview at the bottom"><svg class="ic" aria-hidden="true"><use href="#i-preview-bottom"/></svg><span class="sr">Bottom</span></button>
-      <button type="button" data-preview="off" title="Hide the preview (Cmd/Ctrl+Shift+P)" aria-label="Hide the preview"><svg class="ic" aria-hidden="true"><use href="#i-preview-off"/></svg><span class="sr">Off</span></button>
-    </div>
   </div>
 
   <main class="pv-right">
@@ -178,7 +169,17 @@
     </section>
   </main>
 
-  <footer id="status" role="status" aria-live="polite">Ready</footer>
+  <footer class="statusbar">
+    <span id="status" role="status" aria-live="polite">Ready</span>
+    <span id="count" class="muted" aria-live="polite"></span>
+    <label class="muted" for="names" title="How file names are shown and searched. Extracting always writes Latin-1 names, so the result matches `rgrf build`."><span class="lbl">Names</span>
+      <select id="names" disabled>
+        <option value="cp949" selected>Korean</option>
+        <option value="cp1252">Latin-1</option>
+        <option value="utf8">UTF-8</option>
+      </select>
+    </label>
+  </footer>
 
   <dialog id="act-dlg" class="wide">
     <h2 id="act-title">Edit animation</h2>

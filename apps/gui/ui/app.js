@@ -804,7 +804,11 @@ function updateEditBar() {
   const cur = S.selected != null ? S.rows[S.selected - S.offset] : null;
   $("btn-replace").disabled = !cur || cur.folder;
   $("btn-remove").disabled = !S.info;
-  $("changes-label").textContent = `Changes (${S.changes.length})…`;
+  const n = S.changes.length;
+  $("changes-badge").textContent = n;
+  $("changes-badge").hidden = n === 0;
+  $("btn-changes").setAttribute("aria-label", `Changes (${n})`);
+  $("btn-changes").title = n ? `Review and save the ${n} pending change${n === 1 ? "" : "s"} as a new archive` : "Review and save the pending changes as a new archive";
   if (S.info) {
     invoke("history")
       .then((h) => {
@@ -1997,6 +2001,10 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     openSettings();
   }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && "1234".includes(e.key) && e.key.length === 1 && S.info) {
+    e.preventDefault();
+    setLayout(["list", "details", "tree", "folders"][Number(e.key) - 1]);
+  }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
     e.preventDefault();
     setPreviewMode(V.preview === "off" ? "right" : "off");
@@ -2016,10 +2024,21 @@ if (T.event?.listen) {
   T.event.listen("open-file", (e) => e.payload && openPath(e.payload));
   T.event.listen("job-progress", (e) => S.onJob?.(e.payload));
   T.event.listen("open-settings", () => openSettings());
+  T.event.listen("menu-command", (e) => runMenuCommand(e.payload));
   T.event.listen("tauri://drag-drop", (e) => {
     const p = e.payload?.paths?.[0];
     if (p) openPath(p);
   });
+}
+
+// the native menu bar offers every toolbar command; a disabled button means the command does not apply now
+const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
+function runMenuCommand(id) {
+  if (document.querySelector("dialog[open]")) return;
+  if (id.startsWith("layout-")) return S.info && setLayout(id.slice(7));
+  if (id.startsWith("preview-")) return setPreviewMode(id.slice(8));
+  const b = MENU_BUTTONS[id] && $(MENU_BUTTONS[id]);
+  if (b && !b.disabled) b.click();
 }
 
 // buttons whose words are hidden in narrow windows keep their name for screen readers and tooltips
