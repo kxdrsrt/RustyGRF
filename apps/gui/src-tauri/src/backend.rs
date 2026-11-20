@@ -287,6 +287,26 @@ enum Change {
     },
 }
 
+/// One step of the undo history: what it did (`add`, `replace`, `edit`, `remove`, `discard`,
+/// `mixed`), to which path (the first one) and to how many paths.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    pub kind: &'static str,
+    pub name: String,
+    pub n: usize,
+}
+
+/// Whether two changes of the same path are the same change (edited bytes are compared by their
+/// shared buffer: a new edit makes a new one).
+fn same_change(a: &Change, b: &Change) -> bool {
+    match (a, b) {
+        (Change::Put { file: x, .. }, Change::Put { file: y, .. }) => x == y,
+        (Change::PutBytes { data: x, .. }, Change::PutBytes { data: y, .. }) => Arc::ptr_eq(x, y),
+        (Change::Remove { .. }, Change::Remove { .. }) => true,
+        _ => false,
+    }
+}
+
 impl Change {
     fn name(&self) -> &GrfPath {
         match self {
@@ -575,6 +595,8 @@ pub struct ArchiveInfo {
     pub file_size: u64,
     /// Set for an archive with GRF Editor's encryption.
     pub encryption: Option<EncryptionOut>,
+    /// The magic at the start of a GRF header ("Master of Magic", "Event Horizon" or another).
+    pub magic: String,
     /// Unsaved changes of an earlier session, kept as a draft, waiting to be restored or discarded.
     pub draft: Option<crate::draft::DraftInfo>,
 }
@@ -1805,6 +1827,84 @@ impl Session {
         (!self.undo.is_empty(), !self.redo.is_empty())
     }
 
+    /// What each step of the history did, newest first for undo and next first for redo (at most
+    /// `max` each), for the list next to the undo and redo buttons.
+    pub fn history_steps(&self, max: usize) -> (Vec<Step>, Vec<Step>) {
+        let n = self.undo.len();
+        let undo = (0..n)
+            .rev()
+            .take(max)
+            .map(|k| {
+                let after = if k + 1 < n {
+                    &self.undo[k + 1]
+                } else {
+                    &self.pending
+                };
+                self.describe(&self.undo[k], after)
+            })
+            .collect();
+        let m = self.redo.len();
+        let redo = (0..m)
+            .rev()
+            .take(max)
+            .map(|k| {
+                let before = if k + 1 < m {
+                    &self.redo[k + 1]
+                } else {
+                    &self.pending
+                };
+                self.describe(before, &self.redo[k])
+            })
+            .collect();
+        (undo, redo)
+    }
+
+    /// Takes back (or redoes) `steps` steps at once; returns how many were done.
+    pub fn step_history(&mut self, steps: usize, redo: bool) -> usize {
+        let mut done = 0;
+        while done < steps && if redo { self.redo() } else { self.undo() } {
+            done += 1;
+        }
+        done
+    }
+
+    /// What changed from one state of the pending changes to the next.
+    fn describe(&self, before: &[Change], after: &[Change]) -> Step {
+        let old: HashMap<Vec<u8>, &Change> = before.iter().map(|c| (c.name().key(), c)).collect();
+        let new: HashMap<Vec<u8>, &Change> = after.iter().map(|c| (c.name().key(), c)).collect();
+        let mut kinds: Vec<(&'static str, &GrfPath)> = Vec::new();
+        for c in after {
+            if old.get(&c.name().key()).is_some_and(|o| same_change(o, c)) {
+                continue;
+            }
+            let kind = match c {
+                Change::Put { name, .. } if self.arc.find(name).is_some() => "replace",
+                Change::Put { .. } => "add",
+                Change::PutBytes { .. } => "edit",
+                Change::Remove { .. } => "remove",
+            };
+            kinds.push((kind, c.name()));
+        }
+        for c in before {
+            if !new.contains_key(&c.name().key()) {
+                kinds.push(("discard", c.name()));
+            }
+        }
+        let kind = match kinds.first() {
+            None => "none",
+            Some((k, _)) if kinds.iter().all(|(o, _)| o == k) => k,
+            Some(_) => "mixed",
+        };
+        Step {
+            kind,
+            name: kinds
+                .first()
+                .map(|(_, n)| n.display(self.mode))
+                .unwrap_or_default(),
+            n: kinds.len(),
+        }
+    }
+
     fn stage(&mut self, change: Change) {
         let key = change.name().key();
         self.pending.retain(|c| c.name().key() != key);
@@ -2372,6 +2472,11 @@ impl Session {
                 encrypted_entries: e.encrypted_entries,
                 key_needed: !e.key_set,
             }),
+            magic: if self.arc.header().kind == rgrf_core::container::Kind::Grf {
+                rgrf_core::writer::magic_to_text(&self.arc.header().magic)
+            } else {
+                String::new()
+            },
             draft: self
                 .draft_root
                 .as_deref()
@@ -3604,6 +3709,37 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_history_names_its_steps_and_jumps_several_at_once() {
+        let dir = std::env::temp_dir().join(format!("rgrf-hist-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let grf = dir.join("h.grf");
+        crate::saving::create_empty(&grf).unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let f = dir.join("f.txt");
+        fs::write(&f, b"x").unwrap();
+        s.stage_add(r"data\a.txt", &f).unwrap();
+        s.stage_add(r"data\b.txt", &f).unwrap();
+        s.discard_pending();
+        let (undo, redo) = s.history_steps(10);
+        let kinds: Vec<_> = undo.iter().map(|st| (st.kind, st.n)).collect();
+        assert_eq!(kinds, [("discard", 2), ("add", 1), ("add", 1)]);
+        assert_eq!(undo[1].name, r"data\b.txt");
+        assert!(redo.is_empty());
+        // back two steps: only a.txt is staged, and the redo list names what comes back
+        assert_eq!(s.step_history(2, false), 2);
+        assert_eq!(s.pending().len(), 1);
+        let (_, redo) = s.history_steps(10);
+        assert_eq!(
+            redo.iter().map(|st| st.kind).collect::<Vec<_>>(),
+            ["add", "discard"]
+        );
+        assert_eq!(s.step_history(5, true), 2);
+        assert!(s.pending().is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn name_patterns() {

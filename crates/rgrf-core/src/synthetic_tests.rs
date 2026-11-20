@@ -214,8 +214,13 @@ fn rejects_non_grf_unsupported_and_damaged_containers() {
         Archive::from_source(vec![0u8; 10]),
         Err(Error::NotGrf(_))
     ));
+    // another magic with a GRF version opens, as in GRF Editor; with no GRF version it is no GRF
+    let mut other_magic = good.clone();
+    other_magic[0] = b'X';
+    assert_eq!(Archive::from_source(other_magic).unwrap().len(), 1);
     let mut bad_magic = good.clone();
     bad_magic[0] = b'X';
+    bad_magic[42..46].copy_from_slice(&0x400u32.to_le_bytes());
     assert!(matches!(
         Archive::from_source(bad_magic),
         Err(Error::NotGrf(_))

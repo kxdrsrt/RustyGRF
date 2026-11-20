@@ -263,7 +263,12 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
         }),
         "history" => with(state, |s| {
             let (can_undo, can_redo) = s.history();
-            Ok(json!({ "can_undo": can_undo, "can_redo": can_redo }))
+            let (undo, redo) = s.history_steps(30);
+            Ok(json!({ "can_undo": can_undo, "can_redo": can_redo, "undo": undo, "redo": redo }))
+        }),
+        "step_history" => with(state, |s| {
+            s.step_history(arg(a, "steps")?, arg(a, "redo")?);
+            to_json(s.pending())
         }),
         "undo_change" => with(state, |s| {
             s.undo();
@@ -335,6 +340,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?)
         }
         "open_data_folder" => Ok(Value::Null),
+        "convert_text" => to_json(saving::convert_text(
+            &arg::<String>(a, "text")?,
+            &arg::<String>(a, "from")?,
+            &arg::<String>(a, "to")?,
+        )?),
         "search_contents" => with(state, |s| {
             to_json(s.search_contents(&arg(a, "query")?, &none)?)
         }),

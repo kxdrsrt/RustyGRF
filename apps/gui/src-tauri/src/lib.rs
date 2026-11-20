@@ -1214,6 +1214,12 @@ async fn make_patch(
     .await
 }
 
+/// Tools › Text Encoding.
+#[tauri::command]
+fn convert_text(text: String, from: String, to: String) -> Res<saving::ConvertedText> {
+    saving::convert_text(&text, &from, &to)
+}
+
 /// Tools › Search in Files: the lines of the archive's files that match.
 #[tauri::command]
 async fn search_contents(
@@ -1244,6 +1250,9 @@ fn open_data_folder(app: AppHandle) -> Res<String> {
 struct History {
     can_undo: bool,
     can_redo: bool,
+    /// The steps that undo would take back (newest first) and redo would bring back.
+    undo: Vec<backend::Step>,
+    redo: Vec<backend::Step>,
 }
 
 /// Whether the staged changes can be undone or redone.
@@ -1251,7 +1260,13 @@ struct History {
 async fn history(window: WebviewWindow, state: State<'_, AppState>) -> Res<History> {
     with_session(&state, &window, |s| {
         let (can_undo, can_redo) = s.history();
-        Ok(History { can_undo, can_redo })
+        let (undo, redo) = s.history_steps(30);
+        Ok(History {
+            can_undo,
+            can_redo,
+            undo,
+            redo,
+        })
     })
     .await
 }
@@ -1261,6 +1276,21 @@ async fn history(window: WebviewWindow, state: State<'_, AppState>) -> Res<Histo
 async fn undo_change(window: WebviewWindow, state: State<'_, AppState>) -> Res<Vec<PendingRow>> {
     with_session(&state, &window, |s| {
         s.undo();
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Takes back (or redoes) several steps at once, from the history list.
+#[tauri::command]
+async fn step_history(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    steps: usize,
+    redo: bool,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.step_history(steps, redo);
         Ok(s.pending())
     })
     .await
@@ -1433,9 +1463,11 @@ fn build_menu(
         sep()?,
         Box::new(PredefinedMenuItem::close_window(app, None)?),
     ];
+    // own entries: the page decides whether a text field, the pixel editor or the archive's
+    // changes are undone (the system's entries only reach text fields, and not on Windows)
     let mut edit: Vec<Item> = vec![
-        Box::new(PredefinedMenuItem::undo(app, None)?),
-        Box::new(PredefinedMenuItem::redo(app, None)?),
+        item("undo", "Undo", Some("CmdOrCtrl+Z"))?,
+        item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?,
         sep()?,
         Box::new(PredefinedMenuItem::cut(app, None)?),
         Box::new(PredefinedMenuItem::copy(app, None)?),
@@ -1446,10 +1478,14 @@ fn build_menu(
         item("replace", "Replace...", None)?,
         item("remove", "Remove", None)?,
         item("changes", "Review Changes...", None)?,
+        item("history", "Change History...", None)?,
         sep()?,
         item("archive-settings", "Archive Settings...", None)?,
     ];
     let mut view = vec![
+        item("nav-back", "Back", None)?,
+        item("nav-forward", "Forward", None)?,
+        sep()?,
         item("layout-tree", "As Tree", Some("CmdOrCtrl+1"))?,
         item("layout-details", "As Details", Some("CmdOrCtrl+2"))?,
         item("layout-folders", "As Folders", Some("CmdOrCtrl+3"))?,
@@ -1470,6 +1506,7 @@ fn build_menu(
         )?,
         sep()?,
         item("reduce-images", "Reduce Images...", None)?,
+        item("text-encoding", "Text Encoding...", None)?,
         sep()?,
         item("data-folder", "Open App Data Folder", None)?,
     ];
@@ -1646,6 +1683,7 @@ pub fn run() {
             history,
             undo_change,
             redo_change,
+            step_history,
             save_edited,
             save_as,
             save_archive,
@@ -1655,6 +1693,7 @@ pub fn run() {
             make_patch,
             open_data_folder,
             search_contents,
+            convert_text,
             cancel_job,
             startup_path,
             startup_select

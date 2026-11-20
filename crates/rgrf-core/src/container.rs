@@ -87,18 +87,19 @@ pub struct Header {
 
 impl Header {
     pub fn parse(b: &[u8; HEADER_LEN as usize]) -> Result<Self> {
-        // "Master of Magic\0" (0x200) or "Event Horizon\0" followed by two more bytes (0x300, measured)
+        // "Master of Magic\0" (0x200) or "Event Horizon\0" followed by two more bytes (0x300,
+        // measured). Like GRF Editor, another magic is accepted when the version is a GRF's: tools
+        // and servers change it (GRF Editor lets it be edited).
         let known_magic = (b[..15] == *b"Master of Magic" && b[15] == 0)
             || (b[..13] == *b"Event Horizon" && b[13] == 0);
-        if !known_magic {
-            return Err(Error::NotGrf(
-                "magic \"Master of Magic\" or \"Event Horizon\" not found".into(),
-            ));
-        }
         let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         let version = u32_at(42);
         if !matches!(version, 0x102 | 0x103 | 0x200 | 0x300) {
-            return Err(Error::UnsupportedVersion(version));
+            return Err(if known_magic {
+                Error::UnsupportedVersion(version)
+            } else {
+                Error::NotGrf("magic \"Master of Magic\" or \"Event Horizon\" not found".into())
+            });
         }
         let (table_offset, seed, entry_count) = if version == 0x300 && b[35..38] == [0, 0, 0] {
             let off = u64::from_le_bytes(b[30..38].try_into().expect("8 bytes"));

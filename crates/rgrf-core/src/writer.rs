@@ -23,6 +23,33 @@ pub enum Format {
     V300,
 }
 
+/// A magic for the header from text: up to 16 printable ASCII characters, padded with NUL bytes
+/// ("Master of Magic" becomes the usual `Master of Magic\0`).
+pub fn magic_from_text(text: &str) -> Result<[u8; 16]> {
+    if text.is_empty() || text.len() > 16 || !text.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+        return Err(Error::InvalidInput(format!(
+            "the magic must be 1 to 16 printable ASCII characters, got {text:?}"
+        )));
+    }
+    let mut m = [0u8; 16];
+    m[..text.len()].copy_from_slice(text.as_bytes());
+    Ok(m)
+}
+
+/// The magic as text (up to the first NUL byte; other bytes shown as `\xNN`).
+pub fn magic_to_text(m: &[u8; 16]) -> String {
+    m.iter()
+        .take_while(|&&b| b != 0)
+        .map(|&b| {
+            if (0x20..0x7f).contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("\\x{b:02x}")
+            }
+        })
+        .collect()
+}
+
 impl Format {
     pub fn version(self) -> u32 {
         match self {
@@ -89,6 +116,9 @@ pub struct Writer<W: Write + Seek> {
     data_len: u64,
     /// 0x300: the key block written behind the file table (Gravity's protected entries).
     key_block: Vec<u8>,
+    /// The first 16 bytes of the header instead of the format's ("Master of Magic\0",
+    /// "Event Horizon\0c\0"); GRF Editor lets this be edited and reads any.
+    magic: Option<[u8; 16]>,
 }
 
 fn ceil8(n: u32) -> u32 {
@@ -107,7 +137,13 @@ impl<W: Write + Seek> Writer<W> {
             max_file_len: max_file_len.unwrap_or_else(|| format.max_file_len()),
             data_len: 0,
             key_block: Vec::new(),
+            magic: None,
         })
+    }
+
+    /// Writes `magic` as the first 16 bytes of the header instead of the format's own.
+    pub fn set_magic(&mut self, magic: [u8; 16]) {
+        self.magic = Some(magic);
     }
 
     /// The key block to write behind the file table; only the 0x300 format has one.
@@ -232,9 +268,10 @@ impl<W: Write + Seek> Writer<W> {
         let count =
             u32::try_from(entries.len()).map_err(|_| Error::TooLarge("too many entries".into()))?;
         let mut h = Vec::with_capacity(HEADER_LEN as usize);
-        match self.format {
-            Format::V300 => h.extend_from_slice(b"Event Horizon\0c\0"),
-            _ => h.extend_from_slice(b"Master of Magic\0"),
+        match (self.magic, self.format) {
+            (Some(m), _) => h.extend_from_slice(&m),
+            (None, Format::V300) => h.extend_from_slice(b"Event Horizon\0c\0"),
+            (None, _) => h.extend_from_slice(b"Master of Magic\0"),
         }
         h.extend(1..=14u8);
         match self.format {
@@ -306,7 +343,7 @@ impl<W: Write + Seek> Writer<W> {
         }
         self.out.write_all(&table)?;
         let mut h = Vec::with_capacity(HEADER_LEN as usize);
-        h.extend_from_slice(b"Master of Magic\0");
+        h.extend_from_slice(&self.magic.unwrap_or(*b"Master of Magic\0"));
         h.extend(1..=14u8);
         h.extend_from_slice(&(self.data_len as u32).to_le_bytes());
         h.extend_from_slice(&0u32.to_le_bytes());
@@ -400,6 +437,30 @@ mod tests {
                 assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
             }
         }
+    }
+
+    #[test]
+    fn a_custom_magic_is_written_and_read_like_grf_editor_does() {
+        for format in [Format::V200, Format::V300] {
+            let mut bytes = build(format, true);
+            let magic = magic_from_text("My Own Magic").unwrap();
+            bytes[..16].copy_from_slice(&magic);
+            let g = Archive::from_source(bytes).unwrap();
+            assert_eq!(magic_to_text(&g.header().magic), "My Own Magic");
+            assert_eq!(g.read(0).unwrap().data, A);
+        }
+        let mut w = Writer::new(Cursor::new(Vec::new()), Format::V200, true, None).unwrap();
+        w.set_magic(magic_from_text("0123456789abcdef").unwrap());
+        let (_, out) = w.finish(&[]).unwrap();
+        assert_eq!(&out.into_inner()[..16], b"0123456789abcdef");
+        // without a GRF version the file is still no GRF
+        let mut junk = build(Format::V200, true);
+        junk[..16].copy_from_slice(b"not an archive!!");
+        junk[42..46].copy_from_slice(&7u32.to_le_bytes());
+        assert!(Archive::from_source(junk).is_err());
+        assert!(magic_from_text("").is_err());
+        assert!(magic_from_text("seventeen chars!!").is_err());
+        assert!(magic_from_text("tab\there").is_err());
     }
 
     #[test]

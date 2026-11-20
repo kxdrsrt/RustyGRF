@@ -1068,12 +1068,21 @@ struct WriteArgs {
     /// Only plan, write nothing
     #[arg(long)]
     dry_run: bool,
+    /// The magic at the start of the header (up to 16 ASCII characters; default "Master of
+    /// Magic", "Event Horizon" for 0x300), as GRF Editor lets it be set
+    #[arg(long)]
+    magic: Option<String>,
 }
 
 impl WriteArgs {
     fn options(&self, encrypt: Option<rgrf_core::grfcrypt::Key>) -> Result<RepackOptions> {
         Ok(RepackOptions {
             encrypt,
+            magic: self
+                .magic
+                .as_deref()
+                .map(rgrf_core::writer::magic_from_text)
+                .transpose()?,
             method: match self.method {
                 Some(m) => method_from(m, self.level)?,
                 None => Method::DEFAULT,
@@ -2038,6 +2047,7 @@ fn run(cli: &Cli) -> Result<i32> {
         } => {
             let method = method_from(*method, *level)?;
             let opts = RepackOptions {
+                magic: None,
                 method,
                 format: *format,
                 align: if *align {

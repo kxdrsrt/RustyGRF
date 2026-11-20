@@ -36,6 +36,24 @@ pub struct SaveRequest {
     pub encryption: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
+    /// The magic of the GRF header (up to 16 ASCII characters); none keeps the archive's own
+    /// when it is not the usual one, else the format's.
+    #[serde(default)]
+    pub magic: Option<String>,
+}
+
+/// The magic to write: the one asked for, else the source's own unusual one (GRF Editor keeps it
+/// on save), else `None` (the format's).
+fn magic_for(src: &Archive, req: &SaveRequest) -> Result<Option<[u8; 16]>, String> {
+    if let Some(text) = req.magic.as_deref().filter(|t| !t.is_empty()) {
+        return rgrf_core::writer::magic_from_text(text)
+            .map(Some)
+            .map_err(|e| err!("err-bad-magic", "error": e.to_string()));
+    }
+    let h = src.header();
+    let m = h.magic;
+    let usual = m[..15] == *b"Master of Magic" || m[..13] == *b"Event Horizon";
+    Ok((h.kind == rgrf_core::container::Kind::Grf && !usual).then_some(m))
 }
 
 /// The container a file name asks for.
@@ -107,6 +125,7 @@ pub fn save_as(
                 return Err(err!("err-encrypt-format"));
             }
             let opts = RepackOptions {
+                magic: magic_for(&src, req)?,
                 overwrite,
                 method,
                 format,
@@ -335,6 +354,57 @@ pub fn create_empty(dst: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     w.finish(&[]).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The encodings the text tool offers (names as `encoding_rs` knows them).
+pub const TEXT_ENCODINGS: [&str; 9] = [
+    "windows-1252",
+    "euc-kr",
+    "shift_jis",
+    "gbk",
+    "big5",
+    "windows-1251",
+    "windows-874",
+    "utf-8",
+    "utf-16le",
+];
+
+#[derive(Serialize, Debug)]
+pub struct ConvertedText {
+    pub text: String,
+    /// The bytes in between, as hex (the first 256).
+    pub hex: String,
+    /// Some characters could not be written in `from` or read in `to`.
+    pub lossy: bool,
+}
+
+/// GRF Editor's "Text encoding": writes `text` in the encoding it was wrongly shown in (`from`) and
+/// reads those bytes in `to`, which turns mojibake like `À¯ÀúÀÎÅÍÆäÀÌ½º` (Korean read as
+/// Windows-1252) back into `유저인터페이스`.
+pub fn convert_text(text: &str, from: &str, to: &str) -> Result<ConvertedText, String> {
+    let enc = |name: &str| {
+        encoding_rs::Encoding::for_label(name.as_bytes())
+            .ok_or_else(|| format!("unknown encoding '{name}'"))
+    };
+    let (from, to) = (enc(from)?, enc(to)?);
+    let (bytes, bad_in) = if from == encoding_rs::UTF_16LE {
+        let b: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        (b, false)
+    } else {
+        let (b, _, bad) = from.encode(text);
+        (b.into_owned(), bad)
+    };
+    let (out, bad_out) = to.decode_without_bom_handling(&bytes);
+    Ok(ConvertedText {
+        text: out.into_owned(),
+        hex: bytes
+            .iter()
+            .take(256)
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        lossy: bad_in || bad_out,
+    })
 }
 
 #[derive(Serialize, Debug)]
@@ -739,6 +809,55 @@ mod tests {
             ..q("(", false, false, "")
         };
         assert!(s.search_contents(&bad, &ctl).is_err());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn mojibake_is_read_back() {
+        let r = convert_text("À¯ÀúÀÎÅÍÆäÀÌ½º", "windows-1252", "euc-kr").unwrap();
+        assert_eq!(r.text, "유저인터페이스");
+        assert!(!r.lossy);
+        assert!(r.hex.starts_with("c0 af"));
+        let back = convert_text("유저인터페이스", "euc-kr", "windows-1252").unwrap();
+        assert_eq!(back.text, "À¯ÀúÀÎÅÍÆäÀÌ½º");
+        // a character the source encoding cannot hold is reported
+        assert!(convert_text("€유", "euc-kr", "utf-8").unwrap().lossy);
+        assert!(convert_text("x", "nope", "utf-8").is_err());
+    }
+
+    #[test]
+    fn the_magic_is_set_and_then_kept() {
+        let d = dir("magic");
+        let grf = d.join("m.grf");
+        create_empty(&grf).unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let f = d.join("x");
+        std::fs::write(&f, b"x").unwrap();
+        s.stage_add(r"data\x.txt", &f).unwrap();
+        let req = SaveRequest {
+            dst: d.join("own.grf"),
+            magic: Some("Gravity Magic".into()),
+            ..SaveRequest::default()
+        };
+        save_as(&s.edit_plan().unwrap(), &req, false, &Control::default()).unwrap();
+        let own = Session::open(&req.dst).unwrap();
+        assert_eq!(own.info().magic, "Gravity Magic");
+        // saving it again without a choice keeps it
+        let again = SaveRequest {
+            dst: d.join("again.grf"),
+            ..SaveRequest::default()
+        };
+        save_as(&own.plan(), &again, false, &Control::default()).unwrap();
+        assert_eq!(
+            Session::open(&again.dst).unwrap().info().magic,
+            "Gravity Magic"
+        );
+        let bad = SaveRequest {
+            dst: d.join("bad.grf"),
+            magic: Some("ü".into()),
+            ..SaveRequest::default()
+        };
+        assert!(save_as(&own.plan(), &bad, false, &Control::default()).is_err());
         let _ = std::fs::remove_dir_all(d);
     }
 

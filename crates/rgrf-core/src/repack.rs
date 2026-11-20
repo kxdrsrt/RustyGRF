@@ -58,6 +58,8 @@ pub struct RepackOptions {
     /// source that was opened with its key are decrypted first; the key does not have to be the
     /// same. Without this, a source with a key set is written decrypted.
     pub encrypt: Option<crate::grfcrypt::Key>,
+    /// The first 16 bytes of the header; `None` writes the format's own ("Master of Magic").
+    pub magic: Option<[u8; 16]>,
 }
 
 impl Default for RepackOptions {
@@ -74,6 +76,7 @@ impl Default for RepackOptions {
             dry_run: false,
             max_file_len: None,
             encrypt: None,
+            magic: None,
         }
     }
 }
@@ -617,6 +620,9 @@ fn write_all<R: ReadAt>(
         opts.max_file_len,
     )?;
     writer.set_key_block(key_block)?;
+    if let Some(m) = opts.magic {
+        writer.set_magic(m);
+    }
     let mut placed: Vec<Option<Placed>> = vec![None; units.len()];
     let mut out_flags: Vec<u8> = vec![flags::FILE; units.len()];
     let mut expected: Vec<Expected> = vec![Expected::Nothing; units.len()];

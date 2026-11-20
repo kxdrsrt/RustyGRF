@@ -192,6 +192,7 @@ async function openPath(path, force = false) {
 async function showOpened(info) {
   const path = info.path;
   renewAssets();
+  Object.assign(NAV, { back: [], fwd: [], current: null });
   S.info = info;
   S.untitled = untitledKind(path);
   if (S.untitled) S.info.file_name = `${t("untitled")}.${S.untitled}`;
@@ -611,8 +612,32 @@ function folderRow(r, pos) {
   );
 }
 
+/** The files shown before, for Back and Forward (as in GRF Editor and a web browser). */
+const NAV = { back: [], fwd: [], current: null, moving: false };
+function noteVisit(index) {
+  if (NAV.moving || index === NAV.current) return;
+  if (NAV.current != null) NAV.back.push(NAV.current);
+  if (NAV.back.length > 100) NAV.back.shift();
+  NAV.fwd = [];
+  NAV.current = index;
+}
+async function navigate(back) {
+  const from = back ? NAV.back : NAV.fwd;
+  if (!S.info || !from.length) return;
+  const to = from.pop();
+  (back ? NAV.fwd : NAV.back).push(NAV.current);
+  NAV.current = to;
+  NAV.moving = true;
+  try {
+    await revealEntry(to);
+  } finally {
+    NAV.moving = false;
+  }
+}
+
 const mainList = new VList(S, { vp: "viewport", spacer: "spacer", rows: "rows" }, 0, mainRow, (r) => {
   updateEditBar();
+  if (!r.folder) noteVisit(r.index);
   if (V.preview === "off") return;
   if (r.folder) showFolderPreview(r);
   else showPreview(r);
@@ -1366,8 +1391,11 @@ function updateEditBar() {
   if (S.info) {
     invoke("history")
       .then((h) => {
+        HISTORY = { undo: h.undo || [], redo: h.redo || [] };
         for (const id of ["btn-undo", "act-undo"]) if ($(id)) $(id).disabled = !h.can_undo;
         for (const id of ["btn-redo", "act-redo"]) if ($(id)) $(id).disabled = !h.can_redo;
+        $("btn-undo").title = HISTORY.undo.length ? `${t("btn-undo")}: ${stepLabel(HISTORY.undo[0])} (Cmd/Ctrl+Z)` : `${t("btn-undo")} (Cmd/Ctrl+Z)`;
+        $("btn-redo").title = HISTORY.redo.length ? `${t("btn-redo")}: ${stepLabel(HISTORY.redo[0])} (Cmd/Ctrl+Shift+Z)` : `${t("btn-redo")} (Cmd/Ctrl+Shift+Z)`;
       })
       .catch(() => {});
   }
@@ -1396,6 +1424,80 @@ function setPending(rows) {
   updateTitle();
   updateEditBar();
   render();
+}
+
+/** A step of the history in words ("Replaced x.spr", "Removed 12 files"). */
+function stepLabel(st) {
+  if (!st || st.kind === "none") return "";
+  return st.n > 1 ? t(`hist-${st.kind}-n`, { n: st.n }) : t(`hist-${st.kind}`, { name: baseOf(st.name) });
+}
+
+/** The last answer of `history`, for tooltips and the history list. */
+let HISTORY = { undo: [], redo: [] };
+
+/**
+ * Cmd/Ctrl+Z and Shift+Z (and Ctrl+Y) from menu or keyboard: a text field undoes its typing, an
+ * open pixel editor its strokes, otherwise the archive's changes step back.
+ */
+function editHistory(redo) {
+  const a = document.activeElement;
+  const typing = a && (a.isContentEditable || a instanceof HTMLTextAreaElement || (a instanceof HTMLInputElement && !["checkbox", "radio", "button", "color", "range", "file"].includes(a.type)));
+  if (typing) {
+    document.execCommand(redo ? "redo" : "undo");
+    return;
+  }
+  if (S.undoHandler) return redo ? S.undoHandler.redo?.() : S.undoHandler.undo?.();
+  const dlg = document.querySelector("dialog[open]");
+  if (dlg && dlg.id !== "act-dlg") return;
+  if (S.info) doHistory(redo);
+}
+
+/** Several steps at once, from the history list. */
+async function jumpHistory(steps, redo) {
+  try {
+    setPending(await invoke("step_history", { steps, redo }));
+    setStatus(redo ? t("history-redone-n", { n: steps }) : t("history-undone-n", { n: steps }));
+    if ($("act-dlg").open) await loadActFrame();
+    refreshPreview($("act-dlg").open ? E.action : undefined);
+  } catch (e) {
+    await note(t("history-failed"), errText(e), true);
+  }
+}
+
+/** The list of steps under the undo or redo button; a click goes back (or forward) to that step. */
+function showHistoryMenu(anchor, redo) {
+  document.querySelector(".popmenu")?.remove();
+  const steps = redo ? HISTORY.redo : HISTORY.undo;
+  if (!steps.length) return;
+  const menu = el("div", { class: "popmenu", role: "menu", "aria-label": redo ? t("btn-redo") : t("btn-undo") },
+    ...steps.map((st, i) => el("button", { type: "button", role: "menuitem", text: stepLabel(st), onclick: () => { close(); jumpHistory(i + 1, redo); } })));
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.min(r.left, window.innerWidth - 300)}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+  document.body.append(menu);
+  const close = () => {
+    menu.remove();
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", esc, true);
+  };
+  const outside = (e) => !menu.contains(e.target) && close();
+  const esc = (e) => e.key === "Escape" && (e.preventDefault(), close(), anchor.focus());
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", esc, true);
+  menu.querySelector("button")?.focus();
+}
+
+/** Edit › Change History: every step that can be undone or redone, in one list. */
+async function openHistory() {
+  if (!S.info) return;
+  const row = (st, i, redo) => el("li", {}, el("button", { type: "button", class: "linklike", text: stepLabel(st), onclick: () => { $("dlg").close(); jumpHistory(i + 1, redo); } }));
+  const body = [];
+  if (HISTORY.redo.length) body.push(el("h4", { text: t("hist-redo-head") }), el("ol", { class: "history" }, ...HISTORY.redo.map((st, i) => row(st, i, true)).reverse()));
+  body.push(el("h4", { text: t("hist-now") }));
+  if (HISTORY.undo.length) body.push(el("h4", { text: t("hist-undo-head") }), el("ol", { class: "history" }, ...HISTORY.undo.map((st, i) => row(st, i, false))));
+  else body.push(el("p", { class: "muted", text: t("hist-empty") }));
+  body.push(el("p", { class: "hint", text: t("hist-hint") }));
+  await ask(t("hist-title"), body, [{ label: "Close", value: null }], "info");
 }
 
 async function doHistory(redo) {
@@ -1673,7 +1775,9 @@ async function openPixelEditor(row, frame) {
     }
   };
   dlg.addEventListener("keydown", keyTools);
-  const go = await finish();
+  // the menu's Undo reaches the strokes while the editor is open
+  S.undoHandler = { undo: () => undoBtn.click() };
+  const go = await finish().finally(() => (S.undoHandler = null));
   dlg.removeEventListener("keydown", keyTools);
   if (!go) return;
   if (px.every((v, i) => v === original[i])) return setStatus(t("pix-nochange"));
@@ -2408,10 +2512,16 @@ async function saveDialog(preset = "as") {
     el("dt", { text: t("as-content") }), el("dd", { text: `${t("pvw-files", { n: info.files })} · ${fmtBytes(info.file_size)}` }),
     el("dt", { text: t("as-encryption") }), el("dd", { text: encrypted ? t("as-encrypted") : t("as-plain") }),
     el("dt", { text: t("as-names") }), el("dd", { text: $("names").selectedOptions[0]?.textContent || "" }),
+    info.magic ? el("dt", { text: t("as-magic") }) : null, info.magic ? el("dd", {}, el("code", { text: info.magic })) : null,
   );
   const fmtLabel = el("label", {}, el("span", { class: "fl", text: t("set-format") }), format);
+  // GRF Editor's "Magic header": any 16 ASCII characters; an unusual one stays on save
+  const magic = el("input", { type: "text", class: "field", value: info.magic || "", maxlength: "16", spellcheck: "false", "aria-label": t("as-magic") });
+  const usualMagic = () => ((format.value === "keep" ? info.format : format.value).includes("300") ? "Event Horizon" : "Master of Magic");
+  const magicReset = el("button", { type: "button", class: "small", text: t("as-magic-reset"), onclick: () => (magic.value = usualMagic()) });
+  const magicLabel = el("label", {}, el("span", { class: "fl", text: t("as-magic") }), el("span", { class: "inline" }, magic, magicReset));
   const encLabel = el("label", {}, el("span", { class: "fl", text: t("sa-encryption") }), enc);
-  for (const n of [fmtLabel, encLabel, passRow]) if (!grfTarget) n.hidden = true;
+  for (const n of [fmtLabel, encLabel, passRow, magicLabel]) if (!grfTarget) n.hidden = true;
   const body = [
     preset === "settings" ? facts : null,
     el("div", { class: "form buildform" },
@@ -2419,6 +2529,7 @@ async function saveDialog(preset = "as") {
       el("label", {}, el("span", { class: "fl", text: t("set-compression") }), method),
       fmtLabel,
       encLabel,
+      preset === "settings" || preset === "as" ? magicLabel : null,
     ),
     passRow,
     el("p", { class: "hint", text: t("sa-hint") }),
@@ -2441,6 +2552,7 @@ async function saveDialog(preset = "as") {
       format: format.value === "keep" ? null : format.value,
       encryption: enc.value,
       password: enc.value === "password" ? pass.value : null,
+      magic: magic.value && magic.value !== info.magic ? magic.value : null,
     };
     if (act === "here") return saveInPlace(req);
     const base = S.untitled ? t("untitled") : info.file_name.replace(/\.[^.]+$/, "");
@@ -2590,6 +2702,54 @@ async function doSearchContents() {
   ];
   setTimeout(() => query.focus(), 0);
   await ask(t("sc-title"), body, [{ label: "Close", value: null }], "info");
+}
+
+/** Tools › Text Encoding (as in GRF Editor): text shown in a wrong encoding, read in the right one. */
+async function doTextEncoding() {
+  const ENC = [["windows-1252", "Windows-1252 (Latin-1)"], ["euc-kr", "CP949 (Korean)"], ["shift_jis", "Shift-JIS (Japanese)"], ["gbk", "GBK (Chinese, simplified)"], ["big5", "Big5 (Chinese, traditional)"], ["windows-1251", "Windows-1251 (Cyrillic)"], ["windows-874", "Windows-874 (Thai)"], ["utf-8", "UTF-8"], ["utf-16le", "UTF-16 LE"]];
+  const pick = (value, label) => {
+    const sel = el("select", { "aria-label": label }, ENC.map(([v, n]) => el("option", { value: v, text: n })));
+    sel.value = value;
+    return sel;
+  };
+  const prev = SET.textEncoding || { from: "windows-1252", to: "euc-kr" };
+  const src = el("textarea", { class: "field mono", rows: "4", spellcheck: "false", placeholder: "À¯ÀúÀÎÅÍÆäÀÌ½º", "aria-label": t("te-source") });
+  const out = el("textarea", { class: "field mono", rows: "4", readonly: "", "aria-label": t("te-result") });
+  const hex = el("p", { class: "muted mono small" });
+  const warn = el("p", { class: "error", hidden: "" });
+  const from = pick(prev.from, t("te-from"));
+  const to = pick(prev.to, t("te-to"));
+  let timer = 0;
+  const run = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      SET.textEncoding = { from: from.value, to: to.value };
+      saveSettings();
+      try {
+        const r = await invoke("convert_text", { text: src.value, from: from.value, to: to.value });
+        out.value = r.text;
+        hex.textContent = r.hex ? t("te-bytes", { hex: r.hex }) : "";
+        warn.hidden = !r.lossy;
+        warn.textContent = t("te-lossy");
+      } catch (e) {
+        out.value = "";
+        warn.hidden = false;
+        warn.textContent = errText(e);
+      }
+    }, 120);
+  };
+  const swap = el("button", { type: "button", class: "small", text: t("te-swap"), onclick: () => { [from.value, to.value] = [to.value, from.value]; src.value = out.value; run(); } });
+  for (const c of [src, from, to]) c.addEventListener("input", run);
+  setTimeout(() => src.focus(), 0);
+  await ask(t("te-title"), [
+    el("p", { class: "hint", text: t("te-intro") }),
+    el("label", { class: "stack" }, t("te-source"), src),
+    el("div", { class: "form" }, el("label", {}, el("span", { class: "fl", text: t("te-from") }), from), el("label", {}, el("span", { class: "fl", text: t("te-to") }), to)),
+    el("div", { class: "controls" }, swap),
+    el("label", { class: "stack" }, t("te-result"), out),
+    warn,
+    hex,
+  ], [{ label: "Close", value: null }], "info");
 }
 
 /** Help › About: version, who made it, and whose work it stands on. */
@@ -3054,15 +3214,35 @@ $("btn-remove").addEventListener("click", doRemove);
 $("btn-changes").addEventListener("click", doChanges);
 $("btn-undo").addEventListener("click", () => doHistory(false));
 $("btn-redo").addEventListener("click", () => doHistory(true));
-document.addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || !S.info) return;
-  const t = e.target;
-  // inside a text field Cmd/Ctrl+Z keeps its normal meaning
-  if (t instanceof HTMLInputElement && !["checkbox", "color", "button"].includes(t.type)) return;
-  if (t instanceof HTMLTextAreaElement) return;
-  e.preventDefault();
-  doHistory(e.shiftKey);
+for (const [id, redo] of [["btn-undo", false], ["btn-redo", true]]) {
+  $(id).addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showHistoryMenu($(id), redo);
+  });
+}
+// the mouse's back and forward buttons
+window.addEventListener("mouseup", (e) => {
+  if ((e.button === 3 || e.button === 4) && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    navigate(e.button === 3);
+  }
 });
+// In the app the menu's own Undo/Redo entries carry Cmd/Ctrl+Z and Shift+Z; in a browser (and
+// for Ctrl+Y, the Windows habit) the keys are handled here.
+const IN_APP = !!window.__TAURI_INTERNALS__;
+document.addEventListener("keydown", (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "y" && !e.shiftKey && !e.metaKey) {
+    e.preventDefault();
+    return editHistory(true);
+  }
+  if (k !== "z" || IN_APP) return;
+  const a = e.target;
+  if ((a instanceof HTMLInputElement && !["checkbox", "color", "button"].includes(a.type)) || a instanceof HTMLTextAreaElement) return;
+  e.preventDefault();
+  editHistory(e.shiftKey);
+}, true);
 $("btn-build").addEventListener("click", doBuild);
 $("btn-extract").addEventListener("click", doExtract);
 $("btn-verify").addEventListener("click", doVerify);
@@ -3254,6 +3434,12 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     e.shiftKey ? invoke("open_in_window", { path: null }).catch(() => {}) : newArchive("grf");
   }
+  // Back/Forward: Alt+arrows (Windows, Linux), Cmd+[ and Cmd+] (macOS)
+  const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+  if (!typing && !document.querySelector("dialog[open]") && ((e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) || (e.metaKey && (e.key === "[" || e.key === "]")))) {
+    e.preventDefault();
+    navigate(e.key === "ArrowLeft" || e.key === "[");
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === ",") {
     e.preventDefault();
     openSettings();
@@ -3295,7 +3481,7 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
-const NEEDS_ARCHIVE = new Set(["search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images"]);
+const NEEDS_ARCHIVE = new Set(["nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images"]);
 const MENU_ACTIONS = {
   "new-window": () => invoke("open_in_window", { path: null }),
   "new-grf": () => newArchive("grf"),
@@ -3315,10 +3501,15 @@ const MENU_ACTIONS = {
   compare: doCompare,
   "search-contents": doSearchContents,
   "data-folder": () => invoke("open_data_folder"),
+  history: openHistory,
+  "text-encoding": doTextEncoding,
+  "nav-back": () => navigate(true),
+  "nav-forward": () => navigate(false),
   "recent-clear": clearRecent,
   "reduce-images": () => doReduceImages(),
 };
 function runMenuCommand(id) {
+  if (id === "undo" || id === "redo") return editHistory(id === "redo");
   if (document.querySelector("dialog[open]")) return;
   if (id.startsWith("layout-")) return S.info && setLayout(id.slice(7));
   if (id.startsWith("preview-")) return setPreviewMode(id.slice(8));
