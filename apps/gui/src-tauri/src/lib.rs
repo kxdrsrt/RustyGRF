@@ -1013,6 +1013,36 @@ async fn stage_rename(
     .await
 }
 
+/// A sound after the operations, to listen to and to draw (nothing is staged).
+#[tauri::command]
+async fn audio_render(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    ops: Vec<String>,
+    buckets: usize,
+) -> Res<backend::AudioView> {
+    with_session(&state, &window, move |s| {
+        s.audio_render(index, &ops, buckets)
+    })
+    .await
+}
+
+/// Replaces a sound by the result of the operations.
+#[tauri::command]
+async fn stage_audio(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    ops: Vec<String>,
+) -> Res<Vec<backend::PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_audio(index, &ops)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Marks entries to be encrypted or decrypted (GRF Editor's per-entry encryption) when saving.
 /// The password is needed only to encrypt in an archive that has no key yet.
 #[tauri::command]
@@ -1764,6 +1794,8 @@ pub fn run() {
             reveal_entry,
             stage_rename,
             stage_crypt,
+            audio_render,
+            stage_audio,
             export_selection,
             hex_page,
             hex_find,

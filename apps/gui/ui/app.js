@@ -1137,7 +1137,8 @@ function renderPreview(p, row, meta) {
       PLAYER.el = a;
       // a click or an arrow key selected the entry, so the webview lets it start by itself
       if (SET.autoplay !== false) a.play().catch(() => {});
-      return [a];
+      const editable = extOf(row.name).toLowerCase() === "wav";
+      return [editable ? el("div", { class: "controls" }, el("button", { type: "button", class: "small", icon: "edit", text: t("ctx-audio"), onclick: () => (stopAudio(), openAudioEditor(row)) })) : null, a];
     }
     case "text": {
       const pre = el("pre", { text: p.text });
@@ -3455,6 +3456,7 @@ function entryMenu(list, row) {
   if (["rsw", "gnd", "gat"].includes(ext)) items.push({ label: t("ctx-map-extract"), icon: "map", run: guard(() => doExtractMap(row)) }, { label: t("pvw-flat-map"), icon: "edit", run: guard(() => doFlatMap(row)) });
   const edit = [];
   if (row.kind === "text") edit.push({ label: t("ctx-edit"), icon: "edit", run: guard(() => openTextEditor(row)) });
+  if (ext === "wav") edit.push({ label: t("ctx-audio"), icon: "audio", run: guard(() => openAudioEditor(row)) });
   if (ext === "bmp") edit.push({ label: t("ctx-reduce"), icon: "image", run: guard(() => openReduceDialog(row)) });
   edit.push({ label: t("ctx-hex"), icon: "file", run: guard(async () => openHexEditor(row, (await invoke("details", { index: row.index })).name)) });
   items.push("-", ...edit, "-");
@@ -3470,6 +3472,188 @@ function entryMenu(list, row) {
 }
 
 /** The new path of a file, or of a folder (everything below it moves along). */
+// ---------- sound editor ----------
+
+/** Wave view, selection by dragging, steps applied by the backend; Apply stages the result. */
+async function openAudioEditor(row) {
+  const ops = [];
+  let view = null;
+  let sel = null; // { a, b } in ms of the sound as it is now
+  const cv = el("canvas", { class: "wave", width: 900, height: 150, "aria-label": t("au-wave") });
+  const info = el("div", { class: "muted" });
+  const selInfo = el("div", { class: "muted" });
+  const stepsList = el("ol", { class: "history" });
+  const msg = el("p", { class: "error" });
+  const player = el("audio", { controls: true });
+  let playhead = 0;
+
+  const draw = () => {
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth || 900;
+    const h = 150;
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    const g = cv.getContext("2d");
+    g.scale(dpr, dpr);
+    const css = getComputedStyle(document.documentElement);
+    g.fillStyle = css.getPropertyValue("--bg") || "#111";
+    g.fillRect(0, 0, w, h);
+    if (!view) return;
+    const dur = Math.max(1, view.duration_ms);
+    if (sel) {
+      g.fillStyle = "rgba(255,140,0,0.28)";
+      g.fillRect((sel.a / dur) * w, 0, ((sel.b - sel.a) / dur) * w, h);
+    }
+    g.strokeStyle = css.getPropertyValue("--accent") || "#f60";
+    g.lineWidth = 1;
+    g.beginPath();
+    const n = view.peaks.length;
+    for (let i = 0; i < n; i++) {
+      const x = ((i + 0.5) / n) * w;
+      const [lo, hi] = view.peaks[i];
+      g.moveTo(x, h / 2 - Math.min(1, hi) * (h / 2 - 2));
+      g.lineTo(x, h / 2 - Math.max(-1, lo) * (h / 2 - 2) + 1);
+    }
+    g.stroke();
+    g.strokeStyle = css.getPropertyValue("--line") || "#444";
+    g.beginPath();
+    g.moveTo(0, h / 2);
+    g.lineTo(w, h / 2);
+    g.stroke();
+    if (playhead > 0) {
+      g.strokeStyle = "#fff";
+      const x = (playhead / dur) * w;
+      g.beginPath();
+      g.moveTo(x, 0);
+      g.lineTo(x, h);
+      g.stroke();
+    }
+  };
+
+  const chText = (n) => (n === 1 ? t("au-mono") : n === 2 ? t("au-stereo") : t("au-channels", { n }));
+  const refreshText = () => {
+    if (!view) return;
+    const peak = Number.isFinite(view.peak_db) ? view.peak_db.toFixed(1) : "−∞";
+    info.textContent = t("au-info", { rate: view.rate, channels: chText(view.channels), ms: fmtNum(view.duration_ms), peak });
+    selInfo.textContent = sel ? t("au-sel", { a: fmtNum(sel.a), b: fmtNum(sel.b) }) : t("au-sel-none");
+    stepsList.replaceChildren(...(ops.length ? ops.map((o) => el("li", {}, el("code", { text: o }))) : [el("li", { class: "muted", text: t("au-ops-none") })]));
+  };
+
+  const render = async () => {
+    view = await invoke("audio_render", { index: row.index, ops, buckets: 900 });
+    player.src = dataUrl("audio/wav", view.wav);
+    if (sel) sel = sel.a >= view.duration_ms ? null : { a: sel.a, b: Math.min(sel.b, view.duration_ms) };
+    refreshText();
+    draw();
+  };
+
+  /** Adds a step; a step that fails is dropped again and says why. */
+  const add = async (text, { structural = false } = {}) => {
+    ops.push(text);
+    msg.textContent = "";
+    try {
+      await render();
+      if (structural) sel = null;
+      refreshText();
+      draw();
+    } catch (e) {
+      ops.pop();
+      msg.textContent = errText(e);
+      await render().catch(() => {});
+    }
+  };
+  const needSel = () => {
+    if (sel) return true;
+    msg.textContent = t("au-needs-sel");
+    return false;
+  };
+  const at = () => (sel ? `@${sel.a}-${sel.b}` : "");
+  const range = () => `${sel.a}-${sel.b}`;
+  const field = (label, value, attrs = {}) => {
+    const i = el("input", { type: "number", class: "narrow", value: String(value), "aria-label": label, ...attrs });
+    return [i, el("span", { class: "muted", text: label })];
+  };
+  const btn = (text, fn, extra = {}) => el("button", { type: "button", class: "small", text, onclick: fn, ...extra });
+  const group = (title, ...kids) => el("div", { class: "audgroup" }, el("strong", { text: title }), el("div", { class: "controls" }, ...kids));
+
+  // selection by dragging on the wave
+  let drag = null;
+  const msAt = (ev) => {
+    const r = cv.getBoundingClientRect();
+    return Math.round(Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)) * (view?.duration_ms || 0));
+  };
+  cv.addEventListener("pointerdown", (ev) => {
+    if (!view) return;
+    cv.setPointerCapture(ev.pointerId);
+    drag = msAt(ev);
+    sel = null;
+    refreshText();
+    draw();
+  });
+  cv.addEventListener("pointermove", (ev) => {
+    if (drag == null) return;
+    const m = msAt(ev);
+    sel = m === drag ? null : { a: Math.min(drag, m), b: Math.max(drag, m) };
+    refreshText();
+    draw();
+  });
+  cv.addEventListener("pointerup", () => (drag = null));
+  player.addEventListener("timeupdate", () => {
+    playhead = player.paused && player.currentTime === 0 ? 0 : player.currentTime * 1000;
+    draw();
+  });
+  player.addEventListener("ended", () => {
+    playhead = 0;
+    draw();
+  });
+
+  const [gain, gainL] = field(t("au-gain"), 3, { step: "0.5" });
+  const [fin, finL] = field(t("au-ms"), 200, { min: "1" });
+  const [fout, foutL] = field(t("au-ms"), 300, { min: "1" });
+  const rate = el("select", { "aria-label": t("au-rate") }, ...[8000, 11025, 16000, 22050, 32000, 44100, 48000].map((r) => el("option", { value: r, text: `${r} Hz` })));
+  const [speed, speedL] = field(t("au-speed-f"), 1.25, { step: "0.05", min: "0.25", max: "4" });
+  const [eDelay, eDelayL] = field(t("au-echo-delay"), 250, { min: "10", max: "2000" });
+  const [eFb, eFbL] = field(t("au-echo-fb"), 0.4, { step: "0.05", min: "0", max: "0.95" });
+  const [eMix, eMixL] = field(t("au-mix"), 0.3, { step: "0.05", min: "0", max: "1" });
+  const [rRoom, rRoomL] = field(t("au-room"), 0.5, { step: "0.1", min: "0", max: "1" });
+  const [rMix, rMixL] = field(t("au-mix"), 0.25, { step: "0.05", min: "0", max: "1" });
+  const [lp, lpL] = field("Hz", 4000, { min: "50" });
+  const [hp, hpL] = field("Hz", 200, { min: "10" });
+
+  const body = [
+    el("p", { class: "muted", text: t("au-intro") }),
+    cv,
+    el("div", { class: "controls" }, info, selInfo, btn(t("au-sel-all"), () => ((sel = view ? { a: 0, b: view.duration_ms } : null), refreshText(), draw())), player),
+    group(t("au-g-part"), btn(t("au-trim"), () => needSel() && add(`trim:${range()}`, { structural: true })), btn(t("au-cut"), () => needSel() && add(`cut:${range()}`, { structural: true })), btn(t("au-silence"), () => needSel() && add(`silence:${range()}`))),
+    group(t("au-g-level"), gain, gainL, btn(t("au-apply-step"), () => add(`gain:${gain.value}${at()}`)), btn(t("au-normalize"), () => add("normalize:-1")), fin, finL, btn(t("au-fadein"), () => add(`fadein:${fin.value}${at()}`)), fout, foutL, btn(t("au-fadeout"), () => add(`fadeout:${fout.value}${at()}`))),
+    group(t("au-g-shape"), btn(t("au-reverse"), () => add(`reverse${at()}`)), btn(t("au-mono-btn"), () => add("mono", { structural: false })), rate, btn(t("au-resample"), () => add(`resample:${rate.value}`)), speed, speedL, btn(t("au-speed"), () => add(`speed:${speed.value}`, { structural: true }))),
+    group(t("au-g-fx"), eDelay, eDelayL, eFb, eFbL, eMix, eMixL, btn(t("au-echo"), () => add(`echo:${eDelay.value},${eFb.value},${eMix.value}`)), rRoom, rRoomL, rMix, rMixL, btn(t("au-reverb"), () => add(`reverb:${rRoom.value},${rMix.value}`))),
+    group(t("au-g-filter"), lp, lpL, btn(t("au-lowpass"), () => add(`lowpass:${lp.value}${at()}`)), hp, hpL, btn(t("au-highpass"), () => add(`highpass:${hp.value}${at()}`))),
+    el("h4", { text: t("au-ops") }),
+    stepsList,
+    el("div", { class: "controls" }, btn(t("au-undo"), async () => (ops.pop(), await render())), btn(t("au-reset"), async () => ((ops.length = 0), (sel = null), await render()))),
+    msg,
+  ];
+  try {
+    await render();
+  } catch (e) {
+    return note(t("au-failed"), errText(e), true);
+  }
+  const dlg = $("dlg");
+  dlg.classList.add("wide");
+  const go = await ask(t("au-title", { name: baseOf(row.name) }), body, [{ label: t("au-apply"), value: true, primary: true }, { label: "Cancel", value: null }], "info");
+  dlg.classList.remove("wide");
+  player.pause();
+  if (!go || !ops.length) return;
+  try {
+    setPending(await invoke("stage_audio", { index: row.index, ops }));
+    setStatus(t("au-status", { name: baseOf(row.name), n: ops.length }));
+    refreshPreview();
+  } catch (e) {
+    await note(t("au-failed"), errText(e), true);
+  }
+}
+
 /** GRF Editor's per-entry encryption exists in GRF 0x200 archives only. */
 function cryptItems(list, row, guard) {
   if (!/0x200/.test(S.info?.format || "") || S.untitled === "thor" || S.untitled === "rgz") return [];

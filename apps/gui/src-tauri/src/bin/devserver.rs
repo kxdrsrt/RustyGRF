@@ -132,6 +132,17 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?;
             to_json(s.pending())
         }),
+        "audio_render" => with(state, |s| {
+            to_json(s.audio_render(
+                arg::<usize>(a, "index")?,
+                &arg::<Vec<String>>(a, "ops")?,
+                arg::<usize>(a, "buckets")?,
+            )?)
+        }),
+        "stage_audio" => with(state, |s| {
+            s.stage_audio(arg::<usize>(a, "index")?, &arg::<Vec<String>>(a, "ops")?)?;
+            to_json(s.pending())
+        }),
         "stage_crypt" => with(state, |s| {
             let marked = s.stage_crypt(
                 &arg::<Vec<usize>>(a, "indices")?,

@@ -710,6 +710,21 @@ pub struct ArchiveInfo {
 }
 
 #[derive(Serialize, Debug)]
+pub struct AudioView {
+    pub rate: u32,
+    pub channels: usize,
+    pub duration_ms: u32,
+    /// Level of the loudest sample in dB (minus infinity for silence).
+    pub peak_db: f32,
+    /// Lowest and highest sample of each slice of the sound.
+    pub peaks: Vec<[f32; 2]>,
+    /// The edited sound as a 16-bit PCM WAV, base64.
+    pub wav: String,
+    /// The operations as they were understood.
+    pub ops: Vec<String>,
+}
+
+#[derive(Serialize, Debug)]
 pub struct CryptStaged {
     /// Entries marked by this step.
     pub marked: usize,
@@ -1665,6 +1680,25 @@ fn png_frame(img: &RgbaImage, label: Note) -> Option<Frame> {
 
 /// Text of a file whose encoding is unknown: UTF-8 if it is, else Korean (CP949) if that decodes
 /// without errors, else Windows-1252.
+/// A sound read from WAV bytes with the operations applied; the operations as text again.
+fn edited_audio(
+    data: &[u8],
+    ops: &[String],
+) -> Result<(rgrf_formats::audio::Audio, Vec<String>), String> {
+    use rgrf_formats::audio::{Audio, Op};
+    let mut audio =
+        Audio::from_wav(data).map_err(|e| err!("err-audio-read", "error": e.to_string()))?;
+    let ops: Vec<Op> = ops
+        .iter()
+        .map(|t| Op::parse(t))
+        .collect::<Result<_, _>>()
+        .map_err(|e| err!("err-audio-op", "error": e.to_string()))?;
+    audio
+        .apply_all(&ops)
+        .map_err(|e| err!("err-audio-op", "error": e.to_string()))?;
+    Ok((audio, ops.iter().map(Op::text).collect()))
+}
+
 /// The decompiled text of a compiled Lua file (`None` when it cannot be read).
 fn decompiled_text(data: &[u8]) -> Option<String> {
     std::panic::catch_unwind(|| {
@@ -2631,6 +2665,51 @@ impl Session {
             what,
         });
         Ok(())
+    }
+
+    /// The sound of entry `index` (with pending edits) after the operations `ops` (their text
+    /// form, see [`rgrf_formats::audio::Op::parse`]), as a playable WAV and a picture of its wave.
+    pub fn audio_render(
+        &self,
+        index: usize,
+        ops: &[String],
+        buckets: usize,
+    ) -> Result<AudioView, String> {
+        let (_, data, _) = self.working_bytes(index)?;
+        let (audio, ops) = edited_audio(&data, ops)?;
+        let peak = audio.peak();
+        Ok(AudioView {
+            rate: audio.rate,
+            channels: audio.channels.len(),
+            duration_ms: audio.duration_ms(),
+            peak_db: if peak > 0.0 {
+                20.0 * peak.log10()
+            } else {
+                f32::NEG_INFINITY
+            },
+            peaks: audio
+                .peaks(buckets.clamp(10, 4000))
+                .into_iter()
+                .map(|(lo, hi)| [lo, hi])
+                .collect(),
+            wav: b64(&audio.to_wav()),
+            ops,
+        })
+    }
+
+    /// Replaces a sound by the result of the operations (one undo step); it is written as 16-bit PCM.
+    pub fn stage_audio(&mut self, index: usize, ops: &[String]) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, data, mut what) = s.working_bytes(index)?;
+            let (audio, texts) = edited_audio(&data, ops)?;
+            what.push(format!("sound: {}", texts.join(", ")));
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(audio.to_wav()),
+                what,
+            });
+            Ok(())
+        })
     }
 
     /// Changes a layer, anchor or frame of an animation.
@@ -5066,6 +5145,62 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_sound_is_rendered_and_staged_with_operations() {
+        let dir = tmp("audio");
+        fs::create_dir_all(dir.join("src/data")).unwrap();
+        let tone = rgrf_formats::audio::Audio {
+            rate: 8000,
+            channels: vec![(0..8000).map(|i| (i as f32 * 0.05).sin() * 0.5).collect()],
+        };
+        fs::write(dir.join("src/data/s.wav"), tone.to_wav()).unwrap();
+        let grf = dir.join("a.grf");
+        build(
+            &dir.join("src"),
+            &grf,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let i = find(&s, "s.wav");
+        let ops = vec!["trim:100-600".to_string(), "gain:-6".to_string()];
+        let v = s.audio_render(i, &ops, 100).unwrap();
+        assert_eq!(
+            (v.rate, v.channels, v.duration_ms, v.peaks.len()),
+            (8000, 1, 500, 100)
+        );
+        assert!(v.peak_db < -11.0 && v.peak_db > -13.0, "{}", v.peak_db);
+        assert!(s.pending().is_empty(), "rendering stages nothing");
+        assert!(
+            s.audio_render(i, &["cut:9000-9500".to_string()], 100)
+                .is_err()
+        );
+        assert!(s.audio_render(i, &["wobble".to_string()], 100).is_err());
+        s.stage_audio(i, &ops).unwrap();
+        assert_eq!(s.pending()[0].kind, "replace");
+        // a second edit starts from the first one
+        let v = s
+            .audio_render(i, &["fadeout:100".to_string()], 100)
+            .unwrap();
+        assert_eq!(v.duration_ms, 500);
+        let out = dir.join("out.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let o = Archive::open(&out).unwrap();
+        let data = o
+            .read(o.find(&GrfPath::new(&b"data\\s.wav"[..])).unwrap())
+            .unwrap()
+            .data;
+        assert_eq!(
+            rgrf_formats::audio::Audio::from_wav(&data)
+                .unwrap()
+                .duration_ms(),
+            500
+        );
+        assert!(s.undo() && s.pending().is_empty());
         let _ = fs::remove_dir_all(dir);
     }
 

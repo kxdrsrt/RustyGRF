@@ -26,6 +26,7 @@ use rgrf_core::{Archive, DecodeStatus, Entry, GrfPath, NameMode};
 use serde_json::{Value, json};
 
 mod act_cmd;
+mod audio_cmd;
 mod client_cmd;
 mod crypt_cmd;
 mod edit_cmd;
@@ -272,6 +273,11 @@ enum Cmd {
     Spr {
         #[command(subcommand)]
         action: SprCmd,
+    },
+    /// Sounds (.wav, also ADPCM): show, edit (trim, cut, fade, gain, resample, effects) into a PCM WAV
+    Audio {
+        #[command(subcommand)]
+        action: AudioCmd,
     },
     /// Palettes (.pal, or the palette of an .spr): show, picture, edit, preview a sprite with them
     Pal {
@@ -616,6 +622,30 @@ fn parse_color(s: &str) -> Result<[u8; 4], String> {
     }
     let b = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(255);
     Ok([b(0), b(2), b(4), if h.len() == 8 { b(6) } else { 255 }])
+}
+
+#[derive(Subcommand)]
+enum AudioCmd {
+    /// Rate, channels, length and peak level (a loose .wav, or a GRF and the entry path)
+    Info {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// Apply operations in order and write a new 16-bit PCM WAV. Times are in ms. Operations:
+    /// trim:A-B, cut:A-B, silence:A-B, gain:DB[@A-B], normalize:DB, fadein:MS, fadeout:MS,
+    /// reverse, mono, resample:HZ, speed:FACTOR, echo:DELAY,FEEDBACK,MIX, reverb:ROOM,MIX,
+    /// lowpass:HZ, highpass:HZ
+    Edit {
+        input: PathBuf,
+        entry: Option<String>,
+        /// An operation, repeatable (applied in the order given)
+        #[arg(long = "op", required = true)]
+        ops: Vec<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1588,6 +1618,26 @@ fn run(cli: &Cli) -> Result<i32> {
                 output.as_deref(),
                 *listing,
                 cli.names,
+            ),
+        },
+        Cmd::Audio { action } => match action {
+            AudioCmd::Info { input, entry } => {
+                audio_cmd::info(input, entry.as_deref(), cli.names, cli.json)
+            }
+            AudioCmd::Edit {
+                input,
+                entry,
+                ops,
+                output,
+                overwrite,
+            } => audio_cmd::edit(
+                input,
+                entry.as_deref(),
+                ops,
+                output,
+                *overwrite,
+                cli.names,
+                cli.json,
             ),
         },
         Cmd::Pal { action } => match action {

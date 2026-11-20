@@ -25,6 +25,7 @@ struct Fmt {
     channels: usize,
     rate: u32,
     block_align: usize,
+    bits: usize,
     extra: Vec<u8>,
     /// Samples per channel from the `fact` chunk, when there is one.
     samples: Option<usize>,
@@ -55,6 +56,7 @@ fn chunks(d: &[u8]) -> Result<(Fmt, &[u8]), WavError> {
                 channels: usize::from(le16(body, 2)),
                 rate: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
                 block_align: usize::from(le16(body, 12)),
+                bits: usize::from(le16(body, 14)),
                 extra: body
                     .get(18..(18 + cb).min(body.len()))
                     .unwrap_or(&[])
@@ -232,6 +234,79 @@ fn pcm16_wav(channels: &[Vec<i16>], rate: u32) -> Vec<u8> {
         }
     }
     w
+}
+
+/// A sound as planar samples in -1..1: PCM of 8, 16, 24 or 32 bits, 32 or 64-bit float, and the
+/// two ADPCM kinds (see [`playable`]). Returns the sample rate and one vector per channel.
+pub fn decode(bytes: &[u8]) -> Result<(u32, Vec<Vec<f32>>), WavError> {
+    let (f, data) = chunks(bytes)?;
+    // WAVE_FORMAT_EXTENSIBLE keeps the real tag in the first two bytes of its sub-format
+    let tag = if f.tag == 0xfffe && f.extra.len() >= 8 {
+        le16(&f.extra, 6)
+    } else {
+        f.tag
+    };
+    let ch = f.channels;
+    let int = |bits: usize, i: usize, d: &[u8]| -> f32 {
+        match bits {
+            8 => (f32::from(d[i]) - 128.0) / 128.0,
+            16 => f32::from(i16::from_le_bytes([d[i], d[i + 1]])) / 32768.0,
+            24 => (i32::from_le_bytes([0, d[i], d[i + 1], d[i + 2]]) >> 8) as f32 / 8_388_608.0,
+            _ => i32::from_le_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]]) as f32 / 2_147_483_648.0,
+        }
+    };
+    let planar = |frame_bytes: usize, read: &dyn Fn(usize) -> f32| -> Vec<Vec<f32>> {
+        let n = data.len() / (frame_bytes * ch);
+        let mut out = vec![Vec::with_capacity(n); ch];
+        for k in 0..n {
+            for (c, o) in out.iter_mut().enumerate() {
+                o.push(read((k * ch + c) * frame_bytes));
+            }
+        }
+        out
+    };
+    let channels = match (tag, f.bits) {
+        (1, b @ (8 | 16 | 24 | 32)) => planar(b / 8, &|i| int(b, i, data)),
+        (3, 32) => planar(4, &|i| {
+            f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]])
+        }),
+        (3, 64) => planar(8, &|i| {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&data[i..i + 8]);
+            f64::from_le_bytes(b) as f32
+        }),
+        (0x11 | 0x02, _) => {
+            let pcm = if tag == 0x11 {
+                ima(&f, data)?
+            } else {
+                ms(&f, data)?
+            };
+            let n = f.samples.unwrap_or(usize::MAX);
+            pcm.into_iter()
+                .map(|c| {
+                    c.into_iter()
+                        .take(n)
+                        .map(|s| f32::from(s) / 32768.0)
+                        .collect()
+                })
+                .collect()
+        }
+        (t, _) => return Err(WavError::Format(t)),
+    };
+    Ok((f.rate, channels))
+}
+
+/// 16-bit PCM WAV of planar samples in -1..1 (clipped), the format every RO client plays.
+pub fn encode_pcm16(rate: u32, channels: &[Vec<f32>]) -> Vec<u8> {
+    let pcm: Vec<Vec<i16>> = channels
+        .iter()
+        .map(|c| {
+            c.iter()
+                .map(|&x| (x * 32768.0).round().clamp(-32768.0, 32767.0) as i16)
+                .collect()
+        })
+        .collect();
+    pcm16_wav(&pcm, rate)
 }
 
 /// PCM stays as it is; IMA and Microsoft ADPCM become 16-bit PCM; everything else is an error.

@@ -2717,3 +2717,74 @@ fn image_reduce_dir_writes_an_optimised_copy_and_leaves_the_source_alone() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn audio_edit_trims_fades_and_resamples_a_wav() {
+    let dir = tmpdir("audio");
+    std::fs::create_dir_all(&dir).unwrap();
+    // one second of a 440 Hz tone, 16-bit mono at 22050 Hz
+    let samples: Vec<u8> = (0..22_050)
+        .flat_map(|i| {
+            let s = (12_000.0 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 22_050.0).sin())
+                as i16;
+            s.to_le_bytes()
+        })
+        .collect();
+    let mut wav = b"RIFF".to_vec();
+    wav.extend((36 + samples.len() as u32).to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16u32.to_le_bytes());
+    wav.extend([1, 0, 1, 0]);
+    wav.extend(22_050u32.to_le_bytes());
+    wav.extend(44_100u32.to_le_bytes());
+    wav.extend([2, 0, 16, 0]);
+    wav.extend(b"data");
+    wav.extend((samples.len() as u32).to_le_bytes());
+    wav.extend(samples);
+    let (src, out) = (dir.join("a.wav"), dir.join("b.wav"));
+    std::fs::write(&src, wav).unwrap();
+    let (s, o) = (src.to_str().unwrap(), out.to_str().unwrap());
+    let r = rgrf(&[
+        "--json",
+        "audio",
+        "edit",
+        s,
+        "--op",
+        "trim:100-600",
+        "--op",
+        "fadeout:100",
+        "--op",
+        "resample:11025",
+        "-o",
+        o,
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let d = &json(&r)["details"];
+    assert_eq!(
+        (d["sample_rate"].as_u64(), d["duration_ms"].as_u64()),
+        (Some(11_025), Some(500))
+    );
+    let i = rgrf(&["--json", "audio", "info", o]);
+    assert_eq!(json(&i)["sample_rate"].as_u64(), Some(11_025));
+    // a range outside the sound is refused, and so is an unknown operation
+    assert!(
+        !rgrf(&[
+            "audio",
+            "edit",
+            s,
+            "--op",
+            "cut:5000-6000",
+            "-o",
+            o,
+            "--overwrite"
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        !rgrf(&["audio", "edit", s, "--op", "wobble", "-o", o, "--overwrite"])
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
