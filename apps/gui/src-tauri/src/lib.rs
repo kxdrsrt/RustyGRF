@@ -1630,7 +1630,11 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             build_menu(app.handle(), &HashMap::new(), &[])?;
-            create_window(app.handle(), None)?;
+            // macOS may deliver a file from Finder (`RunEvent::Opened`) before this runs; its
+            // window is then the first one, and an extra empty one would be left over
+            if app.webview_windows().is_empty() {
+                create_window(app.handle(), None)?;
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

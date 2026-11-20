@@ -3333,9 +3333,12 @@ window.addEventListener("mouseup", (e) => {
     navigate(e.button === 3);
   }
 });
-// In the app the menu's own Undo/Redo entries carry Cmd/Ctrl+Z and Shift+Z; in a browser (and
-// for Ctrl+Y, the Windows habit) the keys are handled here.
+// In the macOS app the menu's Undo/Redo entries take Cmd+Z and Shift+Cmd+Z. WebView2 keeps
+// Ctrl+Z and Ctrl+Shift+Z for its own editing and never passes them to the menu (measured in the
+// Windows VM: the page sees the key, the menu does not fire), so there, on Linux, in a browser and
+// for Ctrl+Y (the Windows habit) the keys are handled here; in text fields they stay with the field.
 const IN_APP = !!window.__TAURI_INTERNALS__;
+const MENU_TAKES_Z = IN_APP && /Mac/.test(navigator.platform);
 document.addEventListener("keydown", (e) => {
   if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
   const k = e.key.toLowerCase();
@@ -3343,7 +3346,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     return editHistory(true);
   }
-  if (k !== "z" || IN_APP) return;
+  if (k !== "z" || MENU_TAKES_Z) return;
   const a = e.target;
   if ((a instanceof HTMLInputElement && !["checkbox", "color", "button"].includes(a.type)) || a instanceof HTMLTextAreaElement) return;
   e.preventDefault();
