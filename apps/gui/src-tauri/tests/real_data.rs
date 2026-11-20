@@ -506,7 +506,7 @@ fn a_map_is_extracted_with_everything_it_needs() {
     let i = find(&mut s, r"data\prontera.rsw");
     let dest = std::env::temp_dir().join(format!("rgrf-gui-map-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dest);
-    let r = s.extract_map(i, &dest, false, &[]).unwrap();
+    let r = s.extract_map(i, &dest, false, &[], None).unwrap();
     assert_eq!(
         (r.map.as_str(), r.files, r.damaged, r.skipped),
         ("prontera", 323, 0, 0)
@@ -514,20 +514,48 @@ fn a_map_is_extracted_with_everything_it_needs() {
     assert!(r.missing.is_empty() && r.problems.is_empty(), "{r:?}");
     assert!(dest.join("data/prontera.gat").exists());
     // a second time the files exist: refused, or kept both
-    assert!(s.extract_map(i, &dest, false, &[]).is_err());
-    assert_eq!(s.extract_map(i, &dest, true, &[]).unwrap().files, 323);
+    assert!(s.extract_map(i, &dest, false, &[], None).is_err());
+    assert_eq!(s.extract_map(i, &dest, true, &[], None).unwrap().files, 323);
     std::fs::remove_dir_all(&dest).unwrap();
     // without models and water: the ground, altitude and world stay, the rest is counted
     let parts = ["models".to_string(), "water".to_string()];
-    let r = s.extract_map(i, &dest, false, &parts).unwrap();
+    let r = s.extract_map(i, &dest, false, &parts, None).unwrap();
     assert_eq!(r.files + r.skipped, 323);
     assert!(r.skipped > 100, "{r:?}");
     assert!(dest.join("data/prontera.rsw").exists() && dest.join("data/prontera.gnd").exists());
     assert!(!dest.join("data/model").exists());
     assert!(
-        s.extract_map(i, &dest, true, &["lighting".to_string()])
+        s.extract_map(i, &dest, true, &["lighting".to_string()], None)
             .is_err()
     );
+    std::fs::remove_dir_all(&dest).unwrap();
+    // without models, and taken out of the world file; ground without shadows and light
+    let flat = rustygrf_gui_lib::backend::FlatReq {
+        remove_models: true,
+        remove_shadow: true,
+        remove_light: true,
+        ..Default::default()
+    };
+    let r = s
+        .extract_map(i, &dest, false, &["models".to_string()], Some(flat))
+        .unwrap();
+    assert_eq!(r.changed, 2, "{r:?}");
+    let world =
+        rgrf_formats::rsw::Rsw::parse(&std::fs::read(dest.join("data/prontera.rsw")).unwrap())
+            .unwrap();
+    assert_eq!(world.object_counts().0, 0);
+    let ground =
+        rgrf_formats::gnd_map::parse(&std::fs::read(dest.join("data/prontera.gnd")).unwrap())
+            .unwrap();
+    assert_eq!(ground.lightmap_count, 1);
+    // the changed files exist now: refused, or written next to them
+    assert!(
+        s.extract_map(i, &dest, false, &["models".to_string()], Some(flat))
+            .is_err()
+    );
+    s.extract_map(i, &dest, true, &["models".to_string()], Some(flat))
+        .unwrap();
+    assert!(dest.join("data/prontera~1.gnd").exists());
     std::fs::remove_dir_all(dest).unwrap();
 }
 

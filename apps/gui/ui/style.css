@@ -276,6 +276,10 @@ dialog h2 { margin: 0 0 10px; font-size: 15px; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .form { display: grid; gap: 8px; margin: 10px 0; }
 .form label { display: flex; align-items: center; gap: 6px; }
+.form label:has(input:disabled) { color: var(--muted); }
+details.flatbox { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+details.flatbox > summary { cursor: pointer; font-weight: 600; }
+details.flatbox > label { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 dialog progress { width: min(420px, 80vw); height: 10px; accent-color: var(--accent); }
 .prio { margin: 10px 0; padding-left: 22px; display: grid; gap: 4px; }
 .prio li::marker { color: var(--muted); }

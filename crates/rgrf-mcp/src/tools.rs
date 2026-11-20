@@ -480,6 +480,60 @@ pub const TOOLS: &[Tool] = &[
         run: image_reduce_tool,
     },
     Tool {
+        name: "grf_flat_maps",
+        title: "Make maps flat (patch archive)",
+        description: "GRF Editor's flat maps maker: writes a small archive with only the changed world, ground and altitude files of the maps (all, or `maps`). Options: `flatten` (ground and walk grid at height 0, no walls, objects or water), `remove_light` (coloured light of the lightmaps), `remove_shadow`, `remove_color` (tile colours white), `gat_shadows` (new shadows from the walk grid; blocked cells dark), `reset_light` (neutral sun), `remove_objects` (all) or `remove_models`/`remove_sounds`/`remove_effects`, `remove_water`. Without any option: flatten, remove_light and remove_shadow. Where players can walk does not change. List the output first in DATA.INI.",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "The archive with the maps (it stays unchanged).",
+            ),
+            opt(
+                "maps",
+                Ty::StrList,
+                "Only these maps: `prontera` or `data\\prontera.rsw` (default: every .rsw).",
+            ),
+            opt(
+                "flatten",
+                Ty::Bool,
+                "Flat ground, no walls, objects or water.",
+            ),
+            opt(
+                "remove_light",
+                Ty::Bool,
+                "Remove the coloured light of the lightmaps.",
+            ),
+            opt(
+                "remove_shadow",
+                Ty::Bool,
+                "Remove the shadows of the lightmaps.",
+            ),
+            opt("remove_color", Ty::Bool, "Tile colours become white."),
+            opt(
+                "gat_shadows",
+                Ty::Bool,
+                "Shadows from the walk grid (replaces light and shadows).",
+            ),
+            opt("reset_light", Ty::Bool, "Neutral sun and ambient light."),
+            opt(
+                "remove_objects",
+                Ty::Bool,
+                "Remove every object (models, lights, sounds, effects).",
+            ),
+            opt("remove_models", Ty::Bool, "Remove the models only."),
+            opt("remove_sounds", Ty::Bool, "Remove the sounds only."),
+            opt("remove_effects", Ty::Bool, "Remove the effects only."),
+            opt("remove_water", Ty::Bool, "Move the water below the ground."),
+            NAMES,
+            OUTPUT,
+            OVERWRITE,
+            DRY_RUN,
+        ],
+        writes: true,
+        run: flat_maps_tool,
+    },
+    Tool {
         name: "grf_patch",
         title: "Create a patch archive",
         description: "Writes an archive with only the files that are new or different in `new` compared with `old`. List it before `old` in DATA.INI. Paths removed in `new` cannot be expressed in a GRF.",
@@ -1176,6 +1230,113 @@ fn image_reduce_tool(ctx: &Ctx, a: &Args) -> Out {
     v["worst_psnr_db"] = json!(worst);
     v["min_psnr_db"] = json!(min_psnr);
     Ok(v)
+}
+
+fn flat_maps_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::flat_map::{FlatOptions, apply_map};
+    let src = ctx.policy.read(a.str("path"))?;
+    let out = output_path(ctx, a, std::slice::from_ref(&src))?;
+    let arc = open(ctx, a.str("path"))?;
+    let mut o = FlatOptions {
+        flatten: a.flag("flatten"),
+        remove_light: a.flag("remove_light"),
+        remove_shadow: a.flag("remove_shadow"),
+        remove_color: a.flag("remove_color"),
+        gat_shadows: a.flag("gat_shadows"),
+        reset_light: a.flag("reset_light"),
+        remove_objects: a.flag("remove_objects"),
+        remove_models: a.flag("remove_models"),
+        remove_sounds: a.flag("remove_sounds"),
+        remove_effects: a.flag("remove_effects"),
+        remove_water: a.flag("remove_water"),
+    };
+    if !o.any() {
+        (o.flatten, o.remove_light, o.remove_shadow) = (true, true, true);
+    }
+    let mode = names_mode(a);
+    let keys = arc.index_by_key();
+    let wanted: Vec<String> = a
+        .list("maps")
+        .iter()
+        .map(|m| {
+            let m = m.to_ascii_lowercase();
+            let m = m.rsplit('\\').next().unwrap_or(&m).to_string();
+            m.trim_end_matches(".rsw").to_string()
+        })
+        .collect();
+    let mut bases: Vec<Vec<u8>> = arc
+        .entries()
+        .iter()
+        .filter(|e| e.is_file())
+        .filter_map(|e| {
+            let n = e.name.as_bytes();
+            let low = n.to_ascii_lowercase();
+            let stem = low.strip_suffix(b".rsw")?;
+            let short = stem.rsplit(|&b| b == b'\\').next().unwrap_or(stem);
+            (wanted.is_empty() || wanted.iter().any(|w| w.as_bytes() == short))
+                .then(|| n[..n.len() - 4].to_vec())
+        })
+        .collect();
+    bases.sort_by_key(|b| b.to_ascii_lowercase());
+    bases.dedup_by_key(|b| b.to_ascii_lowercase());
+    if bases.is_empty() {
+        return Err("no matching .rsw file found".into());
+    }
+    let read = |p: &[u8]| -> Result<Option<Vec<u8>>, String> {
+        keys.get(&GrfPath::new(p.to_vec()).key())
+            .and_then(|v| v.last())
+            .map(|&i| arc.read(i).map(|d| d.data).map_err(err))
+            .transpose()
+    };
+    type One = (Vec<rgrf_core::edit::Packed>, u64, Option<String>);
+    let results: Vec<Result<One, String>> = bases
+        .par_iter()
+        .map(|base| {
+            ctx.control.check().map_err(err)?;
+            let shown = GrfPath::new(base.clone()).display(mode);
+            let changed = match apply_map(base, read, &o)? {
+                Ok(c) => c,
+                Err(why) => return Ok((vec![], 0, Some(format!("{shown}: {why}")))),
+            };
+            let mut packed = Vec::new();
+            let mut bytes = 0;
+            for (path, d) in changed {
+                bytes += d.len() as u64;
+                packed.push(
+                    rgrf_core::edit::pack(GrfPath::new(path), &d, Method::DEFAULT).map_err(err)?,
+                );
+            }
+            Ok((packed, bytes, None))
+        })
+        .collect();
+    ctx.control.check().map_err(err)?;
+    let (mut files, mut problems) = (Vec::new(), Vec::new());
+    let (mut changed_maps, mut bytes) = (0usize, 0u64);
+    for r in results {
+        let (f, b, p) = r?;
+        changed_maps += usize::from(!f.is_empty());
+        bytes += b;
+        files.extend(f);
+        problems.extend(p);
+    }
+    let dry_run = a.flag("dry_run");
+    let written = if files.is_empty() || dry_run {
+        0
+    } else {
+        rgrf_core::edit::write_packed(&files, &out, a.flag("overwrite")).map_err(err)?
+    };
+    Ok(json!({
+        "output": out.display().to_string(),
+        "written": written > 0,
+        "dry_run": dry_run,
+        "maps": bases.len(),
+        "changed_maps": changed_maps,
+        "files": if dry_run { files.len() } else { written },
+        "bytes": bytes,
+        "file_bytes": (written > 0).then(|| std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0)),
+        "problems": problems.iter().take(50).collect::<Vec<_>>(),
+        "problem_count": problems.len(),
+    }))
 }
 
 fn map_files_tool(ctx: &Ctx, a: &Args) -> Out {

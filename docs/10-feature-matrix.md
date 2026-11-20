@@ -14,7 +14,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Zusammenführen (`MergeDialog`), Subtrahieren (`SubtractDialog`), Patch | `merge`, `diff`, `patch` | ✅ M3 (Subtrahieren: `diff` + Auswahl, nicht eigener Befehl) |
 | Hash (`HashDialog`) | `hash` | ✅ |
 | GRF/GPF/RGZ/Thor lesen, `Patcher`/`TkPatch` | alle Befehle öffnen **GRF 0x102, 0x103, 0x200, 0x300, GPF, Thor (Modus 0x30 und 0x21) und RGZ** (Erkennung am Inhalt); `thor create`, `rgz create`; Patches anwenden mit `merge` | ✅ GRF 0x200/0x300 (Millionen Einträge gemessen), **0x102 an `event.grf`** (39 Dateien, Inhalt gegen 0x200-Umwandlung gleich); **Thor (0x30, 0x21), RGZ, GPF gegen Dateien von GRF Editors `GrfCL` geprüft** (byteidentischer Inhalt, GrfCL liest unsere Dateien); **0x102/0x103 schreiben** (`--format 0x102`/`0x103` bei `build`, `repack`, `merge`; GrfCL entpackt unsere `event.grf`-Umpackung in beiden Versionen mit identischem Inhalt, 39 Dateien); **Dateien Dritter** (`tools/golden/fetch-third-party-fixtures.sh`): 0x102/0x103/0x200 aus `L1nkZ/rpatchur` (Inhalt in allen drei Versionen identisch), 5 Thor-Dateien (Modus 0x30 und 0x21; `data.integrity` stimmt) und 5 GPF (178 Dateien in der größten) fehlerfrei; **RGZ echter Patcher ungemessen** (keine Datei gefunden) |
-| Verschlüsselung (`Encryptor`) | DES (Flags 3/5, 0x102/0x103) wird gelesen; verschlüsselte Einträge werden beim Umpacken unverändert kopiert | ✅ DES lesen (CRC32 gegen GRF Editor gleich); DES schreiben (nur im Format 0x102/0x103); **GRF-Editor-Verschlüsselung ✅ (2026-11-19):** `--password`/`--key-file` öffnen verschlüsselte Archive (auch mit verschlüsselter Tabelle), `--encrypt` bei `build`/`repack`/`merge`/`patch`, `key create` (`.grfkey`), `client encrypt` (gepatchte EXE und DLL aus GRF Editors `cps.dll`-Vorlage), GUI fragt das Passwort ab und speichert wieder verschlüsselt, MCP über `RGRF_PASSWORD`; gegen GrfCL und `Encryption.dll` byteweise geprüft und mit einem verschlüsselten Client gestartet ([02-format-notes.md](02-format-notes.md)); **Gravity-Schutz (0x80) lesen ✅ (2026-11-19, kRO-Variante, aus GRF Editor portiert, alle 40 Testbeispiele GRF Editors wie dort; jRO- und China-Variante ❌, keine Beispiele)**; beim Schreiben bleibt der Schutz in 0x300 erhalten, sonst wird entschlüsselt gespeichert |
+| Verschlüsselung (`Encryptor`) | DES (Flags 3/5, 0x102/0x103) wird gelesen; verschlüsselte Einträge werden beim Umpacken unverändert kopiert | ✅ DES lesen (CRC32 gegen GRF Editor gleich); DES schreiben (nur im Format 0x102/0x103); **GRF-Editor-Verschlüsselung ✅ (2026-11-19):** `--password`/`--key-file` öffnen verschlüsselte Archive (auch mit verschlüsselter Tabelle), `--encrypt` bei `build`/`repack`/`merge`/`patch`, `key create` (`.grfkey`), `client encrypt` (gepatchte EXE und DLL aus GRF Editors `cps.dll`-Vorlage), GUI fragt das Passwort ab und speichert wieder verschlüsselt, MCP über `RGRF_PASSWORD`; gegen GrfCL und `Encryption.dll` byteweise geprüft und mit einem verschlüsselten Client gestartet ([02-format-notes.md](02-format-notes.md)); **Gravity-Schutz (0x80) lesen ✅ (2026-11-19, kRO-Variante, aus GRF Editor portiert, alle 40 Testbeispiele GRF Editors wie dort; **jRO-Variante ✅ (2026-11-20):** 24 Einträge, mit GRF Editors eigenem Decoder erzeugt und geprüft, lesen gleich; echter jRO-Schlüsselblock ungeprüft. China-Variante ❌: in GRF Editor selbst nicht erreichbar)**; beim Schreiben bleibt der Schutz in 0x300 erhalten, sonst wird entschlüsselt gespeichert |
 | Dateinamen-Kodierung ansehen (`ViewEncoding`) | `--names cp1252|cp949|utf8|raw` | ✅ |
 | Vorschau Bild/BMP/TGA/JPG (`PreviewImage`, `ImageConverter`) | GUI-Vorschau (BMP/JPG/PNG/GIF, TGA → PNG, Magenta durchsichtig) | ✅ (51.782 BMP, 9.063 TGA gemessen); **Umwandeln und Verkleinern ✅ (M7d, 2026-11-19):** `rgrf image info|convert|reduce`, GUI („8-bit…“ je BMP mit Vergleich, „Reduce Images…“ fürs Archiv), MCP `grf_image_reduce`; 24-Bit-BMP → 8 Bit mit PSNR-Schwelle, Magenta exakt (an allen ~26.000 verkleinerten BMPs von `data.grf` geprüft); bei 40 dB spart `data.grf` 275 MiB, `rdata.grf` 7,5 %. Mehr als GRF Editor: dessen „Convert Bgr24 textures in Indexed8“ ist im Quelltext ein leerer Stub. JPEG lesen ❌, PNG verlustfrei nachpacken ❌ |
 | Vorschau und Bearbeiten **SPR** (`PreviewSpr`, `SpriteEditor`, `SpriteConverter`) | `spr info|export|build|replace|add|remove|set-palette` | ✅ Lesen/Schreiben/PNG (M7a), Bearbeiten (M7b); Oberfläche ✅ (M8: Bilder ersetzen, hinzufügen, entfernen, Palette tauschen, Pixel-Editor, True-Colour ↔ Palette) |
@@ -36,7 +36,7 @@ Aus `EditorMainWindow.xaml` und `EMenuInteraction.cs` gelesen, in der Windows-VM
 | GRF Editor | RustyGRF | Stand |
 |---|---|---|
 | File › New › Grf, Gpf, Rgz, Thor | Datei › Neu › GRF, GPF, RGZ, Thor (Cmd/Ctrl+N) | ✅ leeres Archiv, Typ beim Speichern |
-| File › New › Gsf („Gravity Secure Patch“) | – | ❌ Format unbekannt, keine Beispieldatei |
+| File › New › Gsf („Gravity Secure Patch“) | – | ➖ GRF Editor hat dafür nur einen Namen in einer Aufzählung, keinen Leser oder Schreiber; nichts zu übernehmen |
 | Open…, Open recent, Close Grf | Öffnen, Zuletzt geöffnet (10, für alle Fenster), Archiv schließen | ✅ |
 | (ein Fenster je Programm) | **mehrere Fenster** in einer App, gleiches Archiv holt sein Fenster nach vorn | ✅ besser (in der Windows-VM gemessen) |
 | Save, Save as… | Speichern (an Ort und Stelle: daneben schreiben, prüfen, tauschen), Speichern unter (Container nach Endung) | ✅ |
@@ -44,24 +44,24 @@ Aus `EditorMainWindow.xaml` und `EMenuInteraction.cs` gelesen, in der Windows-VM
 | Save advanced › Repack (recompress) | Erweitert speichern › Neu packen (zlib, zopfli, LZMA; Version wählbar) | ✅ |
 | Save advanced › Encrypt File Table | Verschlüsseln (alle Einträge, GRF Editors Verfahren) | ✅ Einträge; nur die Tabelle allein ❌ |
 | About…, Quit | Hilfe › Über (Credits), Beenden | ✅ |
-| Undo, Redo | Rückgängig, Wiederholen | ✅ |
-| Navigate backward/forward (Auswahlverlauf) | – | ❌ |
+| Undo, Redo | Rückgängig, Wiederholen (200 Schritte, benannt), Verlauf per Rechtsklick und Bearbeiten › Änderungsverlauf, mehrere Schritte auf einmal; Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z, Ctrl+Y | ✅ (Verlauf 2026-11-20) |
+| Navigate backward/forward (Auswahlverlauf) | Ansicht › Zurück/Vor, Alt+←/→, Cmd+[ / ], Maustasten 4/5 | ✅ (2026-11-20) |
 | Merge, Subtract | Zusammenführen; Werkzeuge › Mit Archiv vergleichen (Unterschiede, als Thor- oder GRF-Patch speichern) | ✅ Subtrahieren über Vergleich |
 | Extract Rgz | RGZ öffnen, Extrahieren | ✅ |
-| Edit Grf/Thor settings (Format, Anzeigekodierung, Magic header) | Bearbeiten › Archiv-Einstellungen (Version, Kompression, Verschlüsselung; Namensanzeige in der Statusleiste) | ✅; Magic header ändern ❌, Thor-Ziel-GRF in der App ❌ (CLI `thor create` kann es) |
+| Edit Grf/Thor settings (Format, Anzeigekodierung, Magic header) | Bearbeiten › Archiv-Einstellungen (Version, Kompression, Verschlüsselung; Namensanzeige in der Statusleiste) | ✅; Magic header ✅ (2026-11-20, auch CLI `--magic`); Thor-Ziel-GRF in der App ❌ (CLI `thor create` kann es) |
 | Tools › Grf validation | Werkzeuge › Archiv prüfen | ✅ |
 | Open roaming data | App-Datenordner öffnen | ✅ |
 | Import sprite…, Sprite editor | Sprite-Vorschau: Bilder hinzufügen, ersetzen, entfernen, Pixel-Editor | ✅ |
-| Flat maps maker (Boden flach, Lightmap/Schatten/Farbe, Wasser, Objekte entfernen, Licht zurücksetzen) | Karte extrahieren mit Teilen abwählen | 🔨 Karten flach machen fehlt (GND/RSW schreiben nötig) |
+| Flat maps maker (Boden flach, Lightmap/Schatten/Farbe, Wasser, Objekte entfernen, Licht zurücksetzen) | `rgrf map flat`, MCP `grf_flat_maps`, GUI: 3D-Vorschau „Karte ändern…“ (vorgemerkt, rückgängig), Werkzeuge › Flache Karten (Patch-Archiv), „Karte extrahieren“ mit Änderungen | ✅ (2026-11-20) alle 1.029 kRO-Karten in 6,9 s; mehr als GRF Editor: Versionen bleiben, Wasser auch in GND ≥ 1.8, nur Modelle/Geräusche/Effekte entfernbar, keine Lightmap-Überläufe. Nicht übernommen: eigene Zelltexturen aus GAT-Typen, Quadranten-Schatten, Rinnen-Linien. Im Client nicht geprüft |
 | Patch maker | Mit Archiv vergleichen › Als Patch speichern (Thor mit Löschanweisungen) | ✅ |
 | Hash viewer | Werkzeuge › Prüfsummen (CRC32, MD5, SHA-256) | ✅ |
-| Text encoding (Text zwischen Kodierungen umrechnen) | Namensanzeige Koreanisch/Latin-1/UTF-8; Texte werden beim Öffnen erkannt | ❓ eigenes Werkzeug fehlt |
+| Text encoding (Text zwischen Kodierungen umrechnen) | Werkzeuge › Textkodierung (z. B. als Latin-1 gelesenes Koreanisch zurück nach CP949); Namensanzeige Koreanisch/Latin-1/UTF-8 | ✅ (2026-11-20) |
 | Advanced search (Text in Dateien, Regex, ganze Wörter, Groß/klein, Dateifilter) | Werkzeuge › In Dateien suchen (Cmd/Ctrl+Shift+F) | ✅ (kRO: 133 Textdateien in 0,56 s) |
 | Image converter | „8-bit…“, Bilder verkleinern, CLI `image convert` | ✅ |
 | GRF Command Line | `rgrf` (CLI) und MCP-Server | ✅ |
 | OpenGL Logger | – | nicht nötig (WebGL im Webview) |
 | Image finder | – | im Quelltext auskommentiert, auch bei GRF Editor ohne Funktion |
-| GRF Encryption, Gravity Encryption, Set kRO/jRO/cnRO keys | Passwort-Verschlüsselung; Gravitys Schutz mit eingebauten kRO-Schlüsseln | ✅ kRO; jRO/cnRO ❌ (keine Beispieldateien) |
+| GRF Encryption, Gravity Encryption, Set kRO/jRO/cnRO keys | Passwort-Verschlüsselung; Gravitys Schutz mit eingebauten kRO- und jRO-Schlüsseln | ✅ kRO, ✅ jRO (gegen GRF Editors Decoder geprüft, echter Schlüsselblock ungeprüft); cnRO ❌: GRF Editor selbst lehnt diese Einträge ab (Kopfversion 2, 64-Byte-Schlüssel) |
 | Grf patcher | Zusammenführen (Patch über das Archiv legen) | ✅ |
 | Settings | Einstellungen | ✅ |
 

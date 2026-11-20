@@ -1,6 +1,7 @@
 //! GND ground with its tiles, lightmaps and cube grid, for the 3D map view. (`gnd.rs` reads only
-//! the header and the texture list.) Reading only; the layout follows the one used by the
-//! client's tools and was checked against all real maps (see the tests with real data).
+//! the header and the texture list.) The layout follows the one used by the client's tools and was
+//! checked against all real maps (see the tests with real data); [`Ground::to_bytes`] writes a
+//! parsed file back byte for byte.
 
 use crate::version::Version;
 
@@ -45,6 +46,73 @@ pub struct Ground {
     pub lightmaps: Vec<u8>,
     pub tiles: Vec<Tile>,
     pub cubes: Vec<Cube>,
+    /// Stored length of one texture name (80 in practice) and the raw names with their padding,
+    /// so that writing back keeps whatever followed the terminating zero.
+    pub texture_len: usize,
+    pub texture_raw: Vec<Vec<u8>>,
+    /// Lightmap width, height and cells per lightmap as stored (8, 8, 1).
+    pub lightmap_dims: [i32; 3],
+    /// Whatever follows the cubes (newer versions append water settings), kept as it is.
+    pub tail: Vec<u8>,
+}
+
+impl Ground {
+    /// Writes the ground in the layout it was read from.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let len = self.texture_len.max(1);
+        let mut b = Vec::with_capacity(
+            50 + self.textures.len() * len
+                + self.lightmaps.len()
+                + self.tiles.len() * 40
+                + self.cubes.len() * 28
+                + self.tail.len(),
+        );
+        b.extend(b"GRGN");
+        b.extend([self.version.major, self.version.minor]);
+        b.extend((self.width as u32).to_le_bytes());
+        b.extend((self.height as u32).to_le_bytes());
+        b.extend(self.zoom.to_le_bytes());
+        b.extend((self.textures.len() as u32).to_le_bytes());
+        b.extend((len as u32).to_le_bytes());
+        for (i, name) in self.textures.iter().enumerate() {
+            let mut slot = match self.texture_raw.get(i) {
+                Some(raw)
+                    if raw.len() == len
+                        && raw.starts_with(name)
+                        && raw.get(name.len()).is_none_or(|&c| c == 0) =>
+                {
+                    raw.clone()
+                }
+                _ => name.clone(),
+            };
+            slot.resize(len, 0);
+            b.extend(slot);
+        }
+        b.extend((self.lightmap_count as u32).to_le_bytes());
+        for v in self.lightmap_dims {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend(&self.lightmaps);
+        b.extend((self.tiles.len() as u32).to_le_bytes());
+        for t in &self.tiles {
+            for v in t.uv {
+                b.extend(v.to_le_bytes());
+            }
+            b.extend(t.texture.to_le_bytes());
+            b.extend(t.lightmap.to_le_bytes());
+            b.extend(t.color);
+        }
+        for c in &self.cubes {
+            for v in c.height {
+                b.extend(v.to_le_bytes());
+            }
+            for v in [c.up, c.front, c.right] {
+                b.extend(v.to_le_bytes());
+            }
+        }
+        b.extend(&self.tail);
+        b
+    }
 }
 
 struct Reader<'a> {
@@ -98,10 +166,12 @@ pub fn parse(bytes: &[u8]) -> Result<Ground, GroundError> {
         return Err(GroundError::Truncated);
     }
     let mut textures = Vec::with_capacity(n_tex);
+    let mut texture_raw = Vec::with_capacity(n_tex);
     for _ in 0..n_tex {
         let raw = r.take(len)?;
         let end = raw.iter().position(|&b| b == 0).unwrap_or(len);
         textures.push(raw[..end].to_vec());
+        texture_raw.push(raw.to_vec());
     }
 
     let lightmap_count = r.u32()? as usize;
@@ -152,6 +222,7 @@ pub fn parse(bytes: &[u8]) -> Result<Ground, GroundError> {
             right: r.i32()?,
         });
     }
+    let tail = r.d[r.at..].to_vec();
     Ok(Ground {
         version,
         width,
@@ -162,6 +233,10 @@ pub fn parse(bytes: &[u8]) -> Result<Ground, GroundError> {
         lightmaps,
         tiles,
         cubes,
+        texture_len: len,
+        texture_raw,
+        lightmap_dims: [px, py, size],
+        tail,
     })
 }
 
@@ -217,6 +292,21 @@ mod tests {
             (g.cubes[0].height[3], g.cubes[0].up, g.cubes[0].front),
             (10.0, 0, -1)
         );
+    }
+
+    #[test]
+    fn writes_back_byte_for_byte_and_after_edits() {
+        let mut f = file(2, 3, 1, 0);
+        f.extend([9, 8, 7]);
+        let mut g = parse(&f).unwrap();
+        assert_eq!(g.tail, [9, 8, 7]);
+        assert_eq!(g.to_bytes(), f);
+        g.cubes[0].height = [0.0; 4];
+        g.textures[0] = b"longer_name.bmp".to_vec();
+        let back = parse(&g.to_bytes()).unwrap();
+        assert_eq!(back.cubes[0].height, [0.0; 4]);
+        assert_eq!(back.textures[0], b"longer_name.bmp");
+        assert_eq!(back.tail, [9, 8, 7]);
     }
 
     #[test]

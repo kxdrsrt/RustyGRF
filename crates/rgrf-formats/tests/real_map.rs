@@ -500,7 +500,8 @@ fn every_rsm_has_geometry_and_a_finite_pose() {
     );
 }
 
-/// Every GND parses completely: tiles, lightmaps and cubes, with valid tile and lightmap indices.
+/// Every GND parses completely: tiles, lightmaps and cubes, with valid tile and lightmap indices,
+/// and is written back byte for byte.
 #[test]
 fn every_gnd_parses_with_valid_indices() {
     use rgrf_formats::gnd_map::parse;
@@ -537,8 +538,13 @@ fn every_gnd_parses_with_valid_indices() {
                 {
                     return Some(format!("{name}: texture index out of range"));
                 }
+                if g.to_bytes() != data {
+                    return Some(format!("{name}: not written back byte for byte"));
+                }
                 let mut v = versions.lock().unwrap();
-                let e = v.entry(format!("{}", g.version)).or_insert((0, 0));
+                let e = v
+                    .entry(format!("{} (tail {} B)", g.version, g.tail.len()))
+                    .or_insert((0, 0));
                 e.0 += 1;
                 e.1 += g.cubes.len();
                 None
@@ -688,5 +694,94 @@ fn every_map_of_the_archive_resolves_its_files() {
         failures.is_empty(),
         "{:?}",
         &failures[..failures.len().min(5)]
+    );
+}
+
+/// Every map can be made flat with all options at once and with only the shadows from the walk
+/// grid; the results parse again, stay in range and the large maps need few lightmaps.
+#[test]
+fn every_map_can_be_made_flat() {
+    use rgrf_formats::flat_map::{FlatOptions, apply};
+    use rgrf_formats::gnd_map::parse;
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let idx = arc.select(Some("*.rsw"), NameMode::Cp1252);
+    let read = |name: &[u8]| {
+        arc.find(&GrfPath::new(name.to_vec()))
+            .map(|i| arc.read(i).unwrap().data)
+    };
+    let all = FlatOptions {
+        flatten: true,
+        remove_light: true,
+        remove_shadow: true,
+        remove_color: true,
+        gat_shadows: false,
+        reset_light: true,
+        remove_objects: true,
+        remove_water: true,
+        ..Default::default()
+    };
+    let shadows = FlatOptions {
+        gat_shadows: true,
+        ..Default::default()
+    };
+    let started = std::time::Instant::now();
+    let most = Mutex::new((0usize, String::new()));
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let bad: Vec<String> = idx
+        .par_iter()
+        .filter_map(|&i| {
+            let rsw_name = arc.entries()[i].name.as_bytes().to_vec();
+            let base = &rsw_name[..rsw_name.len() - 4];
+            let gnd = read(&[base, b".gnd"].concat())?;
+            let gat = read(&[base, b".gat"].concat())?;
+            let rsw = arc.read(i).unwrap().data;
+            let name = arc.entries()[i].name.display(NameMode::Cp1252);
+            for o in [&all, &shadows] {
+                let r = match apply(&gnd, Some(&rsw), Some(&gat), o) {
+                    Ok(r) => r,
+                    Err(e) => return Some(format!("{name}: {e}")),
+                };
+                let g = match parse(r.gnd.as_deref().unwrap_or(&gnd)) {
+                    Ok(g) => g,
+                    Err(e) => return Some(format!("{name}: result {e}")),
+                };
+                if g.tiles
+                    .iter()
+                    .any(|t| usize::from(t.lightmap) >= g.lightmap_count)
+                {
+                    return Some(format!("{name}: lightmap out of range"));
+                }
+                if o == &all {
+                    if g.lightmap_count != 1 || g.cubes.iter().any(|c| c.height != [0.0; 4]) {
+                        return Some(format!("{name}: not flat"));
+                    }
+                    let w = Rsw::parse(r.rsw.as_deref().unwrap_or(&rsw)).unwrap();
+                    if !w.objects.is_empty() {
+                        return Some(format!("{name}: objects left"));
+                    }
+                    Gat::parse(r.gat.as_deref().unwrap_or(&gat)).unwrap();
+                } else {
+                    let mut m = most.lock().unwrap();
+                    if g.lightmap_count > m.0 {
+                        *m = (g.lightmap_count, name.clone());
+                    }
+                }
+            }
+            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        })
+        .collect();
+    let (n, map) = most.into_inner().unwrap();
+    eprintln!(
+        "{} maps made flat twice in {:.1?}; most lightmaps with GAT shadows: {n} ({map})",
+        done.into_inner(),
+        started.elapsed()
+    );
+    assert!(
+        bad.is_empty(),
+        "{} failed, e.g. {:?}",
+        bad.len(),
+        &bad[..bad.len().min(5)]
     );
 }

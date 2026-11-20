@@ -120,7 +120,7 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 18);
+    assert_eq!(names(&rw).len(), 19);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -695,4 +695,97 @@ fn client_refs_needs_all_archives_and_counts_per_kind() {
     assert_eq!(v["unnamed_files"], 1);
     assert_eq!(v["folders"][0]["names_are_composed"], false);
     assert!(fails(&s, "grf_client_unused", json!({"paths": []})).contains("paths"));
+}
+
+#[test]
+fn flat_maps_writes_only_the_changed_map_files() {
+    use rgrf_formats::rsw::{Light, Rsw, Water};
+    use rgrf_formats::version::Version;
+    let dir = tmp("flat-maps");
+    let name = |s: &str| {
+        let mut b = [0u8; 40];
+        b[..s.len()].copy_from_slice(s.as_bytes());
+        b
+    };
+    let rsw = Rsw {
+        version: Version::new(1, 9),
+        build_number: 0,
+        unknown_byte: 0,
+        ini: [0; 40],
+        ground: name("m.gnd"),
+        altitude: name("m.gat"),
+        source: [0; 40],
+        water: Some(Water {
+            level: 0.0,
+            kind: 0,
+            wave_height: 1.0,
+            wave_speed: 2.0,
+            wave_pitch: 50.0,
+            texture_cycling: 3,
+        }),
+        light: Some(Light {
+            longitude: 45,
+            latitude: 45,
+            diffuse: [1.0; 3],
+            ambient: [0.3; 3],
+            intensity: 0.5,
+        }),
+        bounds: Some([0; 4]),
+        extra_ints: vec![],
+        objects: vec![],
+        tail: vec![],
+    }
+    .to_bytes();
+    // 1 x 1 cube standing 4 units high, one lightmap, one tile
+    let mut gnd = b"GRGN\x01\x07".to_vec();
+    for v in [1u32, 1, 10.0f32.to_bits(), 1, 80] {
+        gnd.extend(v.to_le_bytes());
+    }
+    gnd.extend([0u8; 80]);
+    for v in [1i32, 8, 8, 1] {
+        gnd.extend(v.to_le_bytes());
+    }
+    gnd.extend([128u8; 256]);
+    gnd.extend(1u32.to_le_bytes());
+    gnd.extend([0u8; 40]);
+    for v in [-4.0f32; 4] {
+        gnd.extend(v.to_le_bytes());
+    }
+    for t in [0i32, -1, -1] {
+        gnd.extend(t.to_le_bytes());
+    }
+    let p = make_grf(
+        &dir,
+        "maps.grf",
+        &[
+            ("data/m.rsw", &rsw),
+            ("data/m.gnd", &gnd),
+            ("data/x.txt", b"x"),
+        ],
+    );
+    let s = server(&[], std::slice::from_ref(&dir));
+    let out = dir.join("flat.grf").display().to_string();
+    let v = ok(
+        &s,
+        "grf_flat_maps",
+        json!({"path": p, "output": out, "dry_run": true}),
+    );
+    assert_eq!(
+        (v["changed_maps"].clone(), v["written"].clone()),
+        (1.into(), false.into())
+    );
+    // defaults: flat ground, no light, no shadows; the world's water goes below the ground
+    let v = ok(&s, "grf_flat_maps", json!({"path": p, "output": out}));
+    assert_eq!(
+        (v["files"].clone(), v["written"].clone()),
+        (2.into(), true.into())
+    );
+    let v = ok(&s, "grf_list", json!({"path": out}));
+    assert_eq!(v["total"], 2, "{v}");
+    let msg = fails(
+        &s,
+        "grf_flat_maps",
+        json!({"path": p, "output": dir.join("y.grf").display().to_string(), "maps": ["nowhere"]}),
+    );
+    assert!(msg.contains("no matching"), "{msg}");
 }

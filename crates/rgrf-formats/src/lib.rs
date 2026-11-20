@@ -3,6 +3,7 @@
 pub mod act;
 pub mod bmp;
 pub mod edit;
+pub mod flat_map;
 pub mod gat;
 pub mod gif_io;
 pub mod gnd;

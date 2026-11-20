@@ -456,6 +456,119 @@ pub fn extract(
     })
 }
 
+/// `rgrf map flat`: every chosen map through [`rgrf_formats::flat_map::apply`]; the changed files
+/// go into a new archive.
+pub fn flat(
+    input: &Path,
+    maps: &[String],
+    output: &Path,
+    o: &rgrf_formats::flat_map::FlatOptions,
+    overwrite: bool,
+    names: NameMode,
+    json: bool,
+) -> Result<i32> {
+    use rayon::prelude::*;
+    let vfs = Vfs::open(input)?;
+    let mut rsws: Vec<(Vec<u8>, (usize, usize))> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (n, (_, a)) in vfs.archives.iter().enumerate() {
+        for (key, idxs) in &vfs.keymaps[n] {
+            let Some(&i) = idxs.last() else { continue };
+            if !key.ends_with(b".rsw") || !seen.insert(key.clone()) {
+                continue;
+            }
+            let base = key.rsplit(|&b| b == b'\\').next().unwrap_or(key);
+            let base = &base[..base.len() - 4];
+            if maps.is_empty()
+                || maps.iter().any(|m| {
+                    let m = m.to_ascii_lowercase();
+                    m.as_bytes() == base || m.trim_end_matches(".rsw").as_bytes() == base
+                })
+            {
+                rsws.push((a.entries()[i].name.as_bytes().to_vec(), (n, i)));
+            }
+        }
+    }
+    rsws.sort();
+    if rsws.is_empty() {
+        bail!("no matching .rsw file found");
+    }
+    let read = |key: &[u8]| -> Result<Option<Vec<u8>>> {
+        vfs.find(key).map(|at| vfs.read(at)).transpose()
+    };
+    type Done = (Vec<rgrf_core::edit::Packed>, usize, Option<String>);
+    let results: Vec<Result<Done>> = rsws
+        .par_iter()
+        .map(|(rsw_name, _)| {
+            let shown = GrfPath::new(rsw_name.clone()).display(names);
+            let base = &rsw_name[..rsw_name.len() - 4];
+            let changed = match rgrf_formats::flat_map::apply_map(
+                base,
+                |p| read(&GrfPath::new(p.to_vec()).key()),
+                o,
+            )? {
+                Ok(c) => c,
+                Err(why) => return Ok((vec![], 0, Some(format!("{shown}: {why}")))),
+            };
+            let mut out = Vec::new();
+            let mut bytes = 0;
+            for (path, d) in changed {
+                bytes += d.len();
+                out.push(rgrf_core::edit::pack(
+                    GrfPath::new(path),
+                    &d,
+                    rgrf_core::encode::Method::DEFAULT,
+                )?);
+            }
+            Ok((out, bytes, None))
+        })
+        .collect();
+    let mut files = Vec::new();
+    let mut problems = Vec::new();
+    let (mut changed_maps, mut bytes) = (0, 0);
+    for r in results {
+        let (f, b, p) = r?;
+        changed_maps += usize::from(!f.is_empty());
+        bytes += b;
+        files.extend(f);
+        problems.extend(p);
+    }
+    let written = if files.is_empty() {
+        0
+    } else {
+        rgrf_core::edit::write_packed(&files, output, overwrite)
+            .with_context(|| format!("writing {}", output.display()))?
+    };
+    if json {
+        println!(
+            "{}",
+            json!({
+                "maps": rsws.len(),
+                "changed_maps": changed_maps,
+                "files": written,
+                "bytes": bytes,
+                "output": (!files.is_empty()).then(|| output.display().to_string()),
+                "problems": problems,
+            })
+        );
+    } else {
+        for p in &problems {
+            eprintln!("{p}");
+        }
+        if files.is_empty() {
+            println!("{} map(s), nothing changed, nothing written", rsws.len());
+        } else {
+            println!(
+                "{changed_maps} of {} map(s) changed: {} file(s), {bytes} bytes -> {}",
+                rsws.len(),
+                written,
+                output.display()
+            );
+        }
+    }
+    Ok(if problems.is_empty() { 0 } else { 3 })
+}
+
 fn key_of(prefix: &str, raw: &[u8]) -> Vec<u8> {
     let mut b = prefix.as_bytes().to_vec();
     b.extend(raw);

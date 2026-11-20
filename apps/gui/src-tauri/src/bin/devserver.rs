@@ -116,8 +116,29 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 &PathBuf::from(arg::<String>(a, "dest")?),
                 arg(a, "rename")?,
                 &arg::<Option<Vec<String>>>(a, "skip")?.unwrap_or_default(),
+                arg(a, "flat")?,
             )?)
         }),
+        "stage_flat_map" => with(state, |s| {
+            s.stage_flat_map(arg(a, "index")?, arg(a, "options")?)?;
+            to_json(s.pending())
+        }),
+        "flat_maps" => {
+            let indices: Vec<usize> = arg(a, "indices")?;
+            let (plan, bases) = with(state, |s| {
+                Ok((
+                    s.plan(),
+                    (!indices.is_empty()).then(|| s.map_bases(&indices)),
+                ))
+            })?;
+            to_json(backend::flat_maps(
+                &plan,
+                &PathBuf::from(arg::<String>(a, "dst")?),
+                bases,
+                arg::<backend::FlatReq>(a, "options")?.into(),
+                &none,
+            )?)
+        }
         "save_picture" => to_json(backend::save_picture(
             &PathBuf::from(arg::<String>(a, "path")?),
             &arg::<String>(a, "png")?,

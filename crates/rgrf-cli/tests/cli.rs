@@ -1978,6 +1978,24 @@ fn map_info_png_and_check() {
         p[..t.len()].copy_from_slice(t.as_bytes());
         gnd.extend(p);
     }
+    // one lightmap, one tile, 2 x 2 cubes standing 4 units high
+    gnd.extend(1i32.to_le_bytes());
+    for v in [8i32, 8, 1] {
+        gnd.extend(v.to_le_bytes());
+    }
+    gnd.extend([128u8; 256]);
+    gnd.extend(1i32.to_le_bytes());
+    gnd.extend([0u8; 32]);
+    gnd.extend([0u8; 4]);
+    gnd.extend([200u8; 4]);
+    for _ in 0..4 {
+        for v in [-4.0f32; 4] {
+            gnd.extend(v.to_le_bytes());
+        }
+        for t in [0i32, 0, -1] {
+            gnd.extend(t.to_le_bytes());
+        }
+    }
     w("data/town.gat", &gat.to_bytes());
     w("data/town.rsw", &rsw.to_bytes());
     w("data/town.gnd", &gnd);
@@ -2103,6 +2121,45 @@ fn map_info_png_and_check() {
     // a named map that does not exist
     assert_eq!(
         rgrf(&["map", "check", &grf, "nowhere"]).status.code(),
+        Some(1)
+    );
+
+    // flat: without options the ground is flat, without light, shadows, objects and water
+    let o = rgrf(&["--json", "map", "flat", &grf, "town", "-o", &p("flat.grf")]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(
+        (v["changed_maps"].as_u64(), v["files"].as_u64()),
+        (Some(1), Some(3))
+    );
+    let cat = |path: &str| rgrf(&["cat", &p("flat.grf"), path]).stdout;
+    let g = rgrf_formats::gnd_map::parse(&cat(r"data\town.gnd")).unwrap();
+    assert!(
+        g.cubes
+            .iter()
+            .all(|c| c.height == [0.0; 4] && c.front == -1)
+    );
+    assert_eq!(g.lightmaps[..64], [255u8; 64]);
+    assert_eq!(g.tiles[0].color, [200; 4], "colours stay unless asked");
+    let r = Rsw::parse(&cat(r"data\town.rsw")).unwrap();
+    assert!(r.objects.is_empty());
+    assert_eq!(r.water.unwrap().level, 100.0);
+    // only the colour: the GAT and RSW stay as they are and are not written
+    let o = rgrf(&[
+        "--json",
+        "map",
+        "flat",
+        &grf,
+        "-o",
+        &p("color.grf"),
+        "--remove-color",
+    ]);
+    assert_eq!(json(&o)["files"], 1);
+    // an existing output needs --overwrite
+    assert_eq!(
+        rgrf(&["map", "flat", &grf, "-o", &p("flat.grf")])
+            .status
+            .code(),
         Some(1)
     );
     let _ = std::fs::remove_dir_all(&dir);

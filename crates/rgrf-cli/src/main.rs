@@ -413,6 +413,43 @@ enum MapCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Maps made flat as GRF Editor's "flat maps maker" does, written as a small archive with only
+    /// the changed map files (to be read before the others). Without options: --flatten
+    /// --remove-light --remove-shadow
+    Flat {
+        /// A client folder (with DATA.INI) or a .grf
+        input: PathBuf,
+        /// Only these maps (names without .rsw); default: all
+        maps: Vec<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Ground and walk grid at height 0, no walls, no objects, no water
+        #[arg(long)]
+        flatten: bool,
+        /// Coloured light of the lightmaps
+        #[arg(long)]
+        remove_light: bool,
+        /// Shadows of the lightmaps
+        #[arg(long)]
+        remove_shadow: bool,
+        /// Tile colours become white
+        #[arg(long)]
+        remove_color: bool,
+        /// New shadows from the walk grid: blocked cells dark (replaces the lightmaps)
+        #[arg(long)]
+        gat_shadows: bool,
+        /// Sun and ambient light set to neutral values
+        #[arg(long)]
+        reset_light: bool,
+        /// Models, lights, sounds and effects
+        #[arg(long)]
+        remove_objects: bool,
+        /// Water moved below the ground
+        #[arg(long)]
+        remove_water: bool,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Check that every file the maps name exists: ground, altitude, textures, models, sounds
     Check {
         /// A client folder (with DATA.INI) or a .grf
@@ -1395,6 +1432,38 @@ fn run(cli: &Cli) -> Result<i32> {
                 cli.json,
             ),
             MapCmd::Check { input, maps } => map_cmd::check(input, maps, cli.names, cli.json),
+            MapCmd::Flat {
+                input,
+                maps,
+                output,
+                flatten,
+                remove_light,
+                remove_shadow,
+                remove_color,
+                gat_shadows,
+                reset_light,
+                remove_objects,
+                remove_water,
+                overwrite,
+            } => {
+                let mut o = rgrf_formats::flat_map::FlatOptions {
+                    flatten: *flatten,
+                    remove_light: *remove_light,
+                    remove_shadow: *remove_shadow,
+                    remove_color: *remove_color,
+                    gat_shadows: *gat_shadows,
+                    reset_light: *reset_light,
+                    remove_objects: *remove_objects,
+                    remove_water: *remove_water,
+                    ..Default::default()
+                };
+                if !o.any() {
+                    o.flatten = true;
+                    o.remove_light = true;
+                    o.remove_shadow = true;
+                }
+                map_cmd::flat(input, maps, output, &o, *overwrite, cli.names, cli.json)
+            }
             MapCmd::Extract {
                 input,
                 map,

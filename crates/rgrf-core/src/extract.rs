@@ -99,6 +99,15 @@ pub fn safe_relative_path(name: &GrfPath, mode: NameMode) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// The first of `name~1.ext`, `name~2.ext`, ... that does not exist (what [`OnCollision::Rename`]
+/// writes to).
+pub fn free_name(path: &Path) -> PathBuf {
+    (1..)
+        .map(|n| renamed(path, n))
+        .find(|p| !p.exists())
+        .expect("some number is free")
+}
+
 fn renamed(path: &Path, n: u32) -> PathBuf {
     let stem = path
         .file_stem()

@@ -1241,6 +1241,7 @@ function renderPreview(p, row, meta) {
         p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle(t("pvw-animate"), "animate", false) : null,
         el("button", { type: "button", class: "small", icon: "image", text: t("pvw-save-picture"), title: t("pvw-save-picture-title"), onclick: () => saveMapPicture(row, handle.v) }),
         el("button", { type: "button", class: "small", icon: "extract", text: t("pvw-extract-map"), title: t("pvw-extract-map-title"), onclick: () => doExtractMap(row, shown()) }),
+        el("button", { type: "button", class: "small", icon: "edit", text: t("pvw-flat-map"), title: t("pvw-flat-map-title"), onclick: () => doFlatMap(row, shown()) }),
       );
       syncAll();
       const hint = el("p", { class: "muted viewhint", text: t("pvw-map-hint") });
@@ -1302,38 +1303,143 @@ async function saveMapPicture(row, viewer) {
   }
 }
 
+/** The flat maps maker's options as ticks; flat ground implies no objects and no water, shadows from the walk grid replace light and shadows. */
+const FLAT_KEYS = ["flatten", "remove_shadow", "remove_light", "remove_color", "gat_shadows", "reset_light", "remove_models", "remove_objects", "remove_water"];
+
+function flatForm(preset = {}) {
+  const boxes = Object.fromEntries(FLAT_KEYS.map((k) => [k, el("input", { type: "checkbox", checked: !!preset[k] })]));
+  // implied ticks are shown ticked, replaced ones unticked, both locked; the own choice comes back when unlocked
+  const own = {};
+  const lock = (k, on, shown) => {
+    const c = boxes[k];
+    if (on && !c.disabled) own[k] = c.checked;
+    if (!on && c.disabled) c.checked = own[k];
+    c.disabled = on;
+    if (on) c.checked = shown;
+  };
+  const sync = () => {
+    for (const k of ["remove_models", "remove_objects", "remove_water"]) lock(k, boxes.flatten.checked, true);
+    for (const k of ["remove_shadow", "remove_light"]) lock(k, boxes.gat_shadows.checked, false);
+  };
+  for (const k of ["flatten", "gat_shadows"]) boxes[k].addEventListener("change", sync);
+  sync();
+  const node = el("div", { class: "form" }, ...FLAT_KEYS.map((k) => el("label", {}, boxes[k], ` ${t(`flat-${k}`)}`)));
+  const value = () => Object.fromEntries(FLAT_KEYS.map((k) => [k, boxes[k].checked && !boxes[k].disabled]));
+  return { node, value, any: () => Object.values(value()).some(Boolean) };
+}
+
+/** Ticks that match what is switched off in the 3D view. */
+function flatPreset(shown = {}) {
+  const off = (k) => shown[k] === false;
+  return { remove_shadow: off("lightmap"), remove_light: off("lightmap"), reset_light: off("lit"), remove_models: off("models"), remove_water: off("water") };
+}
+
+/** Changes the map of `row` in the archive (flat ground, no light, …); one step that Undo takes back. */
+async function doFlatMap(row, shown = {}) {
+  const form = flatForm(flatPreset(shown));
+  const go = await ask(t("flat1-title"), [el("p", { text: t("flat1-intro") }), form.node, el("p", { class: "muted", text: t("flat-notes") })], [{ label: t("flat1-go"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  if (!form.any()) return note(t("flat1-title"), t("flat-none"));
+  try {
+    setPending(await invoke("stage_flat_map", { index: row.index, options: form.value() }));
+    setStatus(t("flat1-status", { map: baseOf(row.name).replace(/\.[^.]+$/, "") }));
+    refreshPreview();
+  } catch (e) {
+    await note(t("flat-failed"), errText(e), true);
+  }
+}
+
+/** Tools › Flat Maps: a small archive with every map (or the selected ones) changed, for the client to read first. */
+async function doFlatMaps() {
+  if (!S.info) return;
+  const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  const form = flatForm({ flatten: true, remove_shadow: true, remove_light: true });
+  const buttons = [];
+  if (sel) buttons.push({ label: sel.folder ? t("flats-in-folder") : t("flats-selected"), value: "one", primary: true });
+  buttons.push({ label: t("flats-all"), value: "all", primary: !sel });
+  buttons.push({ label: "Cancel", value: null });
+  const what = await ask(t("flats-title"), [el("p", { text: t("flats-intro") }), form.node, el("p", { class: "muted", text: t("flat-notes") }), S.changes.length ? el("p", { text: t("flats-pending", { n: S.changes.length }) }) : null], buttons);
+  if (!what) return;
+  if (!form.any()) return note(t("flats-title"), t("flat-none"));
+  const indices = what === "one" ? await entriesOf(sel) : [];
+  if (what === "one" && !indices.length) return note(t("flats-title"), t("ext-empty-folder"));
+  const base = S.info.file_name.replace(/\.[^.]+$/, "");
+  const dst = await T.dialog.save({ title: t("flats-save-as"), defaultPath: `${base}-flat.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  if (!dst) return;
+  const job = showJob(t("flats-running"));
+  try {
+    const r = await invoke("flat_maps", { dst, indices, options: form.value() });
+    job.close();
+    const lines = [el("p", { text: t("flats-summary", { changed: r.changed, maps: r.maps }) })];
+    if (r.problems.length) lines.push(el("p", { text: t("flats-problems", { n: r.problems.length }) }), el("ul", { class: "pending" }, ...r.problems.slice(0, 30).map((m) => el("li", { text: m }))));
+    if (!r.written) {
+      setStatus(t("flats-nothing"));
+      return ask(t("flats-nothing"), lines, [{ label: "OK", value: true, primary: true }], "info");
+    }
+    lines.push(el("p", { text: t("flats-written", { files: t("pvw-files", { n: r.files }), size: fmtBytes(r.file_bytes), dst }) }), el("p", { class: "muted", text: t("flats-how") }));
+    setStatus(t("flats-status", { changed: r.changed, dst }));
+    const open = await ask(t("flats-done"), lines, [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }], r.problems.length ? "warning" : "success");
+    if (open) await openPath(dst, true);
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? t("flats-cancelled") : t("flat-failed"));
+    await note(cancelled ? t("flats-cancelled") : t("flat-failed"), cancelled ? t("nothing-written") : errText(e), !cancelled);
+  }
+}
+
 const MAP_PARTS = () => ["models", "water", "sounds", "minimap", "effects"].map((k) => [k, t(`em-part-${k}`)]);
 
 /** Writes the map of `row` (RSW, GAT or GND) with its files into a folder; `shown` are the switches of the 3D view. */
 async function doExtractMap(row, shown = {}) {
   const boxes = Object.fromEntries(MAP_PARTS().map(([k]) => [k, el("input", { type: "checkbox", checked: shown[k] ?? true })]));
-  const offNote = shown.lit === false || shown.lightmap === false ? el("p", { class: "muted", text: t("em-lit-note") }) : null;
+  const preset = flatPreset(shown);
+  delete preset.remove_models;
+  delete preset.remove_water;
+  const form = flatForm(preset);
+  const viewOff = Object.values(shown).some((v) => v === false);
+  const strip = el("input", { type: "checkbox", checked: viewOff });
+  const change = el(
+    "details",
+    { class: "flatbox", open: viewOff },
+    el("summary", { text: t("em-change") }),
+    el("label", {}, strip, ` ${t("em-strip")}`),
+    form.node,
+    el("p", { class: "muted", text: t("flat-notes") }),
+  );
   const go = await ask(
     t("em-title"),
     [
       el("p", { text: t("em-intro") }),
       el("div", { class: "form" }, ...MAP_PARTS().map(([k, t]) => el("label", {}, boxes[k], ` ${t}`))),
-      offNote,
+      change,
     ],
     [{ label: t("em-choose-folder"), value: true, primary: true }, { label: "Cancel", value: null }],
   );
   if (!go) return;
   const skip = MAP_PARTS().map(([k]) => k).filter((k) => !boxes[k].checked);
+  const flat = form.value();
+  if (strip.checked) {
+    flat.remove_models ||= skip.includes("models");
+    flat.remove_sounds = skip.includes("sounds");
+    flat.remove_effects = skip.includes("effects");
+    flat.remove_water ||= skip.includes("water");
+  }
   const dest = await T.dialog.open({ directory: true, multiple: false, title: t("em-dest") });
   if (!dest) return;
   setStatus(t("em-running"));
   try {
     let r;
     try {
-      r = await invoke("extract_map", { index: row.index, dest, rename: false, skip });
+      r = await invoke("extract_map", { index: row.index, dest, rename: false, skip, flat });
     } catch (e) {
       if (!/exists/i.test(errText(e))) throw e;
       const go = await ask(t("em-exists-title"), el("p", { text: t("em-exists-body", { error: errText(e) }) }), [{ label: t("em-keep-both"), value: true, primary: true }, { label: "Cancel", value: null }]);
       if (!go) return setStatus(t("em-nothing"));
-      r = await invoke("extract_map", { index: row.index, dest, rename: true, skip });
+      r = await invoke("extract_map", { index: row.index, dest, rename: true, skip, flat });
     }
     setStatus(t("em-status", { map: r.map, files: t("pvw-files", { n: r.files }), dest: r.dest }));
-    const body = [el("p", { text: `${t("em-body", { files: t("pvw-files", { n: r.files }), map: r.map, dest: r.dest })}${r.skipped ? ` ${t("em-skipped", { files: t("pvw-files", { n: r.skipped }), parts: skip.map((k) => t(`em-part-${k}`)).join(", ") })}` : ""}` })];
+    const body = [el("p", { text: `${t("em-body", { files: t("pvw-files", { n: r.files }), map: r.map, dest: r.dest })}${r.skipped ? ` ${t("em-skipped", { files: t("pvw-files", { n: r.skipped }), parts: skip.map((k) => t(`em-part-${k}`)).join(", ") })}` : ""}${r.changed ? ` ${t("em-changed", { files: t("pvw-files", { n: r.changed }) })}` : ""}` })];
     if (r.missing.length) body.push(el("p", { text: t("em-missing", { files: t("pvw-files", { n: r.missing.length }) }) }), el("ul", { class: "pending" }, ...r.missing.slice(0, 50).map((m) => el("li", { text: m }))));
     if (r.problems.length) body.push(el("p", { class: "error", text: r.problems.slice(0, 10).join("\n") }));
     if (r.damaged) body.push(el("p", { class: "error", text: t("em-damaged", { files: t("pvw-files", { n: r.damaged }) }) }));
@@ -3481,7 +3587,7 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
-const NEEDS_ARCHIVE = new Set(["nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images"]);
+const NEEDS_ARCHIVE = new Set(["nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
 const MENU_ACTIONS = {
   "new-window": () => invoke("open_in_window", { path: null }),
   "new-grf": () => newArchive("grf"),
@@ -3507,6 +3613,7 @@ const MENU_ACTIONS = {
   "nav-forward": () => navigate(false),
   "recent-clear": clearRecent,
   "reduce-images": () => doReduceImages(),
+  "flat-maps": () => doFlatMaps(),
 };
 function runMenuCommand(id) {
   if (id === "undo" || id === "redo") return editHistory(id === "redo");

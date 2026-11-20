@@ -614,6 +614,8 @@ pub struct MapExtractSummary {
     pub dest: String,
     /// Files left out on purpose (the parts given in `skip`).
     pub skipped: usize,
+    /// Map files written changed (flat maps maker).
+    pub changed: usize,
 }
 
 /// Which files of a map belong to a part that can be left out of an extraction.
@@ -627,6 +629,205 @@ fn map_part(kind: rgrf_formats::map_files::Kind) -> Option<&'static str> {
         Kind::EffectScript | Kind::EffectTexture => "effects",
         Kind::World | Kind::Ground | Kind::Altitude | Kind::GroundTexture => return None,
     })
+}
+
+/// Options of the flat maps maker as the page sends them (see [`rgrf_formats::flat_map`]).
+#[derive(Deserialize, Debug, Clone, Copy, Default)]
+#[serde(default)]
+pub struct FlatReq {
+    pub flatten: bool,
+    pub remove_light: bool,
+    pub remove_shadow: bool,
+    pub remove_color: bool,
+    pub gat_shadows: bool,
+    pub reset_light: bool,
+    pub remove_objects: bool,
+    pub remove_models: bool,
+    pub remove_sounds: bool,
+    pub remove_effects: bool,
+    pub remove_water: bool,
+}
+
+impl From<FlatReq> for rgrf_formats::flat_map::FlatOptions {
+    fn from(r: FlatReq) -> Self {
+        Self {
+            flatten: r.flatten,
+            remove_light: r.remove_light,
+            remove_shadow: r.remove_shadow,
+            remove_color: r.remove_color,
+            gat_shadows: r.gat_shadows,
+            reset_light: r.reset_light,
+            remove_objects: r.remove_objects,
+            remove_models: r.remove_models,
+            remove_sounds: r.remove_sounds,
+            remove_effects: r.remove_effects,
+            remove_water: r.remove_water,
+        }
+    }
+}
+
+/// What a flat-map change did, for the list of pending changes.
+fn flat_label(o: &rgrf_formats::flat_map::FlatOptions) -> String {
+    let parts: Vec<&str> = [
+        (o.flatten, "flat ground"),
+        (o.remove_light, "no coloured light"),
+        (o.remove_shadow, "no shadows"),
+        (o.remove_color, "no tile colours"),
+        (o.gat_shadows, "shadows from the walk grid"),
+        (o.reset_light, "neutral sun"),
+        (o.remove_objects, "no objects"),
+        (o.remove_models, "no models"),
+        (o.remove_sounds, "no sounds"),
+        (o.remove_effects, "no effects"),
+        (o.remove_water, "no water"),
+    ]
+    .into_iter()
+    .filter_map(|(on, what)| on.then_some(what))
+    .collect();
+    format!("map changed: {}", parts.join(", "))
+}
+
+/// The world, ground and altitude paths of the map `base`, see
+/// [`rgrf_formats::flat_map::map_paths`].
+fn map_paths(base: &[u8], rsw: Option<&[u8]>) -> [GrfPath; 3] {
+    rgrf_formats::flat_map::map_paths(base, rsw).map(GrfPath::new)
+}
+
+/// The map path without extension when `name` is a world, ground or altitude file.
+fn map_base(name: &[u8]) -> Option<&[u8]> {
+    let l = name.len().checked_sub(4)?;
+    let ext = name[l..].to_ascii_lowercase();
+    matches!(ext.as_slice(), b".rsw" | b".gnd" | b".gat").then(|| &name[..l])
+}
+
+#[derive(Serialize, Debug, Default)]
+pub struct FlatSummary {
+    /// Maps looked at and maps that changed.
+    pub maps: usize,
+    pub changed: usize,
+    pub files: usize,
+    /// Size of the changed files, and of the archive written.
+    pub bytes: u64,
+    pub file_bytes: u64,
+    pub written: bool,
+    pub problems: Vec<String>,
+}
+
+/// Writes `dst` as a small archive holding the changed map files of every map (or of the maps
+/// in `bases`, paths without extension), read with the pending changes of `plan`. The client
+/// reads it before the other archives.
+pub fn flat_maps(
+    plan: &EditPlan,
+    dst: &Path,
+    bases: Option<Vec<Vec<u8>>>,
+    o: rgrf_formats::flat_map::FlatOptions,
+    ctl: &Control,
+) -> Result<FlatSummary, String> {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    if same_file(&plan.src, dst) {
+        return Err(err!("err-target-open"));
+    }
+    let arc = plan.open()?;
+    let keys: HashMap<Vec<u8>, usize> = arc
+        .entries()
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.is_file())
+        .map(|(i, e)| (e.name.key(), i))
+        .collect();
+    let mut staged: HashMap<Vec<u8>, Option<Change>> = HashMap::new();
+    for c in &plan.changes {
+        staged.insert(c.name().key(), Some(c.clone()));
+    }
+    let read = |p: &GrfPath| -> Result<Option<Vec<u8>>, String> {
+        match staged.get(&p.key()) {
+            Some(Some(Change::PutBytes { data, .. })) => Ok(Some((**data).clone())),
+            Some(Some(Change::Put { file, .. })) => std::fs::read(file)
+                .map(Some)
+                .map_err(|e| format!("{}: {e}", file.display())),
+            Some(_) => Ok(None),
+            None => match keys.get(&p.key()) {
+                Some(&i) => arc.read(i).map(|d| Some(d.data)).map_err(|e| e.to_string()),
+                None => Ok(None),
+            },
+        }
+    };
+    let mut worlds: Vec<Vec<u8>> = match bases {
+        Some(b) => b,
+        None => {
+            let mut all: Vec<Vec<u8>> = arc
+                .entries()
+                .iter()
+                .filter(|e| e.is_file())
+                .filter_map(|e| {
+                    let n = e.name.as_bytes();
+                    n.to_ascii_lowercase()
+                        .ends_with(b".rsw")
+                        .then(|| n[..n.len() - 4].to_vec())
+                })
+                .collect();
+            for c in &plan.changes {
+                if let Some(b) = map_base(c.name().as_bytes()).filter(|_| {
+                    c.name().as_bytes().to_ascii_lowercase().ends_with(b".rsw")
+                        && !matches!(c, Change::Remove { .. })
+                }) {
+                    all.push(b.to_vec());
+                }
+            }
+            all
+        }
+    };
+    worlds.sort_by_key(|b| b.to_ascii_lowercase());
+    worlds.dedup_by_key(|b| b.to_ascii_lowercase());
+    let total = worlds.len() as u64;
+    let done = AtomicU64::new(0);
+    let shown = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp1252);
+    type One = (Vec<rgrf_core::edit::Packed>, u64, Option<String>);
+    let results: Vec<Result<One, String>> = worlds
+        .par_iter()
+        .map(|base| {
+            ctl.check().map_err(|e| e.to_string())?;
+            ctl.report(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+            let changed = match rgrf_formats::flat_map::apply_map(
+                base,
+                |p| read(&GrfPath::new(p.to_vec())),
+                &o,
+            )? {
+                Ok(c) => c,
+                Err(why) => return Ok((vec![], 0, Some(format!("{}: {why}", shown(base))))),
+            };
+            let mut out = Vec::new();
+            let mut bytes = 0;
+            for (path, d) in changed {
+                bytes += d.len() as u64;
+                out.push(
+                    rgrf_core::edit::pack(GrfPath::new(path), &d, Method::DEFAULT)
+                        .map_err(|e| e.to_string())?,
+                );
+            }
+            Ok((out, bytes, None))
+        })
+        .collect();
+    ctl.check().map_err(|e| e.to_string())?;
+    let mut sum = FlatSummary {
+        maps: worlds.len(),
+        ..Default::default()
+    };
+    let mut files = Vec::new();
+    for r in results {
+        let (f, b, p) = r?;
+        sum.changed += usize::from(!f.is_empty());
+        sum.bytes += b;
+        files.extend(f);
+        sum.problems.extend(p);
+    }
+    if !files.is_empty() {
+        sum.files = rgrf_core::edit::write_packed(&files, dst, true).map_err(|e| e.to_string())?;
+        sum.written = true;
+        sum.file_bytes = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
+    }
+    Ok(sum)
 }
 
 /// Writes a picture (PNG) the page made, e.g. of the 3D view.
@@ -1631,6 +1832,75 @@ impl Session {
             before: b64(&data),
             after: b64(&out),
         })
+    }
+
+    /// The world, ground and altitude entries of the map that entry `index` belongs to, with
+    /// the paths they have (or would have); the ground must exist.
+    fn map_entries(&self, index: usize) -> Result<[(GrfPath, Option<usize>); 3], String> {
+        let name = self.entry_name(index)?;
+        let base = map_base(name.as_bytes()).ok_or_else(|| err!("err-flat-not-map"))?;
+        let keys = self.key_index();
+        let at = |p: &GrfPath| keys.get(&p.key()).copied();
+        let rsw_path = GrfPath::new([base, b".rsw"].concat());
+        let rsw = at(&rsw_path).map(|i| self.read_working(i)).transpose()?;
+        let paths = map_paths(base, rsw.as_deref());
+        let out = paths.map(|p| {
+            let i = at(&p);
+            (p, i)
+        });
+        if out[1].1.is_none() {
+            return Err(err!("err-flat-no-gnd", "name": self.shown_bytes(out[1].0.as_bytes())));
+        }
+        Ok(out)
+    }
+
+    /// Changes the map of entry `index` with the flat maps maker, as one step that can be taken
+    /// back; returns how many of its files changed.
+    pub fn stage_flat_map(&mut self, index: usize, req: FlatReq) -> Result<usize, String> {
+        let o = rgrf_formats::flat_map::FlatOptions::from(req);
+        let files = self.map_entries(index)?;
+        self.transact(|s| {
+            let mut got = Vec::new();
+            for (_, i) in &files {
+                got.push(i.map(|i| s.working_bytes(i)).transpose()?);
+            }
+            let data = |k: usize| got[k].as_ref().map(|(_, d, _)| d.as_slice());
+            let r =
+                rgrf_formats::flat_map::apply(data(1).unwrap_or_default(), data(0), data(2), &o)
+                    .map_err(|e| err!("err-flat-failed", "error": e.to_string()))?;
+            let label = flat_label(&o);
+            let mut n = 0;
+            for (out, have) in [r.rsw, r.gnd, r.gat].into_iter().zip(got) {
+                let (Some(d), Some((name, _, mut what))) = (out, have) else {
+                    continue;
+                };
+                what.retain(|w| !w.starts_with("map changed: "));
+                what.push(label.clone());
+                s.stage(Change::PutBytes {
+                    name,
+                    data: Arc::new(d),
+                    what,
+                });
+                n += 1;
+            }
+            if n == 0 {
+                return Err(err!("err-flat-nothing"));
+            }
+            Ok(n)
+        })
+    }
+
+    /// Paths without extension of the maps among `indices` (world, ground or altitude files,
+    /// also inside folders the page resolved).
+    pub fn map_bases(&self, indices: &[usize]) -> Vec<Vec<u8>> {
+        let mut out: Vec<Vec<u8>> = indices
+            .iter()
+            .filter_map(|&i| self.arc.entries().get(i))
+            .filter_map(|e| map_base(e.name.as_bytes()).map(<[u8]>::to_vec))
+            .collect();
+        out.sort_by_key(|b| b.to_ascii_lowercase());
+        out.dedup_by_key(|b| b.to_ascii_lowercase());
+        out
     }
 
     /// Stores a true-colour BMP as an 8-bit one (256 colours, magenta kept exact).
@@ -3125,7 +3395,7 @@ impl Session {
                         self.shown_bytes(&gnd_name)
                     )
                 })?;
-            ground_bytes = self.read(gi)?;
+            ground_bytes = self.read_working(gi)?;
             world = Some(r);
         } else {
             ground_bytes = data.to_vec();
@@ -3612,6 +3882,7 @@ impl Session {
         dest: &Path,
         rename: bool,
         skip: &[String],
+        flat: Option<FlatReq>,
     ) -> Result<MapExtractSummary, String> {
         for p in skip {
             if !["models", "water", "sounds", "minimap", "effects"].contains(&p.as_str()) {
@@ -3657,10 +3928,51 @@ impl Session {
                     .map(|p| format!("{}: {p}", self.shown_bytes(&f.path)))
             })
             .collect();
+        // the map's own files changed as asked (flat maps maker), written instead of the originals
+        let mut edited: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        let o = flat.map(rgrf_formats::flat_map::FlatOptions::from);
+        if let Some(o) = o.filter(|o| o.any()) {
+            let own = self.map_entries(index)?;
+            let got = own
+                .iter()
+                .map(|(_, i)| i.map(|i| self.read_working(i)).transpose())
+                .collect::<Result<Vec<_>, String>>()?;
+            let r = rgrf_formats::flat_map::apply(
+                got[1].as_deref().unwrap_or_default(),
+                got[0].as_deref(),
+                got[2].as_deref(),
+                &o,
+            )
+            .map_err(|e| err!("err-flat-failed", "error": e.to_string()))?;
+            for ((path, i), out) in own.into_iter().zip([r.rsw, r.gnd, r.gat]) {
+                let (Some(d), Some(i)) = (out, i) else {
+                    continue;
+                };
+                indices.retain(|&x| x != i);
+                let rel = rgrf_core::extract::safe_relative_path(&path, NameMode::Cp1252)
+                    .map_err(|e| e.to_string())?;
+                let mut target = dest.join(rel);
+                if target.exists() {
+                    if !rename {
+                        return Err(rgrf_core::Error::TargetExists(target.display().to_string())
+                            .to_string());
+                    }
+                    target = rgrf_core::extract::free_name(&target);
+                }
+                edited.push((target, d));
+            }
+        }
         let rep = self.extract(&indices, dest, rename)?;
+        for (target, d) in &edited {
+            if let Some(dir) = target.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            std::fs::write(target, d).map_err(|e| format!("{}: {e}", target.display()))?;
+        }
         Ok(MapExtractSummary {
             map: rgrf_formats::map_files::map_base(&name).to_string(),
-            files: rep.files,
+            files: rep.files + edited.len(),
+            changed: edited.len(),
             damaged: rep.damaged,
             missing,
             problems,
@@ -3857,6 +4169,76 @@ mod tests {
             .iter()
             .position(|n| n.to_ascii_lowercase().ends_with(name))
             .unwrap()
+    }
+
+    #[test]
+    fn a_map_made_flat_is_one_step_that_undo_takes_back() {
+        use rgrf_formats::gat::Cell;
+        use rgrf_formats::version::Version;
+        let dir = std::env::temp_dir().join(format!("rgrf-flat-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let src = dir.join("src/data");
+        fs::create_dir_all(&src).unwrap();
+        // a 1 x 1 ground standing 4 units high, one lightmap, one tile
+        let mut gnd = b"GRGN\x01\x07".to_vec();
+        for v in [1u32, 1] {
+            gnd.extend(v.to_le_bytes());
+        }
+        gnd.extend(10.0f32.to_le_bytes());
+        gnd.extend(1u32.to_le_bytes());
+        gnd.extend(80u32.to_le_bytes());
+        gnd.extend([0u8; 80]);
+        gnd.extend(1u32.to_le_bytes());
+        for v in [8i32, 8, 1] {
+            gnd.extend(v.to_le_bytes());
+        }
+        gnd.extend([128u8; 256]);
+        gnd.extend(1u32.to_le_bytes());
+        gnd.extend([0u8; 40]);
+        for v in [-4.0f32; 4] {
+            gnd.extend(v.to_le_bytes());
+        }
+        for t in [0i32, -1, -1] {
+            gnd.extend(t.to_le_bytes());
+        }
+        fs::write(src.join("m.gnd"), &gnd).unwrap();
+        let gat = Gat {
+            version: Version::new(1, 2),
+            width: 2,
+            height: 2,
+            cells: vec![
+                Cell {
+                    heights: [-4.0; 4],
+                    kind: 0,
+                };
+                4
+            ],
+        };
+        fs::write(src.join("m.gat"), gat.to_bytes()).unwrap();
+        fs::write(src.join("note.txt"), b"x").unwrap();
+        let grf = dir.join("m.grf");
+        let ctl = Control {
+            cancel: None,
+            progress: None,
+        };
+        build(&dir.join("src"), &grf, &BuildOptions::default(), &ctl).unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let flat = FlatReq {
+            flatten: true,
+            ..Default::default()
+        };
+        assert_eq!(s.stage_flat_map(find(&s, "m.gat"), flat), Ok(2));
+        let (undo, _) = s.history_steps(5);
+        assert_eq!((undo.len(), undo[0].n), (1, 2));
+        let g = gnd_map::parse(&s.read_working(find(&s, "m.gnd")).unwrap()).unwrap();
+        assert_eq!(g.cubes[0].height, [0.0; 4]);
+        // again: nothing left to change, and no empty step
+        assert!(s.stage_flat_map(find(&s, "m.gnd"), flat).is_err());
+        assert_eq!(s.history_steps(5).0.len(), 1);
+        assert!(s.undo());
+        assert!(s.pending().is_empty());
+        assert!(s.stage_flat_map(find(&s, "note.txt"), flat).is_err());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

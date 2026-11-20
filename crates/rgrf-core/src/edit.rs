@@ -124,6 +124,72 @@ pub fn apply(
     })
 }
 
+/// A file compressed for [`write_packed`].
+#[derive(Debug, Clone)]
+pub struct Packed {
+    pub name: GrfPath,
+    pub size: u32,
+    pub stream: Vec<u8>,
+}
+
+/// Compresses one file with `method` (can run in parallel; keeps only the compressed bytes).
+pub fn pack(name: GrfPath, data: &[u8], method: crate::encode::Method) -> Result<Packed> {
+    let size = u32::try_from(data.len()).map_err(|_| {
+        Error::TooLarge(format!(
+            "{} is larger than 4 GiB",
+            name.display(Default::default())
+        ))
+    })?;
+    Ok(Packed {
+        name,
+        size,
+        stream: encode(method, data),
+    })
+}
+
+/// Writes a new 0x200 archive that holds only `files` (a patch archive for the client to read
+/// before the others), sorted by name; for one path the last file wins. Written to a temporary
+/// file first, so a failure leaves no half archive. Returns the number of entries.
+pub fn write_packed(files: &[Packed], dst: &Path, overwrite: bool) -> Result<usize> {
+    if dst.exists() && !overwrite {
+        return Err(Error::TargetExists(dst.display().to_string()));
+    }
+    let mut last: HashMap<Vec<u8>, &Packed> = HashMap::new();
+    for f in files {
+        last.insert(f.name.key(), f);
+    }
+    let mut sorted: Vec<&Packed> = last.into_values().collect();
+    sorted.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
+    let count = sorted.len();
+    let tmp = pipeline::temp_path(dst);
+    let written = (|| {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp)?;
+        let mut w = Writer::new(BufWriter::new(file), Format::V200, true, None)?;
+        let mut entries = Vec::with_capacity(sorted.len());
+        for f in sorted {
+            entries.push(OutEntry {
+                name: f.name.clone(),
+                placed: w.put_stream(&f.stream)?,
+                size: f.size,
+                flags: flags::FILE,
+            });
+        }
+        let (_, mut out) = w.finish(&entries)?;
+        std::io::Write::flush(&mut out)?;
+        drop(out);
+        std::fs::rename(&tmp, dst)?;
+        Ok(count)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
 fn write_puts(
     puts: &HashMap<Vec<u8>, (GrfPath, &[u8])>,
     tmp: &Path,

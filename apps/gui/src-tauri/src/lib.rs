@@ -544,6 +544,7 @@ async fn extract_map(
     dest: String,
     rename: bool,
     skip: Option<Vec<String>>,
+    flat: Option<backend::FlatReq>,
 ) -> Res<backend::MapExtractSummary> {
     with_session(&state, &window, move |s| {
         s.extract_map(
@@ -551,7 +552,44 @@ async fn extract_map(
             &PathBuf::from(dest),
             rename,
             &skip.unwrap_or_default(),
+            flat,
         )
+    })
+    .await
+}
+
+/// Changes the map of an entry with the flat maps maker (one step that can be taken back).
+#[tauri::command]
+async fn stage_flat_map(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    options: backend::FlatReq,
+) -> Res<Vec<backend::PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_flat_map(index, options)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Writes a small archive with the maps (all, or those among `indices`) made flat.
+#[tauri::command]
+async fn flat_maps(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    dst: String,
+    indices: Vec<usize>,
+    options: backend::FlatReq,
+) -> Res<backend::FlatSummary> {
+    let (plan, bases) = with_session(&state, &window, move |s| {
+        let bases = (!indices.is_empty()).then(|| s.map_bases(&indices));
+        Ok((s.plan(), bases))
+    })
+    .await?;
+    run_job(app, &state, &window, move |ctl| {
+        backend::flat_maps(&plan, &PathBuf::from(dst), bases, options.into(), ctl)
     })
     .await
 }
@@ -1506,6 +1544,7 @@ fn build_menu(
         )?,
         sep()?,
         item("reduce-images", "Reduce Images...", None)?,
+        item("flat-maps", "Flat Maps...", None)?,
         item("text-encoding", "Text Encoding...", None)?,
         sep()?,
         item("data-folder", "Open App Data Folder", None)?,
@@ -1645,6 +1684,8 @@ pub fn run() {
             preview,
             extract,
             extract_map,
+            stage_flat_map,
+            flat_maps,
             verify,
             build_archive,
             merge_archives,
