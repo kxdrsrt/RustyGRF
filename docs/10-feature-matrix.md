@@ -77,7 +77,7 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 | Export selection… | In Archiv exportieren… (Auswahl oder Ordner als eigenes Archiv, Methode wählbar, geprüft; liest die gespeicherte Datei, nicht die vorgemerkten Änderungen) | ✅ |
 | Export map files… | Karte extrahieren… (rsw/gnd/gat mit allem, was sie brauchen) | ✅ |
 | Save map as… | Karte ändern… (flach machen) und Karte extrahieren | ◐ anderer Weg |
-| Downgrade / Downgrade to… (Kartenversion) | – | ❌ |
+| Downgrade / Downgrade to… (Kartenversion) | Karte herabstufen… (Kontextmenü auf .rsw/.gnd/.gat), CLI `rgrf map downgrade`: RSM2-Modelle (2.2/2.3) → RSM 1.4 neben den alten, Weltdatei 2.1 (Wasser aus der Bodendatei), Bodendatei 1.7, Objekte mit neuer Position und negativem x-Maßstab | ✅ mit Einschränkung: **Animationen der Modelle gehen verloren** (GRF Editors „flat“-Weg; sein „anim“-Weg mit Matrizenumrechnung fehlt); gemessen: 151 Karten der kRO-`data.grf` mit 1.953 Modellen und 88.381 Objekten in 3,5 s, alle Ergebnisse lesen sich bis zum letzten Byte, Weltdatei 2.1/Bodendatei 1.7; die Umrechnung der Objekte ist rechnerisch gegen GRF Editors Zeichenmatrizen geprüft (Test mit Drehung und Maßstab), **nicht in einem alten Client gesehen** |
 | Delete | Entfernen (vormerken, rückgängig) | ✅ |
 | Rename… | Umbenennen… (Datei und Ordner, ein Rückgängig-Schritt; prüft Namenskonflikte, Grenze 512 MB je Eintrag) | ✅ |
 | Find usages… | Name in Dateien suchen… (Text und **kompilierte Lua-Dateien als dekompilierter Text**; kRO-`data.grf`: 517 `.lub` in 0,5 s) | ✅ (2026-11-21) |

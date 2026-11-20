@@ -621,3 +621,42 @@ fn an_animation_is_shown_with_reference_animations() {
         Some("is the animation being edited")
     );
 }
+
+#[test]
+fn a_real_map_is_downgraded_in_one_undoable_step() {
+    let Some(mut s) = open() else { return };
+    let n = s.search("*.rsw");
+    let rows = s.page(0, n.min(1100));
+    let mut done = None;
+    for r in rows {
+        match s.stage_map_downgrade(r.index) {
+            Ok(d) => {
+                done = Some((r.name, d));
+                break;
+            }
+            Err(_) => assert!(s.pending().is_empty(), "a failed downgrade stages nothing"),
+        }
+    }
+    let (map, d) = done.expect("no map with RSM2 models");
+    eprintln!("{map}: {} models, {} instances", d.models, d.instances);
+    assert!(d.models > 0 && d.instances >= d.models);
+    let names: Vec<String> = s.pending().into_iter().map(|p| p.name).collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n.to_ascii_lowercase().ends_with(".rsw"))
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.to_ascii_lowercase().ends_with(".gnd"))
+    );
+    assert!(
+        names
+            .iter()
+            .filter(|n| n.to_ascii_lowercase().ends_with(".rsm"))
+            .count()
+            >= d.models
+    );
+    assert!(s.undo() && s.pending().is_empty());
+}

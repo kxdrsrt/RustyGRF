@@ -787,6 +787,20 @@ pub fn local_matrix(m: &Model, node: usize) -> [f32; 16] {
     mul(&vm, &from_mat3(&n.mat3))
 }
 
+/// The vertices of every node baked into the file's space at the static pose (key frame 0), in
+/// node order: what GRF Editor's "flatten" writes into a model.
+pub fn baked_vertices(m: &Model) -> Vec<Vec<[f32; 3]>> {
+    let mats = node_matrices_at(m, 0.0);
+    m.nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let vm = mul(&mats[i], &local_matrix(m, i));
+            n.vertices.iter().map(|&v| apply(&vm, v)).collect()
+        })
+        .collect()
+}
+
 /// Triangles of one node in node space (offset and 3 x 3 matrix applied, the node's own movement
 /// not), grouped by texture, in the file's space (y down). Normals are made in the same space.
 pub fn node_parts(m: &Model, node: usize) -> Vec<Part> {

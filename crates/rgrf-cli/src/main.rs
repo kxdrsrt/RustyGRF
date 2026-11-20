@@ -456,6 +456,19 @@ enum MapCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Maps for old clients (GRF Editor's "Downgrade"): RSM2 models become RSM1 (static pose,
+    /// animations are lost), world file version 2.1, ground file 1.7; written as a small archive
+    /// with the changed files and the new models (to be read before the others)
+    Downgrade {
+        /// A client folder (with DATA.INI) or a .grf
+        input: PathBuf,
+        /// Only these maps (names without .rsw); default: all with RSM2 models
+        maps: Vec<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Check that every file the maps name exists: ground, altitude, textures, models, sounds
     Check {
         /// A client folder (with DATA.INI) or a .grf
@@ -1523,6 +1536,12 @@ fn run(cli: &Cli) -> Result<i32> {
                 }
                 map_cmd::flat(input, maps, output, &o, *overwrite, cli.names, cli.json)
             }
+            MapCmd::Downgrade {
+                input,
+                maps,
+                output,
+                overwrite,
+            } => map_cmd::downgrade(input, maps, output, *overwrite, cli.names, cli.json),
             MapCmd::Extract {
                 input,
                 map,

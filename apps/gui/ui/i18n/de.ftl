@@ -1227,3 +1227,15 @@ au-failed = Der Klang ließ sich nicht bearbeiten
 au-status = Klang { $name } bearbeitet ({ $n } Schritte), noch nicht gespeichert
 err-audio-read = Der Klang lässt sich nicht lesen: { $error }
 err-audio-op = Der Schritt geht nicht: { $error }
+
+# map downgrade
+ctx-downgrade = Karte herabstufen…
+dg-title = Karte für alte Clients herabstufen
+dg-intro = Die RSM2-Modelle der Karte werden als RSM1-Modelle neben den alten angelegt, die Weltdatei bekommt die Version 2.1 und die Bodendatei 1.7 (das Wasser wandert in die Weltdatei), wie bei GRF Editors „Downgrade“.
+dg-hint = Animationen der Modelle gehen verloren: sie werden zu starren Modellen. Es wird erst beim Speichern geschrieben; der Schritt lässt sich rückgängig machen.
+dg-go = Herabstufen
+dg-status = { $models } Modelle umgewandelt, { $instances } Objekte geändert
+dg-missing = Modell nicht im Archiv
+dg-failed = Die Karte ließ sich nicht herabstufen
+err-downgrade-failed = Die Karte ließ sich nicht herabstufen: { $error }
+err-downgrade-nothing = Diese Karte hat keine RSM2-Modelle zum Umwandeln

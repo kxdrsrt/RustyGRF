@@ -3453,7 +3453,7 @@ function entryMenu(list, row) {
   items.push("-", { label: t("ctx-extract"), icon: "extract", run: guard(pickAndExtract) });
   if (last) items.push({ label: t("ctx-extract-last", { folder: baseOf(last.replace(/\//g, "\\")) || last }), icon: "extract", run: guard(() => extractIndices([row.index], last)) });
   items.push({ label: t("ctx-export"), icon: "export", run: guard(() => exportRows(list, row)) });
-  if (["rsw", "gnd", "gat"].includes(ext)) items.push({ label: t("ctx-map-extract"), icon: "map", run: guard(() => doExtractMap(row)) }, { label: t("pvw-flat-map"), icon: "edit", run: guard(() => doFlatMap(row)) });
+  if (["rsw", "gnd", "gat"].includes(ext)) items.push({ label: t("ctx-map-extract"), icon: "map", run: guard(() => doExtractMap(row)) }, { label: t("pvw-flat-map"), icon: "edit", run: guard(() => doFlatMap(row)) }, { label: t("ctx-downgrade"), icon: "map", run: guard(() => doDowngradeMap(row)) });
   const edit = [];
   if (row.kind === "text") edit.push({ label: t("ctx-edit"), icon: "edit", run: guard(() => openTextEditor(row)) });
   if (ext === "wav") edit.push({ label: t("ctx-audio"), icon: "audio", run: guard(() => openAudioEditor(row)) });
@@ -3651,6 +3651,22 @@ async function openAudioEditor(row) {
     refreshPreview();
   } catch (e) {
     await note(t("au-failed"), errText(e), true);
+  }
+}
+
+/** GRF Editor's "Downgrade": the map for old clients (RSM2 models to RSM1, world 2.1, ground 1.7). */
+async function doDowngradeMap(row) {
+  const go = await ask(t("dg-title"), [el("p", { text: t("dg-intro") }), el("p", { class: "hint", text: t("dg-hint") })], [{ label: t("dg-go"), value: true, primary: true }, { label: "Cancel", value: null }], "warning");
+  if (!go) return;
+  try {
+    const r = await invoke("stage_map_downgrade", { index: row.index });
+    setPending(r.pending);
+    setStatus(t("dg-status", { models: fmtNum(r.models), instances: fmtNum(r.instances) }));
+    refreshPreview();
+    const problems = [...r.missing.map((m) => `${t("dg-missing")}: ${m}`), ...r.failed];
+    if (problems.length) await note(t("dg-title"), problems.slice(0, 12).join("\n") + (problems.length > 12 ? `\n… ${problems.length - 12}` : ""));
+  } catch (e) {
+    await note(t("dg-failed"), errText(e), true);
   }
 }
 

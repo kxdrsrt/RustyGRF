@@ -3,6 +3,7 @@
 pub mod act;
 pub mod audio;
 pub mod bmp;
+pub mod downgrade;
 pub mod edit;
 pub mod flat_map;
 pub mod gat;

@@ -1134,3 +1134,15 @@ au-failed = Suara tidak dapat diedit
 au-status = Suara { $name } diedit ({ $n } langkah), belum disimpan
 err-audio-read = Suara tidak dapat dibaca: { $error }
 err-audio-op = Langkah gagal: { $error }
+
+# map downgrade
+ctx-downgrade = Turunkan versi peta…
+dg-title = Turunkan versi peta untuk client lama
+dg-intro = Model RSM2 peta dibuat sebagai model RSM1 di samping yang lama, file dunia menjadi versi 2.1 dan file tanah 1.7 (air dipindah ke file dunia), seperti “Downgrade” di GRF Editor.
+dg-hint = Animasi model hilang: model menjadi diam. Tidak ada yang ditulis sampai Anda menyimpan; langkah ini bisa dibatalkan.
+dg-go = Turunkan versi
+dg-status = { $models } model dikonversi, { $instances } objek diubah
+dg-missing = Model tidak ada di arsip
+dg-failed = Peta tidak dapat diturunkan versinya
+err-downgrade-failed = Peta tidak dapat diturunkan versinya: { $error }
+err-downgrade-nothing = Peta ini tidak punya model RSM2 untuk dikonversi

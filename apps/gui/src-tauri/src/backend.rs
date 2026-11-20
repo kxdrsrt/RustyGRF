@@ -725,6 +725,18 @@ pub struct AudioView {
 }
 
 #[derive(Serialize, Debug)]
+pub struct DowngradeStaged {
+    /// RSM1 models made.
+    pub models: usize,
+    /// Objects of the map that use them now.
+    pub instances: usize,
+    /// RSM2 models the archive does not have.
+    pub missing: Vec<String>,
+    pub failed: Vec<String>,
+    pub pending: Vec<PendingRow>,
+}
+
+#[derive(Serialize, Debug)]
 pub struct CryptStaged {
     /// Entries marked by this step.
     pub marked: usize,
@@ -2132,6 +2144,48 @@ impl Session {
                 return Err(err!("err-flat-nothing"));
             }
             Ok(n)
+        })
+    }
+
+    /// Downgrades the map of entry `index` for old clients (GRF Editor's "Downgrade"): its RSM2
+    /// models become RSM1 models next to the old ones, the world file becomes 2.1 and the ground
+    /// file 1.7. One undo step.
+    pub fn stage_map_downgrade(&mut self, index: usize) -> Result<DowngradeStaged, String> {
+        let name = self.entry_name(index)?;
+        let base = map_base(name.as_bytes())
+            .ok_or_else(|| err!("err-flat-not-map"))?
+            .to_vec();
+        self.transact(|s| {
+            let keys = s.key_index();
+            let read = |p: &[u8]| -> Result<Option<Vec<u8>>, String> {
+                keys.get(&GrfPath::new(p.to_vec()).key())
+                    .map(|&i| s.read_working(i))
+                    .transpose()
+            };
+            let (files, d) = rgrf_formats::downgrade::apply_map(&base, read)?
+                .map_err(|e| err!("err-downgrade-failed", "error": e))?;
+            if d.instances == 0 {
+                return Err(err!("err-downgrade-nothing"));
+            }
+            for (path, data) in files {
+                let new = GrfPath::new(path);
+                let name = s
+                    .arc
+                    .find(&new)
+                    .map_or(new, |i| s.arc.entries()[i].name.clone());
+                s.stage(Change::PutBytes {
+                    name,
+                    data: Arc::new(data),
+                    what: vec!["map downgraded".into()],
+                });
+            }
+            Ok(DowngradeStaged {
+                models: d.models.len(),
+                instances: d.instances,
+                missing: d.missing,
+                failed: d.failed,
+                pending: Vec::new(),
+            })
         })
     }
 

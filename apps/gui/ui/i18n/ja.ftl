@@ -1134,3 +1134,15 @@ au-failed = サウンドを編集できませんでした
 au-status = サウンド { $name } を編集しました ({ $n } 手順)。まだ保存されていません
 err-audio-read = サウンドを読み込めません: { $error }
 err-audio-op = この手順は実行できません: { $error }
+
+# map downgrade
+ctx-downgrade = マップをダウングレード…
+dg-title = 古いクライアント向けにマップをダウングレード
+dg-intro = マップの RSM2 モデルを、古いものの隣に RSM1 モデルとして作成し、ワールドファイルをバージョン 2.1、地形ファイルを 1.7 にします (水の設定はワールドファイルへ移動)。GRF Editor の「Downgrade」と同じ動作です。
+dg-hint = モデルのアニメーションは失われ、静止したモデルになります。保存するまで何も書き込まれず、この操作は元に戻せます。
+dg-go = ダウングレード
+dg-status = { $models } 個のモデルを変換、{ $instances } 個のオブジェクトを変更
+dg-missing = アーカイブにないモデル
+dg-failed = マップをダウングレードできませんでした
+err-downgrade-failed = マップをダウングレードできませんでした: { $error }
+err-downgrade-nothing = このマップには変換する RSM2 モデルがありません

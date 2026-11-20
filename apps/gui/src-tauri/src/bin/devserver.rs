@@ -132,6 +132,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?;
             to_json(s.pending())
         }),
+        "stage_map_downgrade" => with(state, |s| {
+            let mut staged = s.stage_map_downgrade(arg::<usize>(a, "index")?)?;
+            staged.pending = s.pending();
+            to_json(staged)
+        }),
         "audio_render" => with(state, |s| {
             to_json(s.audio_render(
                 arg::<usize>(a, "index")?,

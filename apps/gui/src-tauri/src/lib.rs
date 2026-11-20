@@ -1013,6 +1013,21 @@ async fn stage_rename(
     .await
 }
 
+/// Downgrades a map for old clients (RSM2 models to RSM1, world 2.1, ground 1.7).
+#[tauri::command]
+async fn stage_map_downgrade(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+) -> Res<backend::DowngradeStaged> {
+    with_session(&state, &window, move |s| {
+        let mut staged = s.stage_map_downgrade(index)?;
+        staged.pending = s.pending();
+        Ok(staged)
+    })
+    .await
+}
+
 /// A sound after the operations, to listen to and to draw (nothing is staged).
 #[tauri::command]
 async fn audio_render(
@@ -1794,6 +1809,7 @@ pub fn run() {
             reveal_entry,
             stage_rename,
             stage_crypt,
+            stage_map_downgrade,
             audio_render,
             stage_audio,
             export_selection,

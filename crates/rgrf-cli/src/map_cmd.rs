@@ -467,6 +467,46 @@ pub fn flat(
     names: NameMode,
     json: bool,
 ) -> Result<i32> {
+    map_patch(input, maps, output, overwrite, names, json, |base, read| {
+        rgrf_formats::flat_map::apply_map(base, read, o)
+    })
+}
+
+/// GRF Editor's "Downgrade" on maps: RSM2 models become RSM1, world file 2.1, ground file 1.7.
+pub fn downgrade(
+    input: &Path,
+    maps: &[String],
+    output: &Path,
+    overwrite: bool,
+    names: NameMode,
+    json: bool,
+) -> Result<i32> {
+    map_patch(input, maps, output, overwrite, names, json, |base, read| {
+        // without names, only the maps that have RSM2 models
+        Ok(
+            rgrf_formats::downgrade::apply_map(base, read)?.map(|(files, d)| {
+                if maps.is_empty() && d.instances == 0 {
+                    Vec::new()
+                } else {
+                    files
+                }
+            }),
+        )
+    })
+}
+
+type MapFiles = Result<Result<Vec<(Vec<u8>, Vec<u8>)>, String>>;
+
+/// Runs `per_map` on the maps (by their world file) and writes the files it returns as one small archive.
+fn map_patch(
+    input: &Path,
+    maps: &[String],
+    output: &Path,
+    overwrite: bool,
+    names: NameMode,
+    json: bool,
+    per_map: impl Fn(&[u8], &dyn Fn(&[u8]) -> Result<Option<Vec<u8>>>) -> MapFiles + Sync,
+) -> Result<i32> {
     use rayon::prelude::*;
     let vfs = Vfs::open(input)?;
     let mut rsws: Vec<(Vec<u8>, (usize, usize))> = Vec::new();
@@ -502,11 +542,7 @@ pub fn flat(
         .map(|(rsw_name, _)| {
             let shown = GrfPath::new(rsw_name.clone()).display(names);
             let base = &rsw_name[..rsw_name.len() - 4];
-            let changed = match rgrf_formats::flat_map::apply_map(
-                base,
-                |p| read(&GrfPath::new(p.to_vec()).key()),
-                o,
-            )? {
+            let changed = match per_map(base, &|p: &[u8]| read(&GrfPath::new(p.to_vec()).key()))? {
                 Ok(c) => c,
                 Err(why) => return Ok((vec![], 0, Some(format!("{shown}: {why}")))),
             };

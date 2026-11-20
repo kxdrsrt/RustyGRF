@@ -1227,3 +1227,15 @@ au-failed = No se pudo editar el sonido
 au-status = Sonido { $name } editado ({ $n } pasos), aún sin guardar
 err-audio-read = No se puede leer el sonido: { $error }
 err-audio-op = El paso no funciona: { $error }
+
+# map downgrade
+ctx-downgrade = Degradar mapa…
+dg-title = Degradar el mapa para clientes antiguos
+dg-intro = Los modelos RSM2 del mapa se crean como modelos RSM1 junto a los antiguos, el archivo del mundo pasa a la versión 2.1 y el del suelo a la 1.7 (el agua pasa al archivo del mundo), como hace «Downgrade» de GRF Editor.
+dg-hint = Las animaciones de los modelos se pierden: pasan a ser modelos estáticos. No se escribe nada hasta que guardes; el paso se puede deshacer.
+dg-go = Degradar
+dg-status = { $models } modelos convertidos, { $instances } objetos cambiados
+dg-missing = Modelo que no está en el archivo
+dg-failed = No se pudo degradar el mapa
+err-downgrade-failed = No se pudo degradar el mapa: { $error }
+err-downgrade-nothing = Este mapa no tiene modelos RSM2 que convertir

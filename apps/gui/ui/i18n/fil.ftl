@@ -1165,3 +1165,15 @@ au-failed = Hindi na-edit ang tunog
 au-status = Na-edit ang tunog na { $name } ({ $n } hakbang), hindi pa na-save
 err-audio-read = Hindi mabasa ang tunog: { $error }
 err-audio-op = Hindi gumagana ang hakbang: { $error }
+
+# map downgrade
+ctx-downgrade = I-downgrade ang mapa…
+dg-title = I-downgrade ang mapa para sa lumang client
+dg-intro = Ang mga RSM2 model ng mapa ay gagawing RSM1 model sa tabi ng luma, ang world file ay magiging bersyon 2.1 at ang ground file ay 1.7 (ang tubig ay ilalagay sa world file), tulad ng “Downgrade” ng GRF Editor.
+dg-hint = Mawawala ang mga animation ng mga model: magiging hindi gumagalaw ang mga ito. Walang isusulat hanggang mag-save ka; maaaring i-undo ang hakbang.
+dg-go = I-downgrade
+dg-status = { $models } model ang na-convert, { $instances } object ang binago
+dg-missing = Wala sa archive ang model
+dg-failed = Hindi na-downgrade ang mapa
+err-downgrade-failed = Hindi na-downgrade ang mapa: { $error }
+err-downgrade-nothing = Walang RSM2 model sa mapang ito na ico-convert

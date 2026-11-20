@@ -1134,3 +1134,15 @@ au-failed = 소리를 편집할 수 없습니다
 au-status = 소리 { $name } 편집됨({ $n }단계), 아직 저장되지 않음
 err-audio-read = 소리를 읽을 수 없습니다: { $error }
 err-audio-op = 이 단계는 실행되지 않습니다: { $error }
+
+# map downgrade
+ctx-downgrade = 맵 다운그레이드…
+dg-title = 오래된 클라이언트용으로 맵 다운그레이드
+dg-intro = 맵의 RSM2 모델을 기존 모델 옆에 RSM1 모델로 만들고, 월드 파일은 버전 2.1, 지형 파일은 1.7로 바꿉니다(물 설정은 월드 파일로 옮김). GRF Editor의 'Downgrade'와 같습니다.
+dg-hint = 모델의 애니메이션은 사라지고 정지된 모델이 됩니다. 저장하기 전에는 아무것도 쓰이지 않으며 이 단계는 되돌릴 수 있습니다.
+dg-go = 다운그레이드
+dg-status = 모델 { $models }개 변환, 오브젝트 { $instances }개 변경
+dg-missing = 아카이브에 없는 모델
+dg-failed = 맵을 다운그레이드할 수 없습니다
+err-downgrade-failed = 맵을 다운그레이드할 수 없습니다: { $error }
+err-downgrade-nothing = 이 맵에는 변환할 RSM2 모델이 없습니다

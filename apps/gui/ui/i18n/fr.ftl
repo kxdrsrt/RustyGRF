@@ -1227,3 +1227,15 @@ au-failed = Le son n'a pas pu être modifié
 au-status = Son { $name } modifié ({ $n } étapes), pas encore enregistré
 err-audio-read = Le son est illisible : { $error }
 err-audio-op = L'étape échoue : { $error }
+
+# map downgrade
+ctx-downgrade = Rétrograder la carte…
+dg-title = Rétrograder la carte pour les anciens clients
+dg-intro = Les modèles RSM2 de la carte sont créés en RSM1 à côté des anciens, le fichier de monde passe en version 2.1 et celui du sol en 1.7 (l'eau passe dans le fichier de monde), comme le « Downgrade » de GRF Editor.
+dg-hint = Les animations des modèles sont perdues : ils deviennent fixes. Rien n'est écrit avant l'enregistrement ; l'étape peut être annulée.
+dg-go = Rétrograder
+dg-status = { $models } modèles convertis, { $instances } objets modifiés
+dg-missing = Modèle absent de l'archive
+dg-failed = La carte n'a pas pu être rétrogradée
+err-downgrade-failed = La carte n'a pas pu être rétrogradée : { $error }
+err-downgrade-nothing = Cette carte n'a pas de modèles RSM2 à convertir
