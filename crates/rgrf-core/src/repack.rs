@@ -58,6 +58,11 @@ pub struct RepackOptions {
     /// source that was opened with its key are decrypted first; the key does not have to be the
     /// same. Without this, a source with a key set is written decrypted.
     pub encrypt: Option<crate::grfcrypt::Key>,
+    /// With `encrypt`: encrypt only the entries whose name key ([`GrfPath::key`]) is in the set
+    /// and write the others plain (GRF Editor's "Encrypt" and "Decrypt" on single entries). Blocks
+    /// are not shared then. Entries that cannot be encrypted (stored uncompressed, DES, damaged)
+    /// stay as they are.
+    pub encrypt_only: Option<std::collections::HashSet<Vec<u8>>>,
     /// The first 16 bytes of the header; `None` writes the format's own ("Master of Magic").
     pub magic: Option<[u8; 16]>,
 }
@@ -76,6 +81,7 @@ impl Default for RepackOptions {
             dry_run: false,
             max_file_len: None,
             encrypt: None,
+            encrypt_only: None,
             magic: None,
         }
     }
@@ -526,7 +532,8 @@ pub(crate) fn write_selection<R: ReadAt>(
 
     // The scrambling of 0x102/0x103 depends on the name, so blocks cannot be shared.
     let legacy_opts;
-    let opts = if format.is_legacy() && opts.dedupe != Dedupe::None {
+    let opts = if (format.is_legacy() || opts.encrypt_only.is_some()) && opts.dedupe != Dedupe::None
+    {
         legacy_opts = RepackOptions {
             dedupe: Dedupe::None,
             ..opts.clone()
@@ -647,7 +654,10 @@ fn write_all<R: ReadAt>(
                 s.entry(m).map_or(0, |e| e.size),
             )
         },
-        opts.encrypt.as_ref(),
+        opts.encrypt.as_ref().map(|key| pipeline::Encrypt {
+            key,
+            only: opts.encrypt_only.as_ref(),
+        }),
         &mut |batch| {
             for p in batch {
                 match p.kind {

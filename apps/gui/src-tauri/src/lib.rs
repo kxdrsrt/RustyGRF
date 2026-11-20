@@ -1013,6 +1013,26 @@ async fn stage_rename(
     .await
 }
 
+/// Marks entries to be encrypted or decrypted (GRF Editor's per-entry encryption) when saving.
+/// The password is needed only to encrypt in an archive that has no key yet.
+#[tauri::command]
+async fn stage_crypt(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    indices: Vec<usize>,
+    on: bool,
+    password: Option<String>,
+) -> Res<backend::CryptStaged> {
+    with_session(&state, &window, move |s| {
+        let marked = s.stage_crypt(&indices, on, password.as_deref())?;
+        Ok(backend::CryptStaged {
+            marked,
+            pending: s.pending(),
+        })
+    })
+    .await
+}
+
 /// Writes a new archive with only the given entries.
 #[tauri::command]
 async fn export_selection(
@@ -1743,6 +1763,7 @@ pub fn run() {
             open_external,
             reveal_entry,
             stage_rename,
+            stage_crypt,
             export_selection,
             hex_page,
             hex_find,

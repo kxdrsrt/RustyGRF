@@ -82,7 +82,7 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 | Rename… | Umbenennen… (Datei und Ordner, ein Rückgängig-Schritt; prüft Namenskonflikte, Grenze 512 MB je Eintrag) | ✅ |
 | Find usages… | Name in Dateien suchen… (Text und **kompilierte Lua-Dateien als dekompilierter Text**; kRO-`data.grf`: 517 `.lub` in 0,5 s) | ✅ (2026-11-21) |
 | Copy NPC name | Name kopieren, Pfad kopieren | ◐ |
-| Encryption ▸ (je Eintrag) | – (Verschlüsseln nur für das ganze Archiv) | ❌ |
+| Encryption ▸ Encrypt / Decrypt (je Eintrag) | Verschlüsseln… / Entschlüsseln im Kontextmenü (Dateien und Ordner, GRF 0x200): wird beim Speichern angewandt, rückgängig machbar, Passwort nur bei Archiven ohne Schlüssel; gemischte Archive (nur ein Teil verschlüsselt) werden gelesen und geschrieben | ✅ (2026-11-21; gleiche Chiffre wie die Ganz-Archiv-Verschlüsselung, die gegen GrfCL geprüft ist; gemischte Archive nicht gegen GRF Editor selbst geprüft; beim Speichern mit Auswahl werden Datenblöcke nicht geteilt, die Datei kann größer werden) |
 | Properties | Eigenschaften… (Größen, Kodierung, Versatz, Flags, CRC32, MD5, SHA-256) | ✅ |
 | – | Hex-Ansicht, Text bearbeiten, 8 Bit, Ersetzen, Datei hier hinzufügen | ✅ zusätzlich |
 

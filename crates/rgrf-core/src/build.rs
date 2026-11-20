@@ -379,7 +379,9 @@ fn write_all(
             let it = &items[units[u].members[0]];
             (it.name.clone(), it.size as u32)
         },
-        opts.encrypt.as_ref(),
+        opts.encrypt
+            .as_ref()
+            .map(|key| pipeline::Encrypt { key, only: None }),
         &mut |batch| stream_bytes += batch.iter().map(|p| p.stream.len() as u64).sum::<u64>(),
     )?;
     let mut placed: Vec<Option<Placed>> = vec![None; units.len()];

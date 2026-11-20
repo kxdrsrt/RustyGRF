@@ -194,6 +194,7 @@ async function showOpened(info) {
   renewAssets();
   Object.assign(NAV, { back: [], fwd: [], current: null });
   S.info = info;
+  S.cryptAsked = false;
   S.untitled = untitledKind(path);
   if (S.untitled) S.info.file_name = `${t("untitled")}.${S.untitled}`;
   $("empty").hidden = true;
@@ -3425,6 +3426,7 @@ function entryMenu(list, row) {
     items.push("-", { label: t("ctx-add-here"), icon: "add", run: guard(doAdd) });
     items.push({ label: t("ctx-rename-folder"), icon: "pencil", run: guard(() => renameRow(list, row)) });
     items.push({ label: t("ctx-delete-folder"), icon: "remove", run: guard(() => deleteRow(list, row)) });
+    items.push(...cryptItems(list, row, guard));
     items.push("-", { label: t("ctx-copy-path"), icon: "copy", run: () => copyText(row.name) });
     items.push({ label: t("ctx-props"), icon: "info", run: guard(() => showProperties(list, row)) });
     return items;
@@ -3444,6 +3446,7 @@ function entryMenu(list, row) {
   items.push({ label: t("ctx-replace"), icon: "replace", run: guard(doReplace) });
   items.push({ label: t("ctx-rename"), icon: "pencil", run: guard(() => renameRow(list, row)) });
   items.push({ label: t("ctx-delete"), icon: "remove", run: guard(() => deleteRow(list, row)) });
+  items.push(...cryptItems(list, row, guard));
   items.push("-", { label: t("ctx-usages"), icon: "search", run: guard(() => findUsages(row)) });
   items.push({ label: t("ctx-copy-name"), icon: "copy", run: () => copyText(baseOf(row.name)) });
   items.push({ label: t("ctx-copy-path"), icon: "copy", run: () => copyText(row.name) });
@@ -3452,6 +3455,40 @@ function entryMenu(list, row) {
 }
 
 /** The new path of a file, or of a folder (everything below it moves along). */
+/** GRF Editor's per-entry encryption exists in GRF 0x200 archives only. */
+function cryptItems(list, row, guard) {
+  if (!/0x200/.test(S.info?.format || "") || S.untitled === "thor" || S.untitled === "rgz") return [];
+  const items = ["-", { label: t("ctx-encrypt"), icon: "lock", run: guard(() => doCrypt(list, row, true)) }];
+  if (S.info.encryption) items.push({ label: t("ctx-decrypt"), icon: "unlock", run: guard(() => doCrypt(list, row, false)) });
+  return items;
+}
+
+async function doCrypt(list, row, on) {
+  const indices = await entriesIn(list, row);
+  if (!indices.length) return note(t("ext-title"), t("ext-empty-folder"));
+  let password = null;
+  if (on && !S.info.encryption && !S.cryptAsked) {
+    const pass = el("input", { type: "password", class: "field", autocomplete: "new-password", placeholder: t("sa-password"), "aria-label": t("sa-password") });
+    const pass2 = el("input", { type: "password", class: "field", autocomplete: "new-password", placeholder: t("sa-password-again"), "aria-label": t("sa-password-again") });
+    setTimeout(() => pass.focus(), 50);
+    for (;;) {
+      const go = await ask(t("crypt-title"), [el("p", { text: t("crypt-intro") }), el("div", { class: "form" }, pass, pass2)], [{ label: t("crypt-go"), value: true, primary: true }, { label: "Cancel", value: null }]);
+      if (!go) return;
+      if (pass.value && pass.value === pass2.value) break;
+      await note(t("crypt-title"), pass.value ? t("sa-password-mismatch") : t("err-password-empty"), true);
+    }
+    password = pass.value;
+  }
+  try {
+    const r = await invoke("stage_crypt", { indices, on, password });
+    if (password) S.cryptAsked = true;
+    setPending(r.pending);
+    setStatus(t(on ? "crypt-status-on" : "crypt-status-off", { files: t("pvw-files", { n: r.marked }) }));
+  } catch (e) {
+    await note(t("crypt-failed"), errText(e), true);
+  }
+}
+
 async function renameRow(list, row) {
   const input = el("input", { type: "text", class: "field", value: row.name, spellcheck: "false", "aria-label": t(row.folder ? "ren-title-folder" : "ren-title") });
   input.addEventListener("keydown", (e) => e.key === "Enter" && (e.preventDefault(), $("dlg-actions").querySelector(".primary")?.click()));

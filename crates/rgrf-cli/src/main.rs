@@ -1143,6 +1143,7 @@ impl WriteArgs {
     fn options(&self, encrypt: Option<rgrf_core::grfcrypt::Key>) -> Result<RepackOptions> {
         Ok(RepackOptions {
             encrypt,
+            encrypt_only: None,
             magic: self
                 .magic
                 .as_deref()
@@ -2166,6 +2167,7 @@ fn run(cli: &Cli) -> Result<i32> {
             let method = method_from(*method, *level)?;
             let opts = RepackOptions {
                 magic: None,
+                encrypt_only: None,
                 method,
                 format: *format,
                 align: if *align {

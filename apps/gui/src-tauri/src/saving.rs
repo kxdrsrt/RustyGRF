@@ -152,7 +152,7 @@ pub fn save_as(
             if key.is_some() && format.is_some_and(|f| f != Format::V200) {
                 return Err(err!("err-encrypt-format"));
             }
-            let opts = RepackOptions {
+            let mut opts = RepackOptions {
                 magic: magic_for(&src, req)?,
                 overwrite,
                 method,
@@ -162,6 +162,7 @@ pub fn save_as(
                 encrypt: key,
                 ..RepackOptions::default()
             };
+            plan.apply_crypt(&src, &mut opts);
             let r = edit::apply(&src, &plan.src, &req.dst, &edits, &opts, ctl)
                 .map_err(|e| e.to_string())?;
             Ok(EditSummary {

@@ -30,6 +30,11 @@ pub enum DraftChange {
     Remove {
         name: Vec<u8>,
     },
+    /// GRF Editor's encryption of this entry is switched on or off.
+    Crypt {
+        name: Vec<u8>,
+        on: bool,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -46,6 +51,10 @@ enum Stored {
     },
     Remove {
         name: String,
+    },
+    Crypt {
+        name: String,
+        on: bool,
     },
 }
 
@@ -124,6 +133,10 @@ pub fn save(root: &Path, archive: &Path, changes: &[DraftChange]) -> std::io::Re
                 file: file.clone(),
             },
             DraftChange::Remove { name } => Stored::Remove { name: hex(name) },
+            DraftChange::Crypt { name, on } => Stored::Crypt {
+                name: hex(name),
+                on: *on,
+            },
             DraftChange::Bytes { name, data, what } => {
                 let blob = format!(
                     "{}-{}.bin",
@@ -234,6 +247,7 @@ pub fn take(root: &Path, archive: &Path) -> Option<(Vec<DraftChange>, usize)> {
             }
             Stored::Put { .. } => None,
             Stored::Remove { name } => unhex(&name).map(|name| DraftChange::Remove { name }),
+            Stored::Crypt { name, on } => unhex(&name).map(|name| DraftChange::Crypt { name, on }),
             Stored::Bytes { name, blob, what } => {
                 let data = (!blob.contains(['/', '\\']))
                     .then(|| fs::read(dir.join(&blob)).ok())
@@ -318,13 +332,17 @@ mod tests {
             DraftChange::Remove {
                 name: b"data\\old.txt".to_vec(),
             },
+            DraftChange::Crypt {
+                name: b"data\\x.txt".to_vec(),
+                on: true,
+            },
         ];
         assert!(info(&root, &archive).is_none());
         save(&root, &archive, &changes).unwrap();
         let i = info(&root, &archive).unwrap();
         assert_eq!(
             (i.changes, i.archive_changed, i.missing_files),
-            (3, false, 0)
+            (4, false, 0)
         );
         assert_eq!(take(&root, &archive).unwrap(), (changes.clone(), 0));
         assert!(info(&root, &archive).is_none(), "taken");
@@ -356,7 +374,7 @@ mod tests {
         let i = info(&root, &archive).unwrap();
         assert_eq!((i.archive_changed, i.missing_files), (true, 1));
         let (got, skipped) = take(&root, &archive).unwrap();
-        assert_eq!((got.len(), skipped), (2, 1));
+        assert_eq!((got.len(), skipped), (3, 1));
         save(&root, &archive, &changes[1..]).unwrap();
 
         // no changes: the draft goes away

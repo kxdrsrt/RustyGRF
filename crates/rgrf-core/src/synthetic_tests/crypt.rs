@@ -142,6 +142,57 @@ fn repack_decrypts_re_encrypts_and_copies_unchanged() {
 }
 
 #[test]
+fn single_entries_can_be_encrypted_and_decrypted() {
+    use std::collections::HashSet;
+    let key = grfcrypt::key_from_password("secret").unwrap();
+    let (dir, enc) = encrypted("crypt-single", &key);
+    let name = |n: &str| GrfPath::new(n.as_bytes()).key();
+    let a = name("data\\a.txt");
+    let b = name("data\\sub\\b.spr");
+    let opts = |only: &[&Vec<u8>]| RepackOptions {
+        encrypt: Some(key),
+        encrypt_only: Some(only.iter().map(|k| (*k).clone()).collect::<HashSet<_>>()),
+        recompress_all: true,
+        ..RepackOptions::default()
+    };
+
+    // the encrypted archive (opened with its key) keeps only a.txt encrypted
+    let src = Archive::open_with_key(&enc, &key).unwrap();
+    let one = dir.join("one.grf");
+    let r = repack(&src, &one, &opts(&[&a]), &Control::default()).unwrap();
+    assert!(r.verified);
+    let g = Archive::open(&one).unwrap();
+    assert_eq!(g.encryption().unwrap().encrypted_entries, 1);
+    let ia = g.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap();
+    let ib = g.find(&GrfPath::new(&b"data\\sub\\b.spr"[..])).unwrap();
+    assert!(g.entry_encrypted(ia) && !g.entry_encrypted(ib));
+    // the plain one reads without the key, the encrypted one does not
+    assert_eq!(g.read(ib).unwrap().data, text(9000, 2));
+    assert_eq!(g.read(ia).unwrap().status, DecodeStatus::Encrypted);
+    let g = Archive::open_with_key(&one, &key).unwrap();
+    assert_eq!(g.read(ia).unwrap().data, text(4000, 1));
+
+    // encrypting b.spr as well, from the mixed archive
+    let both = dir.join("both.grf");
+    repack(&g, &both, &opts(&[&a, &b]), &Control::default()).unwrap();
+    let g2 = Archive::open_with_key(&both, &key).unwrap();
+    assert_eq!(g2.encryption().unwrap().encrypted_entries, 2);
+    assert_eq!(g2.read(ib).unwrap().data, text(9000, 2));
+
+    // the same from a plain archive with a new key
+    let plain = dir.join("plain.grf");
+    repack(&src, &plain, &RepackOptions::default(), &Control::default()).unwrap();
+    let p = Archive::open(&plain).unwrap();
+    assert!(p.encryption().is_none());
+    let sel = dir.join("sel.grf");
+    repack(&p, &sel, &opts(&[&b]), &Control::default()).unwrap();
+    let s = Archive::open_with_key(&sel, &key).unwrap();
+    assert_eq!(s.encryption().unwrap().encrypted_entries, 1);
+    assert!(s.entry_encrypted(s.find(&GrfPath::new(&b"data\\sub\\b.spr"[..])).unwrap()));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn an_encrypted_file_table_opens_with_the_key_only() {
     let key = grfcrypt::key_from_password("table key").unwrap();
     let (dir, path) = encrypted("crypt3", &key);

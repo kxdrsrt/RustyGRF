@@ -151,6 +151,14 @@ pub(crate) fn encryption_marker(
     })
 }
 
+/// What to encrypt: with `only`, just the entries whose name key (see [`GrfPath::key`]) is in the
+/// set; the others are written as plain streams.
+#[derive(Clone, Copy)]
+pub(crate) struct Encrypt<'a> {
+    pub key: &'a crate::grfcrypt::Key,
+    pub only: Option<&'a std::collections::HashSet<Vec<u8>>>,
+}
+
 /// Prepares every unit of every batch with `prepare` (in parallel inside a batch) and writes the
 /// results in order. `on_batch` sees each finished batch before it is written (for statistics).
 #[allow(clippy::too_many_arguments)]
@@ -161,7 +169,7 @@ pub(crate) fn run(
     ctl: &Control,
     prepare: &(dyn Fn(usize) -> Result<Prepared> + Sync),
     info_of: &(dyn Fn(usize) -> (GrfPath, u32) + Sync),
-    encrypt: Option<&crate::grfcrypt::Key>,
+    encrypt: Option<Encrypt<'_>>,
     on_batch: &mut dyn FnMut(&[Prepared]),
 ) -> Result<(Sink, Vec<Written>)> {
     let (tx, rx) = mpsc::sync_channel::<Vec<Prepared>>(1);
@@ -173,8 +181,11 @@ pub(crate) fn run(
                 for mut p in batch {
                     if writer.is_legacy() {
                         p.raw = legacy_scramble(&info_of(p.unit).0, &mut p)?;
-                    } else if let Some(key) = encrypt {
-                        encrypt_plain(key, info_of(p.unit).1, &mut p);
+                    } else if let Some(enc) = &encrypt {
+                        let (name, size) = info_of(p.unit);
+                        if enc.only.is_none_or(|set| set.contains(&name.key())) {
+                            encrypt_plain(enc.key, size, &mut p);
+                        }
                     }
                     let pl = match p.raw {
                         Some((zsize, aligned)) => writer.put_raw(&p.stream, zsize, aligned)?,

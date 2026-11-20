@@ -1,7 +1,7 @@
 //! Everything the app does with an archive, without any Tauri types, so it can be tested.
 //! `lib.rs` only wraps these functions as commands.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -217,6 +217,9 @@ pub struct Session {
     keys: OnceLock<HashMap<Vec<u8>, usize>>,
     /// The key of GRF Editor's encryption, if the archive was opened with one.
     crypt_key: Option<rgrf_core::grfcrypt::Key>,
+    /// The key asked for to encrypt single entries of an archive that has none; used by a save
+    /// only while such marks are pending (never written to a draft).
+    new_key: Option<rgrf_core::grfcrypt::Key>,
     /// Folder for drafts of pending changes (see [`crate::draft`]); none: no drafts.
     draft_root: Option<PathBuf>,
     /// A draft was found when the archive was opened and is not restored or discarded yet; it is
@@ -285,6 +288,13 @@ enum Change {
     Remove {
         name: GrfPath,
     },
+    /// GRF Editor's encryption of the entry `name` is switched on or off when saving. `tag` is a
+    /// path of its own (never an entry's), so the mark does not replace a change of the content.
+    Crypt {
+        name: GrfPath,
+        tag: GrfPath,
+        on: bool,
+    },
 }
 
 /// One step of the undo history: what it did (`add`, `replace`, `edit`, `remove`, `discard`,
@@ -303,6 +313,7 @@ fn same_change(a: &Change, b: &Change) -> bool {
         (Change::Put { file: x, .. }, Change::Put { file: y, .. }) => x == y,
         (Change::PutBytes { data: x, .. }, Change::PutBytes { data: y, .. }) => Arc::ptr_eq(x, y),
         (Change::Remove { .. }, Change::Remove { .. }) => true,
+        (Change::Crypt { on: x, .. }, Change::Crypt { on: y, .. }) => x == y,
         _ => false,
     }
 }
@@ -311,7 +322,21 @@ impl Change {
     fn name(&self) -> &GrfPath {
         match self {
             Self::Put { name, .. } | Self::PutBytes { name, .. } | Self::Remove { name } => name,
+            Self::Crypt { tag, .. } => tag,
         }
+    }
+
+    /// The entry the change is about (what is shown).
+    fn shown(&self) -> &GrfPath {
+        match self {
+            Self::Crypt { name, .. } => name,
+            c => c.name(),
+        }
+    }
+
+    fn crypt(name: GrfPath, on: bool) -> Self {
+        let tag = GrfPath::new([b"\x01crypt\\", name.as_bytes()].concat());
+        Self::Crypt { name, tag, on }
     }
 }
 
@@ -327,7 +352,7 @@ pub struct TextForEdit {
 
 #[derive(Serialize, Debug)]
 pub struct PendingRow {
-    /// `replace`, `add` or `remove`
+    /// `replace`, `add`, `remove`, `encrypt` or `decrypt`
     pub kind: &'static str,
     pub name: String,
     pub file: Option<String>,
@@ -353,6 +378,7 @@ impl EditPlan {
     pub(crate) fn edits(&self) -> Result<Vec<Edit>, String> {
         self.changes
             .iter()
+            .filter(|c| !matches!(c, Change::Crypt { .. }))
             .map(|c| {
                 Ok(match c {
                     Change::Put { name, file } => Edit::Put {
@@ -365,9 +391,64 @@ impl EditPlan {
                         data: (**data).clone(),
                     },
                     Change::Remove { name } => Edit::Remove { name: name.clone() },
+                    Change::Crypt { .. } => unreachable!("filtered above"),
                 })
             })
             .collect()
+    }
+
+    /// With single entries marked for encryption or decryption: the entries (by name key) that
+    /// the saved archive has encrypted. Without marks: `None` (all or none, by the key).
+    pub(crate) fn crypt_only(&self, src: &Archive) -> Option<HashSet<Vec<u8>>> {
+        if !self
+            .changes
+            .iter()
+            .any(|c| matches!(c, Change::Crypt { .. }))
+        {
+            return None;
+        }
+        // new files follow the archive: encrypted in an encrypted one
+        let new_encrypted = src.encryption().is_some();
+        let mut set: HashSet<Vec<u8>> = src
+            .entries()
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| src.entry_encrypted(i))
+            .map(|(_, e)| e.name.key())
+            .collect();
+        for c in &self.changes {
+            match c {
+                Change::Put { name, .. } | Change::PutBytes { name, .. }
+                    if new_encrypted && src.find(name).is_none() =>
+                {
+                    set.insert(name.key());
+                }
+                Change::Crypt { name, on: true, .. } => {
+                    set.insert(name.key());
+                }
+                Change::Crypt {
+                    name, on: false, ..
+                } => {
+                    set.remove(&name.key());
+                }
+                _ => {}
+            }
+        }
+        Some(set)
+    }
+
+    /// Sets the key and the selection of encrypted entries of a save (see [`Self::crypt_only`]).
+    pub(crate) fn apply_crypt(&self, src: &Archive, opts: &mut RepackOptions) {
+        if opts.encrypt.is_none() {
+            return;
+        }
+        if let Some(set) = self.crypt_only(src) {
+            if set.is_empty() {
+                opts.encrypt = None;
+            } else {
+                opts.encrypt_only = Some(set);
+            }
+        }
     }
 }
 
@@ -469,12 +550,13 @@ pub fn reduce_images(
     if edits.is_empty() {
         return Ok(sum);
     }
-    let opts = RepackOptions {
+    let mut opts = RepackOptions {
         overwrite: true,
         copy_streams: true,
         encrypt: plan.key,
         ..RepackOptions::default()
     };
+    plan.apply_crypt(&src, &mut opts);
     let r = edit::apply(&src, &plan.src, dst, &edits, &opts, ctl).map_err(|e| e.to_string())?;
     sum.written = true;
     sum.files = r.merge.repack.files;
@@ -625,6 +707,13 @@ pub struct ArchiveInfo {
     pub thor: Option<ThorOut>,
     /// Unsaved changes of an earlier session, kept as a draft, waiting to be restored or discarded.
     pub draft: Option<crate::draft::DraftInfo>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct CryptStaged {
+    /// Entries marked by this step.
+    pub marked: usize,
+    pub pending: Vec<PendingRow>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1432,12 +1521,13 @@ pub fn save_edited(
     let src = plan.open()?;
     let edits = plan.edits()?;
     // unchanged entries keep their streams, so the archive does not grow or lose its compression
-    let opts = RepackOptions {
+    let mut opts = RepackOptions {
         overwrite,
         copy_streams: true,
         encrypt: plan.key,
         ..RepackOptions::default()
     };
+    plan.apply_crypt(&src, &mut opts);
     let r = edit::apply(&src, &plan.src, dst, &edits, &opts, ctl).map_err(|e| e.to_string())?;
     Ok(EditSummary {
         added: r.added,
@@ -1792,6 +1882,7 @@ impl Session {
             redo: Vec::new(),
             keys: OnceLock::new(),
             crypt_key: key.copied(),
+            new_key: None,
             draft_root: None,
             draft_offered: false,
         })
@@ -1829,6 +1920,10 @@ impl Session {
                 Change::Remove { name } => crate::draft::DraftChange::Remove {
                     name: name.as_bytes().to_vec(),
                 },
+                Change::Crypt { name, on, .. } => crate::draft::DraftChange::Crypt {
+                    name: name.as_bytes().to_vec(),
+                    on: *on,
+                },
             })
             .collect();
         if let Err(e) = crate::draft::save(root, &self.path, &changes) {
@@ -1859,6 +1954,9 @@ impl Session {
                     crate::draft::DraftChange::Remove { name } => Change::Remove {
                         name: GrfPath::new(name),
                     },
+                    crate::draft::DraftChange::Crypt { name, on } => {
+                        Change::crypt(GrfPath::new(name), on)
+                    }
                 })
                 .collect();
             Ok(())
@@ -2277,12 +2375,14 @@ impl Session {
                 Change::Put { .. } => "add",
                 Change::PutBytes { .. } => "edit",
                 Change::Remove { .. } => "remove",
+                Change::Crypt { on: true, .. } => "encrypt",
+                Change::Crypt { on: false, .. } => "decrypt",
             };
-            kinds.push((kind, c.name()));
+            kinds.push((kind, c.shown()));
         }
         for c in before {
             if !new.contains_key(&c.name().key()) {
-                kinds.push(("discard", c.name()));
+                kinds.push(("discard", c.shown()));
             }
         }
         let kind = match kinds.first() {
@@ -2360,7 +2460,8 @@ impl Session {
                 Ok((name, data, vec![format!("replaced by {}", file.display())]))
             }
             Some(Change::Remove { .. }) => Err(err!("err-marked-removal")),
-            None => Ok((name, self.read(index)?, Vec::new())),
+            // a crypt mark has a path of its own and is never found by an entry's name
+            Some(Change::Crypt { .. }) | None => Ok((name, self.read(index)?, Vec::new())),
         }
     }
 
@@ -2724,6 +2825,87 @@ impl Session {
         Ok(n)
     }
 
+    /// Marks entries to be encrypted (`on`) or decrypted when saving (GRF Editor's "Encrypt" and
+    /// "Decrypt" on single entries). Encrypting needs a password unless the archive has its key.
+    /// Entries that are in that state already are skipped; the number of marked ones is returned.
+    pub fn stage_crypt(
+        &mut self,
+        indices: &[usize],
+        on: bool,
+        password: Option<&str>,
+    ) -> Result<usize, String> {
+        self.transact(|s| s.stage_crypt_impl(indices, on, password))
+    }
+
+    fn stage_crypt_impl(
+        &mut self,
+        indices: &[usize],
+        on: bool,
+        password: Option<&str>,
+    ) -> Result<usize, String> {
+        let h = self.arc.header();
+        if h.kind != rgrf_core::container::Kind::Grf || h.version != 0x200 {
+            return Err(err!("err-crypt-format"));
+        }
+        if self.arc.encryption().is_some_and(|e| !e.key_set) {
+            return Err(err!("err-entry-encrypted"));
+        }
+        let marker = GrfPath::new(rgrf_core::grfcrypt::MARKER_NAME.as_bytes()).key();
+        // what each entry will be at the next save, with the marks that are pending
+        let state = |s: &Self, i: usize| {
+            let e = &s.arc.entries()[i];
+            s.pending
+                .iter()
+                .find_map(|c| match c {
+                    Change::Crypt { name, on, .. } if name.key() == e.name.key() => Some(*on),
+                    _ => None,
+                })
+                .unwrap_or_else(|| s.arc.entry_encrypted(i))
+        };
+        // a password for an archive that has no key: kept (not in a draft) for the save
+        if let (true, None, Some(p)) = (on, self.crypt_key, password.filter(|p| !p.is_empty())) {
+            self.new_key =
+                Some(rgrf_core::grfcrypt::key_from_password(p).map_err(|e| e.to_string())?);
+        }
+        let mut todo = Vec::new();
+        for &i in indices {
+            let e = self
+                .arc
+                .entries()
+                .get(i)
+                .ok_or_else(|| format!("no entry {i}"))?;
+            if e.is_marker() || !e.is_file() || e.name.key() == marker {
+                continue;
+            }
+            if state(self, i) != on {
+                todo.push(e.name.clone());
+            }
+        }
+        if todo.is_empty() {
+            return Err(if on {
+                err!("err-crypt-none-plain")
+            } else {
+                err!("err-crypt-none-encrypted")
+            });
+        }
+        if on && self.crypt_key.or(self.new_key).is_none() {
+            return Err(err!("err-password-empty"));
+        }
+        for name in &todo {
+            let base = self
+                .arc
+                .find(name)
+                .is_some_and(|i| self.arc.entry_encrypted(i));
+            self.pending
+                .retain(|c| c.name().key() != Change::crypt(name.clone(), on).name().key());
+            // a mark that only restores what the archive has is no change
+            if base != on {
+                self.pending.push(Change::crypt(name.clone(), on));
+            }
+        }
+        Ok(todo.len())
+    }
+
     fn stage_remove_impl(&mut self, indices: &[usize]) -> Result<usize, String> {
         let names = indices
             .iter()
@@ -2762,6 +2944,11 @@ impl Session {
                 },
                 Change::Remove { name } => PendingRow {
                     kind: "remove",
+                    name: name.display(self.mode),
+                    file: None,
+                },
+                Change::Crypt { name, on, .. } => PendingRow {
+                    kind: if *on { "encrypt" } else { "decrypt" },
                     name: name.display(self.mode),
                     file: None,
                 },
@@ -2904,9 +3091,29 @@ impl Session {
         self.draft_root.clone()
     }
 
+    /// The key a save encrypts with: the archive's own, else the one asked for while entries are
+    /// marked for encryption.
+    fn save_key(&self) -> Option<rgrf_core::grfcrypt::Key> {
+        self.crypt_key.or_else(|| {
+            self.pending
+                .iter()
+                .any(|c| matches!(c, Change::Crypt { on: true, .. }))
+                .then_some(self.new_key)
+                .flatten()
+        })
+    }
+
     pub fn edit_plan(&self) -> Result<EditPlan, String> {
         if self.pending.is_empty() {
             return Err(err!("err-no-changes"));
+        }
+        if self.save_key().is_none()
+            && self
+                .pending
+                .iter()
+                .any(|c| matches!(c, Change::Crypt { on: true, .. }))
+        {
+            return Err(err!("err-crypt-need-key"));
         }
         Ok(self.plan())
     }
@@ -2916,7 +3123,7 @@ impl Session {
         EditPlan {
             src: self.path.clone(),
             changes: self.pending.clone(),
-            key: self.crypt_key,
+            key: self.save_key(),
         }
     }
 
@@ -4859,6 +5066,73 @@ mod tests {
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
         assert!(!s.verify(false).unwrap().decoded);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn single_entries_are_marked_for_encryption_and_decryption() {
+        let dir = tmp("crypt-single");
+        fs::create_dir_all(dir.join("src/data")).unwrap();
+        fs::write(dir.join("src/data/a.txt"), "hello hello hello hello\n").unwrap();
+        fs::write(dir.join("src/data/b.txt"), "second file second file\n").unwrap();
+        let grf = dir.join("p.grf");
+        build(
+            &dir.join("src"),
+            &grf,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let a = find(&s, "a.txt");
+        // a plain archive needs a password to encrypt, and nothing to decrypt yet
+        assert!(s.stage_crypt(&[a], true, None).is_err());
+        assert!(s.stage_crypt(&[a], false, None).is_err());
+        assert_eq!(s.stage_crypt(&[a], true, Some("secret pw")), Ok(1));
+        assert_eq!(s.pending()[0].kind, "encrypt");
+        assert_eq!(s.history_steps(5).0[0].kind, "encrypt");
+        // marking it again changes nothing
+        assert!(s.stage_crypt(&[a], true, Some("secret pw")).is_err());
+        let out = dir.join("one.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let key = rgrf_core::grfcrypt::key_from_password("secret pw").unwrap();
+        let o = Archive::open_with_key(&out, &key).unwrap();
+        assert_eq!(o.encryption().unwrap().encrypted_entries, 1);
+        let ia = o.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap();
+        assert!(o.entry_encrypted(ia));
+        assert_eq!(o.read(ia).unwrap().data, b"hello hello hello hello\n");
+
+        // undo takes the mark back and a save is plain again (the asked key is not used)
+        assert!(s.undo());
+        assert!(s.pending().is_empty());
+        assert_eq!(s.plan().key, None);
+
+        // the mixed archive: encrypt b as well with its key, then decrypt a
+        let mut s = Session::open_with(&out, Some(&key)).unwrap();
+        let (a, b) = (find(&s, "a.txt"), find(&s, "b.txt"));
+        assert!(
+            s.stage_crypt(&[a], true, None).is_err(),
+            "a is encrypted already"
+        );
+        assert_eq!(s.stage_crypt(&[b], true, None), Ok(1));
+        assert_eq!(s.stage_crypt(&[a], false, None), Ok(1));
+        let out2 = dir.join("two.grf");
+        save_edited(&s.edit_plan().unwrap(), &out2, false, &Control::default()).unwrap();
+        let o = Archive::open_with_key(&out2, &key).unwrap();
+        let (ia, ib) = (
+            o.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap(),
+            o.find(&GrfPath::new(&b"data\\b.txt"[..])).unwrap(),
+        );
+        assert!(!o.entry_encrypted(ia) && o.entry_encrypted(ib));
+        // decrypting the last one makes a plain archive without the hidden entry
+        let mut s = Session::open_with(&out2, Some(&key)).unwrap();
+        let b = find(&s, "b.txt");
+        assert_eq!(s.stage_crypt(&[b], false, None), Ok(1));
+        let out3 = dir.join("three.grf");
+        save_edited(&s.edit_plan().unwrap(), &out3, false, &Control::default()).unwrap();
+        let o = Archive::open(&out3).unwrap();
+        assert!(o.encryption().is_none());
+        assert_eq!(o.len(), 2);
         let _ = fs::remove_dir_all(dir);
     }
 

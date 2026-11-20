@@ -207,6 +207,14 @@ impl<R: ReadAt> Archive<R> {
         })
     }
 
+    /// Whether the stream of an entry was found encrypted with GRF Editor's scheme (also when a
+    /// key is set and it reads as plain).
+    pub fn entry_encrypted(&self, index: usize) -> bool {
+        self.crypt
+            .as_ref()
+            .is_some_and(|c| c.crypted.get(index).copied().unwrap_or(false))
+    }
+
     /// Sets the key of an encrypted archive; the entries then read as plain ones. A key that does
     /// not match the CRC32 in the hidden entry is refused. On an archive that is not encrypted
     /// this does nothing.

@@ -132,6 +132,17 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?;
             to_json(s.pending())
         }),
+        "stage_crypt" => with(state, |s| {
+            let marked = s.stage_crypt(
+                &arg::<Vec<usize>>(a, "indices")?,
+                arg::<bool>(a, "on")?,
+                a.get("password").and_then(|v| v.as_str()),
+            )?;
+            to_json(backend::CryptStaged {
+                marked,
+                pending: s.pending(),
+            })
+        }),
         "export_selection" => {
             let plan = with(state, |s| Ok(s.plan()))?;
             to_json(backend::export_selection(
