@@ -870,12 +870,14 @@ function showFolderPreview(r) {
 // ---------- preview ----------
 
 function clearPreview() {
+  stopAudio();
   $("preview-head").replaceChildren();
   $("preview-body").replaceChildren(el("p", { class: "placeholder", text: S.info ? t("pvw-select") : "" }));
 }
 
 async function showPreview(row, action) {
   const token = ++S.previewToken;
+  stopAudio();
   S.viewer?.destroy();
   S.viewer = null;
   const head = $("preview-head");
@@ -1105,6 +1107,12 @@ function withAssetUrls(p) {
 
 const infoBlock = (lines) => (lines?.length ? el("div", { class: "info" }, el("pre", { text: lines.map(noteText).join("\n") })) : null);
 
+const PLAYER = { el: null };
+function stopAudio() {
+  PLAYER.el?.pause();
+  PLAYER.el = null;
+}
+
 function renderPreview(p, row, meta) {
   switch (p.kind) {
     case "image": {
@@ -1123,8 +1131,14 @@ function renderPreview(p, row, meta) {
           : null;
       return [reduce, el("div", { class: "checker" }, img)];
     }
-    case "audio":
-      return [el("audio", { controls: true, src: dataUrl(p.mime, p.data) })];
+    case "audio": {
+      const a = el("audio", { controls: true, src: dataUrl(p.mime, p.data) });
+      stopAudio();
+      PLAYER.el = a;
+      // a click or an arrow key selected the entry, so the webview lets it start by itself
+      if (SET.autoplay !== false) a.play().catch(() => {});
+      return [a];
+    }
     case "text": {
       const pre = el("pre", { text: p.text });
       const note = el("div", { class: "muted" }, `${t("txt-encoding")} `, el("span", { class: "badge", text: p.encoding }), p.truncated ? ` ${t("txt-shortened")}` : "");
@@ -3187,7 +3201,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, method: "zlib", format: "0x200", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, method: "zlib", format: "0x200", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -3293,6 +3307,7 @@ function openSettings() {
       row(t("set-preview"), pick("preview", t("set-preview"), [["last", t("set-as-last")], ["right", t("pv-right")], ["bottom", t("pv-bottom")], ["off", t("pv-off")]]), t("set-next-start")),
       row(t("set-startup"), check("reopen", t("set-reopen"))),
       row(t("set-changes"), check("warnDiscard", t("set-warn-discard"))),
+      row(t("set-audio"), check("autoplay", t("set-autoplay"))),
       el("h3", { text: t("set-building") }),
       L(t("set-compression"), "method", METHODS()),
       L(t("set-format"), "format", FORMATS()),
