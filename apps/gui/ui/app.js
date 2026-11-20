@@ -1717,25 +1717,25 @@ function saveActRefs() {
   } catch {}
 }
 
-const REF_PRESETS = [
-  ["data\\sprite\\인간족\\몸통\\남\\초보자_남.act", "Body, novice (male)"],
-  ["data\\sprite\\인간족\\몸통\\여\\초보자_여.act", "Body, novice (female)"],
-  ["data\\sprite\\인간족\\머리통\\남\\1_남.act", "Head 1 (male)"],
-  ["data\\sprite\\인간족\\머리통\\여\\1_여.act", "Head 1 (female)"],
+const REF_PRESETS = () => [
+  ["data\\sprite\\인간족\\몸통\\남\\초보자_남.act", t("ref-preset-body-m")],
+  ["data\\sprite\\인간족\\몸통\\여\\초보자_여.act", t("ref-preset-body-f")],
+  ["data\\sprite\\인간족\\머리통\\남\\1_남.act", t("ref-preset-head-m")],
+  ["data\\sprite\\인간족\\머리통\\여\\1_여.act", t("ref-preset-head-f")],
 ];
 
 async function addActReference() {
   const input = el("input", { type: "text", class: "field", list: "ref-presets", placeholder: "data\\sprite\\…\\name.act", spellcheck: "false", value: S.selected != null && /\.act$/i.test(S.rows[S.selected - S.offset]?.name || "") && S.rows[S.selected - S.offset].name !== E.row?.name ? S.rows[S.selected - S.offset].name : "" });
-  const presets = el("datalist", { id: "ref-presets" }, REF_PRESETS.map(([v, t]) => el("option", { value: v, label: t })));
+  const presets = el("datalist", { id: "ref-presets" }, REF_PRESETS().map(([v, label]) => el("option", { value: v, label })));
   const under = el("input", { type: "checkbox", checked: true });
   const go = await ask(
-    "Add a reference animation",
+    t("ref-title"),
     [
-      el("p", { text: "Another animation of this archive drawn with the one you edit, e.g. a body and a head to fit headgear on. Its first anchor meets the first anchor of the edited frame, as the client attaches parts to the body. Same action and frame number; the reference is only shown, never changed." }),
-      el("div", { class: "form" }, el("label", {}, "Animation (.act) ", input, presets), el("label", {}, under, " Behind the edited animation")),
-      el("div", { class: "controls" }, ...REF_PRESETS.map(([v, t]) => el("button", { type: "button", class: "small", text: t, onclick: () => (input.value = v) }))),
+      el("p", { text: t("ref-intro") }),
+      el("div", { class: "form" }, el("label", {}, `${t("ref-animation")} `, input, presets), el("label", {}, under, ` ${t("ref-behind-check")}`)),
+      el("div", { class: "controls" }, ...REF_PRESETS().map(([v, label]) => el("button", { type: "button", class: "small", text: label, onclick: () => (input.value = v) }))),
     ],
-    [{ label: "Add", value: true, primary: true }, { label: "Cancel", value: null }],
+    [{ label: t("dlg-add"), value: true, primary: true }, { label: "Cancel", value: null }],
   );
   const path = input.value.trim();
   if (!go || !path) return;
@@ -1751,20 +1751,20 @@ function referenceRow(v) {
       "span",
       { class: "refchip", title: r.path },
       el("span", { class: "name", text: r.path.split("\\").pop() }),
-      el("button", { type: "button", class: "small", text: r.under ? "Behind" : "In front", title: "Draw the reference behind or in front of the edited animation", onclick: () => { E.refs[i] = { ...r, under: !r.under }; saveActRefs(); loadActFrame(); } }),
-      el("button", { type: "button", class: "small", text: "✕", "aria-label": `Remove the reference ${r.path}`, onclick: () => { E.refs.splice(i, 1); saveActRefs(); loadActFrame(); } }),
+      el("button", { type: "button", class: "small", text: r.under ? t("ref-behind") : t("ref-front"), title: t("ref-toggle-title"), onclick: () => { E.refs[i] = { ...r, under: !r.under }; saveActRefs(); loadActFrame(); } }),
+      el("button", { type: "button", class: "small", text: "✕", "aria-label": t("ref-remove-aria", { path: r.path }), onclick: () => { E.refs.splice(i, 1); saveActRefs(); loadActFrame(); } }),
       problem.get(r.path) ? el("span", { class: "muted", text: problem.get(r.path) }) : null,
     ),
   );
-  return el("div", { class: "refs" }, el("span", { class: "muted", text: "References" }), ...chips, el("button", { type: "button", class: "small", text: "Add reference…", onclick: addActReference }));
+  return el("div", { class: "refs" }, el("span", { class: "muted", text: t("ref-label") }), ...chips, el("button", { type: "button", class: "small", text: t("ref-add-btn"), onclick: addActReference }));
 }
 
 async function openActEditor(row, action) {
   stopActPlay();
   // sounds are read again each time: a staged change may have replaced one
   Object.assign(E, { row, action, frame: 0, view: null, sounds: new Map() });
-  $("act-title").textContent = `Edit animation: ${row.name}`;
-  $("act-body").replaceChildren(el("p", { class: "muted", text: "Loading …" }));
+  $("act-title").textContent = t("act-title", { name: row.name });
+  $("act-body").replaceChildren(el("p", { class: "muted", text: t("pvw-loading") }));
   $("act-dlg").showModal();
   await loadActFrame();
 }
@@ -1776,8 +1776,8 @@ $("act-dlg").addEventListener("close", () => {
 });
 
 async function openTextEditor(row) {
-  $("text-title").textContent = `Edit ${row.name}`;
-  $("text-body").replaceChildren(el("p", { class: "muted", text: "Loading …" }));
+  $("text-title").textContent = t("te-title", { name: row.name });
+  $("text-body").replaceChildren(el("p", { class: "muted", text: t("pvw-loading") }));
   $("text-dlg").showModal();
   let doc;
   try {
@@ -1790,15 +1790,15 @@ async function openTextEditor(row) {
   area.value = doc.text;
   const msg = el("p", { class: "muted" });
   const lua = doc.format.startsWith("Lua");
-  if (!doc.complete) msg.textContent = "Parts of this file could not be decompiled and stay as a listing; they cannot be compiled again. Edit only what the text shows as Lua.";
-  const save = el("button", { type: "button", class: "primary", text: lua ? "Compile and stage" : "Stage" });
+  if (!doc.complete) msg.textContent = t("te-partial");
+  const save = el("button", { type: "button", class: "primary", text: lua ? t("te-compile") : t("te-stage") });
   save.addEventListener("click", async () => {
     save.disabled = true;
     msg.className = "muted";
-    msg.textContent = lua ? "Compiling …" : "Staging …";
+    msg.textContent = lua ? t("te-compiling") : t("te-staging");
     try {
       setPending(await invoke("stage_text_edit", { index: row.index, text: area.value }));
-      setStatus(`${row.name} staged${lua ? " (compiled again)" : ""}. Save with Changes….`);
+      setStatus(t(lua ? "te-status-compiled" : "te-status", { name: row.name }));
       $("text-dlg").close();
       refreshPreview();
     } catch (e) {
@@ -1894,7 +1894,7 @@ async function actEdit(edit) {
 
 /** Asks how many in-between frames to add, then stages them (see `Act::interpolate`). */
 async function openInterpolate(v) {
-  const count = el("input", { type: "number", min: "1", max: "20", value: "1", class: "narrow", "aria-label": "In-between frames per pair" });
+  const count = el("input", { type: "number", min: "1", max: "20", value: "1", class: "narrow", "aria-label": t("ip-count") });
   const whole = el("input", { type: "checkbox" });
   const smooth = el("input", { type: "checkbox" });
   const wrap = el("input", { type: "checkbox" });
@@ -1905,17 +1905,17 @@ async function openInterpolate(v) {
   sync();
   const row = (input, text) => el("label", { class: "check" }, input, ` ${text}`);
   const go = await ask(
-    "Add in-between frames",
+    t("ip-title"),
     [
-      el("p", { text: "Adds frames that move position, scale, rotation, colour and anchors in steps from one frame to the next. The picture and mirroring change halfway, and sounds stay with the original frames." }),
-      el("p", {}, el("label", {}, "In-between frames per pair ", count)),
-      row(whole, `Whole action (all ${v.frames} frames), not only frame ${v.frame + 1} and the next`),
-      row(smooth, "Smooth: slow at the start and the end of each step"),
-      row(wrap, "Loop: the last frame also blends back into the first"),
-      row(keep, "Keep the speed: shorten the frame time so the action lasts as long as before (whole action only)"),
-      last ? el("p", { class: "muted", text: "This is the last frame: without \"Loop\" or \"Whole action\" there is no next frame to blend with." }) : null,
+      el("p", { text: t("ip-intro") }),
+      el("p", {}, el("label", {}, `${t("ip-count")} `, count)),
+      row(whole, t("ip-whole", { frames: v.frames, frame: v.frame + 1 })),
+      row(smooth, t("ip-smooth")),
+      row(wrap, t("ip-loop")),
+      row(keep, t("ip-keep")),
+      last ? el("p", { class: "muted", text: t("ip-last") }) : null,
     ],
-    [{ label: "Add frames", value: true, primary: true }, { label: "Cancel", value: null }],
+    [{ label: t("ip-go"), value: true, primary: true }, { label: "Cancel", value: null }],
     "info",
   );
   if (!go) return;
@@ -1924,7 +1924,7 @@ async function openInterpolate(v) {
 }
 
 async function removeAction(i) {
-  const go = await ask(`Remove action ${i}?`, el("p", { text: "Later actions move down by one. The client picks actions by number (direction, state), so other files that use them may change meaning." }), [{ label: "Remove", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("act-remove-title", { n: i }), el("p", { text: t("act-remove-body") }), [{ label: t("btn-remove"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (go) await actEdit({ op: "remove_action" });
 }
 
@@ -1932,22 +1932,22 @@ const hex2 = (n) => n.toString(16).padStart(2, "0");
 
 function soundField(v) {
   const list = el("datalist", { id: "act-sounds" }, v.sounds.map((s) => el("option", { value: s })));
-  const input = el("input", { type: "text", style: "width:13em", list: "act-sounds", value: v.sound ?? "", placeholder: "none", title: "Sound file played with this frame, e.g. effect\\hit.wav (empty = none)", size: "22" });
+  const input = el("input", { type: "text", style: "width:13em", list: "act-sounds", value: v.sound ?? "", placeholder: t("act-sound-none"), title: t("act-sound-title"), size: "22" });
   input.addEventListener("change", () => actEdit({ op: "set_sound", name: input.value.trim() === "" ? null : input.value.trim() }));
   const note = el("span", { class: "muted", role: "status" });
   const hear = el("button", {
     type: "button",
     class: "small",
     icon: "audio",
-    title: "Play this sound (data\\wav\\ in the archive)",
-    "aria-label": "Play the sound of this frame",
+    title: t("act-sound-play-title"),
+    "aria-label": t("act-sound-play-aria"),
     disabled: !v.sound,
     onclick: async () => {
       const s = await playActSound(v.sound);
       note.textContent = s?.problem ? `${s.path ?? v.sound}: ${s.problem}` : "";
     },
   });
-  return el("span", { class: "soundfield" }, el("label", { class: "muted", text: "Sound " }, input, list), hear, note);
+  return el("span", { class: "soundfield" }, el("label", { class: "muted", text: `${t("act-sound")} ` }, input, list), hear, note);
 }
 
 /** Picks, drags and nudges layers on the frame picture; each finished move is one staged change. */
@@ -2041,50 +2041,50 @@ function drawActEditor() {
   };
   const setL = (layer, fields) => actEdit({ op: "set_layer", layer, ...fields });
   const actionSel = el("select", { onchange: () => { E.action = Number(actionSel.value); E.frame = 0; loadActFrame(); } });
-  for (let i = 0; i < v.actions; i++) actionSel.append(el("option", { value: i, text: `Action ${i}`, selected: i === v.action }));
+  for (let i = 0; i < v.actions; i++) actionSel.append(el("option", { value: i, text: t("pvw-action-n", { n: i }), selected: i === v.action }));
   const bar = el(
     "div",
     { class: "bar" },
-    el("label", { text: "Action " }, actionSel),
+    el("label", { text: `${t("pvw-action")} ` }, actionSel),
     el("button", { type: "button", class: "small", text: "◀", disabled: v.frame === 0, onclick: () => { E.frame -= 1; loadActFrame(); } }),
-    el("span", { text: `Frame ${v.frame + 1} / ${v.frames}` }),
+    el("span", { text: t("act-frame-label", { n: v.frame + 1, total: v.frames }) }),
     el("button", { type: "button", class: "small", text: "▶", disabled: v.frame >= v.frames - 1, onclick: () => { E.frame += 1; loadActFrame(); } }),
-    el("button", { type: "button", class: "small", text: E.playing ? "Stop" : "Play", "aria-pressed": String(E.playing), "data-act-play": "", title: "Play the action at its frame time, with the sounds of its frames", disabled: v.frames <= 1, onclick: toggleActPlay }),
-    el("label", { class: "muted", text: "ms/frame " }, num(v.interval_ms, (n) => actEdit({ op: "set_interval", ms: n }), { narrow: true })),
+    el("button", { type: "button", class: "small", text: E.playing ? t("act-stop") : t("act-play"), "aria-pressed": String(E.playing), "data-act-play": "", title: t("act-play-title"), disabled: v.frames <= 1, onclick: toggleActPlay }),
+    el("label", { class: "muted", text: `${t("act-ms")} ` }, num(v.interval_ms, (n) => actEdit({ op: "set_interval", ms: n }), { narrow: true })),
     el("span", { class: "muted", text: `ACT ${v.version}` }),
     v.sounds_supported ? soundField(v) : null,
-    el("button", { type: "button", class: "small", id: "act-undo", text: "Undo", onclick: () => doHistory(false) }),
-    el("button", { type: "button", class: "small", id: "act-redo", text: "Redo", onclick: () => doHistory(true) }),
-    el("button", { type: "button", class: "small", text: "Copy frame", title: "Insert a copy after this frame", onclick: () => actEdit({ op: "copy_frame" }) }),
-    el("button", { type: "button", class: "small", icon: "interpolate", text: "In-betweens…", title: "Add frames that blend smoothly from one frame to the next", disabled: v.frames <= 1, onclick: () => openInterpolate(v) }),
-    el("button", { type: "button", class: "small", text: "Frame ←", title: "Move the frame one place earlier", disabled: v.frame === 0, onclick: () => actEdit({ op: "move_frame", to: v.frame - 1 }) }),
-    el("button", { type: "button", class: "small", text: "Frame →", title: "Move the frame one place later", disabled: v.frame >= v.frames - 1, onclick: () => actEdit({ op: "move_frame", to: v.frame + 1 }) }),
-    el("button", { type: "button", class: "small", text: "Copy action", title: "Insert a copy of this action after it", onclick: () => actEdit({ op: "copy_action" }) }),
-    el("button", { type: "button", class: "small", text: "Action ↑", title: "Move the action one place earlier", disabled: v.action === 0, onclick: () => actEdit({ op: "move_action", to: v.action - 1 }) }),
-    el("button", { type: "button", class: "small", text: "Action ↓", title: "Move the action one place later", disabled: v.action >= v.actions - 1, onclick: () => actEdit({ op: "move_action", to: v.action + 1 }) }),
-    el("button", { type: "button", class: "small", text: "Remove action", disabled: v.actions <= 1, onclick: () => removeAction(v.action) }),
-    el("button", { type: "button", class: "small", text: "Remove frame", disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
+    el("button", { type: "button", class: "small", id: "act-undo", text: t("btn-undo"), onclick: () => doHistory(false) }),
+    el("button", { type: "button", class: "small", id: "act-redo", text: t("btn-redo"), onclick: () => doHistory(true) }),
+    el("button", { type: "button", class: "small", text: t("act-copy-frame"), title: t("act-copy-frame-title"), onclick: () => actEdit({ op: "copy_frame" }) }),
+    el("button", { type: "button", class: "small", icon: "interpolate", text: t("act-inbetween"), title: t("act-inbetween-title"), disabled: v.frames <= 1, onclick: () => openInterpolate(v) }),
+    el("button", { type: "button", class: "small", text: t("act-frame-earlier"), title: t("act-frame-earlier-title"), disabled: v.frame === 0, onclick: () => actEdit({ op: "move_frame", to: v.frame - 1 }) }),
+    el("button", { type: "button", class: "small", text: t("act-frame-later"), title: t("act-frame-later-title"), disabled: v.frame >= v.frames - 1, onclick: () => actEdit({ op: "move_frame", to: v.frame + 1 }) }),
+    el("button", { type: "button", class: "small", text: t("act-copy-action"), title: t("act-copy-action-title"), onclick: () => actEdit({ op: "copy_action" }) }),
+    el("button", { type: "button", class: "small", text: t("act-action-up"), title: t("act-action-up-title"), disabled: v.action === 0, onclick: () => actEdit({ op: "move_action", to: v.action - 1 }) }),
+    el("button", { type: "button", class: "small", text: t("act-action-down"), title: t("act-action-down-title"), disabled: v.action >= v.actions - 1, onclick: () => actEdit({ op: "move_action", to: v.action + 1 }) }),
+    el("button", { type: "button", class: "small", text: t("act-remove-action"), disabled: v.actions <= 1, onclick: () => removeAction(v.action) }),
+    el("button", { type: "button", class: "small", text: t("act-remove-frame"), disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
   );
   if (E.layer != null && E.layer >= v.layers.length) E.layer = null;
-  const stage = el("div", { class: "stage checker", tabindex: "0", "data-act-stage": "", role: "group", "aria-roledescription": "frame editor", "aria-label": `Frame ${v.frame + 1}. Click a layer to select it and drag it to move it; the arrow keys move the selected layer by 1 pixel, with Shift by 10.${E.layer != null ? ` Layer ${E.layer} is selected.` : ""}` });
+  const stage = el("div", { class: "stage checker", tabindex: "0", "data-act-stage": "", role: "group", "aria-roledescription": t("act-stage-role"), "aria-label": `${t("act-stage-aria", { n: v.frame + 1 })}${E.layer != null ? ` ${t("act-stage-sel", { n: E.layer })}` : ""}` });
   if (v.png) {
     stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width, height: v.height, alt: "", draggable: "false" }), el("div", { class: "cross-h", style: `top:${v.origin_y}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x}px` }));
-    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: `Anchor ${i}: drag to move it`, "data-anchor": String(i), style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
+    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: t("act-anchor-title", { n: i }), "data-anchor": String(i), style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
     const b = E.layer != null ? v.layers[E.layer]?.bounds : null;
     if (b) stage.append(el("div", { class: "layerbox", style: `left:${b[0]}px;top:${b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px` }));
     wireStage(stage, v);
   }
-  const left = el("div", {}, stage, v.error ? el("p", { class: "muted", text: `No picture: ${v.error}` }) : null, el("p", { class: "muted", text: "The lines mark the origin; red dots are anchors. Layers are drawn in order, the last one on top." }));
-  const head = ["#", "Type", "Image", "x", "y", "Mirror", v.separate_scale ? "Scale x / y" : "Scale", "Rot", "Colour", "α", ""];
+  const left = el("div", {}, stage, v.error ? el("p", { class: "muted", text: t("act-no-picture", { error: v.error }) }) : null, el("p", { class: "muted", text: t("act-stage-note") }));
+  const head = ["#", t("act-th-type"), t("act-th-image"), "x", "y", t("act-th-mirror"), v.separate_scale ? t("act-th-scale-xy") : t("act-th-scale"), t("act-th-rot"), t("act-th-colour"), "α", ""];
   const rows = v.layers.map((l, i) => {
-    const typeSel = el("select", { onchange: () => setL(i, { sprite_type: Number(typeSel.value) }) }, el("option", { value: 0, text: `palette (${v.indexed_images})`, selected: l.sprite_type === 0 }), el("option", { value: 1, text: `true colour (${v.rgba_images})`, selected: l.sprite_type === 1 }));
+    const typeSel = el("select", { onchange: () => setL(i, { sprite_type: Number(typeSel.value) }) }, el("option", { value: 0, text: t("act-type-palette", { n: v.indexed_images }), selected: l.sprite_type === 0 }), el("option", { value: 1, text: t("act-type-rgba", { n: v.rgba_images }), selected: l.sprite_type === 1 }));
     const mirror = el("input", { type: "checkbox", checked: l.mirror, onchange: () => setL(i, { mirror: mirror.checked }) });
     const colour = el("input", { type: "color", value: `#${hex2(l.color[0])}${hex2(l.color[1])}${hex2(l.color[2])}` });
     colour.addEventListener("change", () => setL(i, { color: [parseInt(colour.value.slice(1, 3), 16), parseInt(colour.value.slice(3, 5), 16), parseInt(colour.value.slice(5, 7), 16), l.color[3]] }));
     return el(
       "tr",
       { class: i === E.layer ? "sel" : "" },
-      el("td", {}, el("button", { type: "button", class: "small", text: String(i), title: "Select this layer (drag it on the picture or use the arrow keys there)", "aria-pressed": String(i === E.layer), onclick: () => { E.layer = i === E.layer ? null : i; drawActEditor(); } })),
+      el("td", {}, el("button", { type: "button", class: "small", text: String(i), title: t("act-layer-select"), "aria-pressed": String(i === E.layer), onclick: () => { E.layer = i === E.layer ? null : i; drawActEditor(); } })),
       el("td", {}, typeSel),
       el("td", {}, num(l.sprite_index, (n) => setL(i, { sprite_index: n }), { narrow: true })),
       el("td", {}, num(l.offset_x, (n) => setL(i, { offset_x: n }), { narrow: true })),
@@ -2094,19 +2094,19 @@ function drawActEditor() {
       el("td", {}, num(l.rotation, (n) => setL(i, { rotation: Math.round(n) }), { narrow: true })),
       el("td", {}, colour),
       el("td", {}, num(l.color[3], (n) => setL(i, { color: [l.color[0], l.color[1], l.color[2], Math.max(0, Math.min(255, Math.round(n)))] }), { narrow: true })),
-      el("td", {}, el("button", { type: "button", class: "small", text: "↑", title: "Draw earlier (below)", disabled: i === 0, onclick: () => actEdit({ op: "move_layer", layer: i, to: i - 1 }) }), el("button", { type: "button", class: "small", text: "↓", title: "Draw later (above)", disabled: i === v.layers.length - 1, onclick: () => actEdit({ op: "move_layer", layer: i, to: i + 1 }) }), el("button", { type: "button", class: "small", text: "✕", title: "Remove the layer", onclick: () => actEdit({ op: "remove_layer", layer: i }) })),
+      el("td", {}, el("button", { type: "button", class: "small", text: "↑", title: t("act-layer-earlier"), disabled: i === 0, onclick: () => actEdit({ op: "move_layer", layer: i, to: i - 1 }) }), el("button", { type: "button", class: "small", text: "↓", title: t("act-layer-later"), disabled: i === v.layers.length - 1, onclick: () => actEdit({ op: "move_layer", layer: i, to: i + 1 }) }), el("button", { type: "button", class: "small", text: "✕", title: t("act-layer-remove"), onclick: () => actEdit({ op: "remove_layer", layer: i }) })),
     );
   });
-  const layers = el("div", {}, el("div", { class: "tscroll" }, el("table", {}, el("thead", {}, el("tr", {}, head.map((t) => el("th", { text: t })))), el("tbody", {}, rows))), el("div", { class: "bar" }, el("button", { type: "button", class: "small", text: "+ Layer", onclick: () => actEdit({ op: "add_layer" }) })));
+  const layers = el("div", {}, el("div", { class: "tscroll" }, el("table", {}, el("thead", {}, el("tr", {}, head.map((t) => el("th", { text: t })))), el("tbody", {}, rows))), el("div", { class: "bar" }, el("button", { type: "button", class: "small", text: t("act-add-layer"), onclick: () => actEdit({ op: "add_layer" }) })));
   const anchors = v.anchors_supported
     ? el(
         "div",
         {},
-        el("h3", { text: "Anchors (where other sprites attach, e.g. headgear)" }),
+        el("h3", { text: t("act-anchors-heading") }),
         el("table", {}, el("tbody", {}, v.anchors.map((a, i) => el("tr", {}, el("td", { text: `#${i}` }), el("td", {}, num(a.x, (n) => actEdit({ op: "set_anchor", anchor: i, x: Math.round(n) }), { narrow: true })), el("td", {}, num(a.y, (n) => actEdit({ op: "set_anchor", anchor: i, y: Math.round(n) }), { narrow: true })), el("td", {}, el("button", { type: "button", class: "small", text: "✕", onclick: () => actEdit({ op: "remove_anchor", anchor: i }) })))))),
-        el("button", { type: "button", class: "small", text: "+ Anchor", onclick: () => actEdit({ op: "add_anchor" }) }),
+        el("button", { type: "button", class: "small", text: t("act-add-anchor"), onclick: () => actEdit({ op: "add_anchor" }) }),
       )
-    : el("p", { class: "muted", text: `ACT ${v.version} has no anchors.` });
+    : el("p", { class: "muted", text: t("act-no-anchors", { version: v.version }) });
   // every frame is drawn anew: keep the keyboard on Play/Stop while it plays
   const keepPlay = document.activeElement?.hasAttribute("data-act-play");
   const keepStage = document.activeElement?.hasAttribute("data-act-stage");
@@ -2118,14 +2118,14 @@ function drawActEditor() {
 
 async function setInterval_(row, action, current) {
   const input = el("input", { type: "number", class: "field", min: "1", step: "1", value: String(current) });
-  const go = await ask(`Interval of action ${action}`, [el("p", { text: "Time per frame in milliseconds (the file stores multiples of 25 ms):" }), input], [{ label: "Set", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("act-interval-title", { n: action }), [el("p", { text: t("act-interval-prompt") }), input], [{ label: t("act-interval-set"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   try {
     setPending(await invoke("stage_act_interval", { index: row.index, action, ms: Number(input.value) }));
-    setStatus(`Interval of action ${action} staged; save with Changes….`);
+    setStatus(t("act-interval-status", { n: action }));
     refreshPreview(action);
   } catch (e) {
-    await note("Could not set the interval", errText(e), true);
+    await note(t("act-interval-failed"), errText(e), true);
   }
 }
 
