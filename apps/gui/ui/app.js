@@ -184,7 +184,7 @@ async function openPath(path, force = false) {
   saveSettings();
   await runSearch("");
   setStatus(
-    `${S.info.file_name}: ${S.info.format}, ${fmtNum(S.info.files)} files, ${fmtBytes(S.info.file_size)}`,
+    t("open-status", { name: S.info.file_name, format: S.info.format, files: t("pvw-files", { n: S.info.files }), size: fmtBytes(S.info.file_size) }),
   );
   if (S.info.draft) await offerDraft(S.info.draft);
   $("viewport").focus();
@@ -746,10 +746,10 @@ function showFolderPreview(r) {
   ++S.previewToken;
   S.viewer?.destroy();
   S.viewer = null;
-  $("preview-head").replaceChildren(el("div", { class: "title", text: r.name }), el("div", { class: "meta", text: `Folder — ${fmtNum(r.count)} file(s), ${fmtBytes(r.bytes)} unpacked` }));
+  $("preview-head").replaceChildren(el("div", { class: "title", text: r.name }), el("div", { class: "meta", text: t("pvw-folder-meta", { files: t("pvw-files", { n: r.count }), size: fmtBytes(r.bytes) }) }));
   $("preview-body").replaceChildren(
-    el("div", { class: "controls" }, el("button", { type: "button", class: "small", text: r.expanded ? "Close" : "Open", onclick: () => toggleFolder(mainList, S.selected) })),
-    el("p", { class: "placeholder", text: "Extract… and Remove act on this folder when it is selected." }),
+    el("div", { class: "controls" }, el("button", { type: "button", class: "small", text: r.expanded ? t("dlg-close") : t("pvw-open"), onclick: () => toggleFolder(mainList, S.selected) })),
+    el("p", { class: "placeholder", text: t("pvw-folder-note") }),
   );
 }
 
@@ -757,7 +757,7 @@ function showFolderPreview(r) {
 
 function clearPreview() {
   $("preview-head").replaceChildren();
-  $("preview-body").replaceChildren(el("p", { class: "placeholder", text: S.info ? "Select an entry to preview it." : "" }));
+  $("preview-body").replaceChildren(el("p", { class: "placeholder", text: S.info ? t("pvw-select") : "" }));
 }
 
 async function showPreview(row, action) {
@@ -766,7 +766,7 @@ async function showPreview(row, action) {
   S.viewer = null;
   const head = $("preview-head");
   const body = $("preview-body");
-  head.replaceChildren(el("div", { class: "title", text: row.name }), el("div", { class: "meta", text: "Loading …" }));
+  head.replaceChildren(el("div", { class: "title", text: row.name }), el("div", { class: "meta", text: t("pvw-loading") }));
   body.replaceChildren();
   let details;
   let preview;
@@ -783,10 +783,10 @@ async function showPreview(row, action) {
   }
   if (token !== S.previewToken) return; // the selection moved on
   const meta = el("div", { class: "meta" });
-  meta.textContent = `${fmtBytes(details.size)} unpacked, ${fmtBytes(details.stored)} stored (${details.codec}), offset ${fmtNum(details.offset)}`;
+  meta.textContent = t("pvw-meta", { size: fmtBytes(details.size), stored: fmtBytes(details.stored), codec: details.codec, offset: details.offset });
   const staged = S.changed.get(changeKey(details.name));
-  if (staged) meta.textContent += ` — staged: ${staged === "remove" ? "removed" : staged === "add" ? "added" : "changed"}, shown as it will be saved`;
-  const hexBtn = el("button", { type: "button", class: "small hexbtn", icon: "file", text: "Hex…", title: "Show every byte of this file and change single bytes (staged)", onclick: () => openHexEditor(row, details.name) });
+  if (staged) meta.textContent += ` — ${t(`pvw-staged-${staged === "remove" ? "removed" : staged === "add" ? "added" : "changed"}`)}`;
+  const hexBtn = el("button", { type: "button", class: "small hexbtn", icon: "file", text: "Hex…", title: t("pvw-hex-title"), onclick: () => openHexEditor(row, details.name) });
   head.replaceChildren(el("div", { class: "title", text: details.name }), meta, hexBtn);
   body.replaceChildren(...renderPreview(preview, row, meta).filter(Boolean));
 }
@@ -925,7 +925,7 @@ async function openHexEditor(row, title) {
 
 /** A "Reset view" button that appears once the camera has left its start position. */
 function resetViewButton(handle) {
-  const b = el("button", { type: "button", class: "small", icon: "reset", text: "Reset view", title: "Back to the start view (also: double-click the picture)", hidden: true, onclick: () => handle.v?.view.reset() });
+  const b = el("button", { type: "button", class: "small", icon: "reset", text: t("pvw-reset-view"), title: t("pvw-reset-view-title"), hidden: true, onclick: () => handle.v?.view.reset() });
   // the viewer is created after the controls, so the hook is attached when it exists
   const attach = () => {
     const v = handle.v;
@@ -1010,16 +1010,16 @@ function renderPreview(p, row, meta) {
       const sel = el("select", {
         onchange: () => showPreview(row, Number(sel.value)),
       });
-      for (let i = 0; i < p.actions; i++) sel.append(el("option", { value: i, text: `Action ${i}`, selected: i === p.action }));
+      for (let i = 0; i < p.actions; i++) sel.append(el("option", { value: i, text: t("pvw-action-n", { n: i }), selected: i === p.action }));
       const controls = el(
         "div",
         { class: "controls" },
-        el("label", { text: "Action " }, sel),
-        el("span", { class: "muted", text: `${p.frames} frame(s), ${p.interval_ms} ms each` }),
-        el("button", { type: "button", class: "small", icon: "edit", text: "Edit frames…", title: "Edit layers, anchors and frames of this animation (staged)", onclick: () => openActEditor(row, p.action) }),
-        el("button", { type: "button", class: "small", icon: "animation", text: "Set interval…", title: "Change the frame time of this action (staged, saved with Changes…)", onclick: () => setInterval_(row, p.action, p.interval_ms) }),
+        el("label", { text: `${t("pvw-action")} ` }, sel),
+        el("span", { class: "muted", text: t("pvw-anim-meta", { frames: t("pvw-frames", { n: p.frames }), ms: p.interval_ms }) }),
+        el("button", { type: "button", class: "small", icon: "edit", text: t("pvw-anim-edit"), title: t("pvw-anim-edit-title"), onclick: () => openActEditor(row, p.action) }),
+        el("button", { type: "button", class: "small", icon: "animation", text: t("pvw-anim-interval"), title: t("pvw-anim-interval-title"), onclick: () => setInterval_(row, p.action, p.interval_ms) }),
       );
-      return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: `warning: ${p.note}` }) : null];
+      return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: t("pvw-warning", { note: p.note }) }) : null];
     }
     case "model": {
       const host = el("div", { class: "glhost" });
@@ -1030,7 +1030,7 @@ function renderPreview(p, row, meta) {
       const wire = el("input", { type: "checkbox", onchange: () => handle.v?.set("wire", wire.checked) });
       const animate = el("input", { type: "checkbox", checked: true, onchange: () => handle.v?.set("animate", animate.checked) });
       return [
-        el("div", { class: "controls" }, el("span", { class: "muted", text: `${fmtNum(p.triangles)} triangles — drag to turn, wheel to zoom, double-click to reset` }), el("label", {}, lit, " Lighting"), el("label", {}, wire, " Wireframe"), p.duration_ms > 0 ? el("label", {}, animate, " Animate") : null, resetViewButton(handle)),
+        el("div", { class: "controls" }, el("span", { class: "muted", text: t("pvw-model-hint", { n: p.triangles }) }), el("label", {}, lit, ` ${t("pvw-lighting")}`), el("label", {}, wire, ` ${t("pvw-wireframe")}`), p.duration_ms > 0 ? el("label", {}, animate, ` ${t("pvw-animate")}`) : null, resetViewButton(handle)),
         host,
         infoBlock(p.info),
       ];
@@ -1042,10 +1042,10 @@ function renderPreview(p, row, meta) {
       // the parts of the picture; "All" switches them together (Animate is motion, not a part)
       const parts = {};
       const allLabel = el("span");
-      const allBtn = el("button", { type: "button", class: "small", icon: "eye", title: "Show or hide lighting, lightmaps, models and water together" }, allLabel);
+      const allBtn = el("button", { type: "button", class: "small", icon: "eye", title: t("pvw-all-title") }, allLabel);
       const syncAll = () => {
         const on = Object.values(parts).some((c) => c.checked);
-        allLabel.textContent = on ? "Hide all" : "Show all";
+        allLabel.textContent = on ? t("pvw-hide-all") : t("pvw-show-all");
         allBtn.setAttribute("aria-pressed", String(Object.values(parts).every((c) => c.checked)));
       };
       const toggle = (label, name, isPart = true) => {
@@ -1065,22 +1065,22 @@ function renderPreview(p, row, meta) {
       const controls = el(
         "div",
         { class: "controls" },
-        toggle("Lighting", "lit"),
-        toggle("Lightmaps", "lightmap"),
-        toggle("Models", "models"),
-        toggle("Water", "water"),
+        toggle(t("pvw-lighting"), "lit"),
+        toggle(t("pvw-lightmaps"), "lightmap"),
+        toggle(t("pvw-models"), "models"),
+        toggle(t("pvw-water"), "water"),
         allBtn,
         resetViewButton(handle),
-        p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle("Animate", "animate", false) : null,
-        el("button", { type: "button", class: "small", icon: "image", text: "Save picture…", title: "Save the view as it is now (with what is switched off) as a PNG, larger than on screen", onclick: () => saveMapPicture(row, handle.v) }),
-        el("button", { type: "button", class: "small", icon: "extract", text: "Extract map…", title: "Write this map with the files it needs into a folder; parts switched off here can be left out", onclick: () => doExtractMap(row, shown()) }),
+        p.water?.frames?.length > 1 || p.models.some((m) => m.anim) ? toggle(t("pvw-animate"), "animate", false) : null,
+        el("button", { type: "button", class: "small", icon: "image", text: t("pvw-save-picture"), title: t("pvw-save-picture-title"), onclick: () => saveMapPicture(row, handle.v) }),
+        el("button", { type: "button", class: "small", icon: "extract", text: t("pvw-extract-map"), title: t("pvw-extract-map-title"), onclick: () => doExtractMap(row, shown()) }),
       );
       syncAll();
-      const hint = el("p", { class: "muted viewhint", text: "Drag to turn, right- or Shift-drag or the arrow keys to move, wheel to zoom, double-click to reset." });
+      const hint = el("p", { class: "muted viewhint", text: t("pvw-map-hint") });
       return [controls, hint, host, infoBlock(p.info)];
     }
     case "effect":
-      return [el("div", { class: "muted", text: `${p.frames} frame(s) shown at ${p.fps} fps` }), el("div", { class: "fxstage" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "effect" })), infoBlock(p.info)];
+      return [el("div", { class: "muted", text: t("pvw-effect", { frames: t("pvw-frames", { n: p.frames }), fps: p.fps }) }), el("div", { class: "fxstage" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "effect" })), infoBlock(p.info)];
     case "map":
       if (p.gat) return gatEditor(row, p);
       return [el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: "map" })), infoBlock(p.info)];
@@ -1088,23 +1088,23 @@ function renderPreview(p, row, meta) {
       return [el("pre", { text: p.lines.join("\n") })];
     case "video": {
       const note = el("p", { class: "muted", role: "status" });
-      const open = el("button", { type: "button", class: "small", icon: "video", text: "Open with the system's player", title: "Write the file to a temporary folder and open it with the program your system has for it", onclick: async () => {
+      const open = el("button", { type: "button", class: "small", icon: "video", text: t("pvw-video-open"), title: t("pvw-video-open-title"), onclick: async () => {
         try {
           const path = await invoke("open_external", { index: row.index });
-          note.textContent = `Opened ${path}. If nothing started, your system has no player for this format (VLC and RAD Video Tools play Bink).`;
+          note.textContent = t("pvw-video-opened", { path });
         } catch (e) {
           note.textContent = errText(e);
         }
       } });
       return [
-        el("p", { text: `Bink video, ${p.width} × ${p.height}, ${fmtNum(p.frames)} frames at ${p.fps.toFixed(2)} fps (${(p.frames / Math.max(p.fps, 0.01)).toFixed(1)} s), ${fmtBytes(p.size)}.` }),
-        el("p", { class: "muted", text: "This window cannot play Bink, a format of its own. It stays in the archive unchanged." }),
+        el("p", { text: t("pvw-video-info", { w: p.width, h: p.height, frames: t("pvw-frames", { n: p.frames }), fps: p.fps.toFixed(2), secs: (p.frames / Math.max(p.fps, 0.01)).toFixed(1), size: fmtBytes(p.size) }) }),
+        el("p", { class: "muted", text: t("pvw-video-note") }),
         el("div", { class: "controls" }, open),
         note,
       ];
     }
     case "hex":
-      return [el("div", { class: "muted", text: `${fmtNum(p.size)} bytes, first 512 shown` }), el("pre", { text: p.dump })];
+      return [el("div", { class: "muted", text: t("pvw-hex-head", { n: p.size }) }), el("pre", { text: p.dump })];
     default:
       return [el("p", { class: "placeholder", text: p.text || "" })];
   }
@@ -1119,67 +1119,61 @@ async function entriesOf(row) {
 
 /** Saves the 3D view of a map as it is now as PNG. */
 async function saveMapPicture(row, viewer) {
-  if (!viewer?.snapshot) return note("Cannot save the picture", "The 3D view is not ready.", true);
-  const scale = el("select", { class: "field" }, ...[[1, "As on screen"], [2, "2 × (recommended)"], [4, "4 ×"]].map(([v, t]) => el("option", { value: String(v), text: t, selected: v === 2 })));
-  const go = await ask("Save picture", [el("p", { text: "The view as it is now: same angle, and only what is switched on. A larger picture is drawn again at that size, not enlarged." }), el("div", { class: "form" }, el("label", {}, "Size ", scale))], [{ label: "Choose file…", value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!viewer?.snapshot) return note(t("sp-cannot"), t("sp-not-ready"), true);
+  const scale = el("select", { class: "field" }, ...[1, 2, 4].map((v) => el("option", { value: String(v), text: t(`sp-scale-${v}`), selected: v === 2 })));
+  const go = await ask(t("sp-title"), [el("p", { text: t("sp-intro") }), el("div", { class: "form" }, el("label", {}, `${t("sp-size")} `, scale))], [{ label: t("sp-choose-file"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   const base = row.name.split("\\").pop().replace(/\.[^.]+$/, "");
-  const path = await T.dialog.save({ title: "Save picture as", defaultPath: `${base}.png`, filters: [{ name: "PNG pictures", extensions: ["png"] }] });
+  const path = await T.dialog.save({ title: t("sp-save-as"), defaultPath: `${base}.png`, filters: [{ name: t("sp-filter"), extensions: ["png"] }] });
   if (!path) return;
   try {
     const shot = viewer.snapshot(Number(scale.value));
     const bytes = await invoke("save_picture", { path, png: shot.url.slice(shot.url.indexOf(",") + 1) });
-    setStatus(`Picture saved: ${path} (${shot.width} × ${shot.height}, ${fmtBytes(bytes)})`);
+    setStatus(t("sp-status", { path, w: shot.width, h: shot.height, size: fmtBytes(bytes) }));
   } catch (e) {
-    await note("Could not save the picture", errText(e), true);
+    await note(t("sp-failed"), errText(e), true);
   }
 }
 
-const MAP_PARTS = [
-  ["models", "Models and their textures"],
-  ["water", "Water pictures"],
-  ["sounds", "Sounds"],
-  ["minimap", "Minimap"],
-  ["effects", "Effect script and its textures"],
-];
+const MAP_PARTS = () => ["models", "water", "sounds", "minimap", "effects"].map((k) => [k, t(`em-part-${k}`)]);
 
 /** Writes the map of `row` (RSW, GAT or GND) with its files into a folder; `shown` are the switches of the 3D view. */
 async function doExtractMap(row, shown = {}) {
-  const boxes = Object.fromEntries(MAP_PARTS.map(([k]) => [k, el("input", { type: "checkbox", checked: shown[k] ?? true })]));
-  const offNote = shown.lit === false || shown.lightmap === false ? el("p", { class: "muted", text: "Lighting and lightmaps are part of the world and ground files, which are always written; switching them off only changes the view (use Save picture… for that)." }) : null;
+  const boxes = Object.fromEntries(MAP_PARTS().map(([k]) => [k, el("input", { type: "checkbox", checked: shown[k] ?? true })]));
+  const offNote = shown.lit === false || shown.lightmap === false ? el("p", { class: "muted", text: t("em-lit-note") }) : null;
   const go = await ask(
-    "Extract map",
+    t("em-title"),
     [
-      el("p", { text: "The world, ground and altitude files and the ground textures are always written. Parts switched off in the view start unticked here; the files are copied unchanged, so in the client the map still has everything it lists." }),
-      el("div", { class: "form" }, ...MAP_PARTS.map(([k, t]) => el("label", {}, boxes[k], ` ${t}`))),
+      el("p", { text: t("em-intro") }),
+      el("div", { class: "form" }, ...MAP_PARTS().map(([k, t]) => el("label", {}, boxes[k], ` ${t}`))),
       offNote,
     ],
-    [{ label: "Choose folder…", value: true, primary: true }, { label: "Cancel", value: null }],
+    [{ label: t("em-choose-folder"), value: true, primary: true }, { label: "Cancel", value: null }],
   );
   if (!go) return;
-  const skip = MAP_PARTS.map(([k]) => k).filter((k) => !boxes[k].checked);
-  const dest = await T.dialog.open({ directory: true, multiple: false, title: "Folder for the map (the files go below it as data\\...)" });
+  const skip = MAP_PARTS().map(([k]) => k).filter((k) => !boxes[k].checked);
+  const dest = await T.dialog.open({ directory: true, multiple: false, title: t("em-dest") });
   if (!dest) return;
-  setStatus("Extracting the map …");
+  setStatus(t("em-running"));
   try {
     let r;
     try {
       r = await invoke("extract_map", { index: row.index, dest, rename: false, skip });
     } catch (e) {
       if (!/exists/i.test(errText(e))) throw e;
-      const go = await ask("Files exist already", el("p", { text: `${errText(e)}. Keep both, with a number added to the new file names?` }), [{ label: "Keep both", value: true, primary: true }, { label: "Cancel", value: null }]);
-      if (!go) return setStatus("Nothing extracted");
+      const go = await ask(t("em-exists-title"), el("p", { text: t("em-exists-body", { error: errText(e) }) }), [{ label: t("em-keep-both"), value: true, primary: true }, { label: "Cancel", value: null }]);
+      if (!go) return setStatus(t("em-nothing"));
       r = await invoke("extract_map", { index: row.index, dest, rename: true, skip });
     }
-    setStatus(`Map ${r.map}: ${fmtNum(r.files)} files written to ${r.dest}`);
-    const body = [el("p", { text: `${fmtNum(r.files)} files of ${r.map} written to ${r.dest}.${r.skipped ? ` ${fmtNum(r.skipped)} left out (${skip.join(", ")}).` : ""}` })];
-    if (r.missing.length) body.push(el("p", { text: `${fmtNum(r.missing.length)} file(s) the map names are not in this archive (they may be in another GRF of the client):` }), el("ul", { class: "pending" }, ...r.missing.slice(0, 50).map((m) => el("li", { text: m }))));
+    setStatus(t("em-status", { map: r.map, files: t("pvw-files", { n: r.files }), dest: r.dest }));
+    const body = [el("p", { text: `${t("em-body", { files: t("pvw-files", { n: r.files }), map: r.map, dest: r.dest })}${r.skipped ? ` ${t("em-skipped", { files: t("pvw-files", { n: r.skipped }), parts: skip.map((k) => t(`em-part-${k}`)).join(", ") })}` : ""}` })];
+    if (r.missing.length) body.push(el("p", { text: t("em-missing", { files: t("pvw-files", { n: r.missing.length }) }) }), el("ul", { class: "pending" }, ...r.missing.slice(0, 50).map((m) => el("li", { text: m }))));
     if (r.problems.length) body.push(el("p", { class: "error", text: r.problems.slice(0, 10).join("\n") }));
-    if (r.damaged) body.push(el("p", { class: "error", text: `${fmtNum(r.damaged)} file(s) are damaged and were written as far as they could be read.` }));
-    await ask(r.missing.length || r.problems.length ? "Map extracted, with gaps" : "Map extracted", body, [{ label: "OK", value: true, primary: true }], r.missing.length || r.problems.length ? "warning" : "success");
+    if (r.damaged) body.push(el("p", { class: "error", text: t("em-damaged", { files: t("pvw-files", { n: r.damaged }) }) }));
+    await ask(r.missing.length || r.problems.length ? t("em-done-gaps") : t("em-done"), body, [{ label: "OK", value: true, primary: true }], r.missing.length || r.problems.length ? "warning" : "success");
   } catch (e) {
-    setStatus("Could not extract the map");
-    await note("Could not extract the map", errText(e), true);
+    setStatus(t("em-failed"));
+    await note(t("em-failed"), errText(e), true);
   }
 }
 

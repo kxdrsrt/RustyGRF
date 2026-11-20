@@ -9,13 +9,13 @@
 - HTML: `data-i18n="schlüssel"` (Text) und `data-i18n-attrs="schlüssel"` (Tooltip, Namen für Screenreader, Platzhalter); Skript: `t("schlüssel", { n })`.
 - **Einstellungen → Sprache** (Standard: Systemsprache; Wechsel ohne Neustart, gespeichert); Beta-Sprachen tragen „(Beta)“, dazu ein Hinweis.
 - **Native Menüleiste:** `set_menu_labels` baut sie beim Start und beim Sprachwechsel aus den `menu-*`-Schlüsseln neu auf. Die vom System gelieferten Einträge (Rückgängig, Kopieren, Beenden …) übersetzt das Betriebssystem selbst.
-- **Prüfskript** `node tools/check-i18n.mjs` (im Ordner `apps/gui`): Leser-Tests (Mehrzahl, Attribute), **gleiche Schlüssel und Platzhalter in allen Katalogen**, keine Klammern nach dem Formatieren, jeder von Seite und Skript benutzte Schlüssel steht in `en.ftl`. Stand: 397 Schlüssel, 8 Sprachen, alles grün.
+- **Prüfskript** `node tools/check-i18n.mjs` (im Ordner `apps/gui`): Leser-Tests (Mehrzahl, Attribute), **gleiche Schlüssel und Platzhalter in allen Katalogen**, keine Klammern nach dem Formatieren, jeder von Seite und Skript benutzte Schlüssel steht in `en.ftl`. Stand: 478 Schlüssel, 8 Sprachen, alles grün.
 
 **Abgedeckt (L0 teilweise):** Haupt- und Ansichtsleiste (alle Tooltips und Namen für Screenreader), Sortierung, Typ- und Größenfilter, Typnamen, leerer Zustand, Spaltenköpfe, Statuszeile (Zählung mit Mehrzahl), Speichern-Zähler, gemeinsame Knöpfe (OK, Abbrechen, Schließen, Fertig, Schnell, Vollständig), **Dialoge Prüfen, Erstellen, Zusammenführen, Extrahieren, Hinzufügen, Ersetzen, Entfernen, Änderungen, Speichern und der Fortschrittsdialog** (jeweils mit Status- und Fehlertiteln), **ganze Einstellungsseite mit den Erklärtexten zu Kompression und Format** (auch im Build-Dialog), Menüleiste.
 
-**Auch Hex-Editor und beide Dialoge „Bilder verkleinern“ (Archiv und einzelnes BMP) sind umgestellt (397 Schlüssel).**
+**Auch Hex-Editor, beide Dialoge „Bilder verkleinern“, die Vorschau (Kopfzeile, Ordner, Animation, 3D-Modell und Karte mit allen Schaltern, Effekt, Video, Hex), „Bild speichern“, „Karte extrahieren“ und die Statuszeile beim Öffnen sind umgestellt (478 Schlüssel).**
 
-**Noch nicht umgestellt (erscheint auf Englisch):** Karten-Extrahieren-, ACT-/SPR-/Paletten-/Karten-Editor-Dialoge, Vorschautexte, Status- und Fehlermeldungen aus dem Backend, die „(s)“-Stellen und zusammengesetzten Sätze aus dem Plan unten, Tooltips der in Skripten erzeugten Knöpfe. Das sind die nächsten Wellen von L0; jeder Dialog lässt sich einzeln umstellen, das Prüfskript meldet fehlende Schlüssel.
+**Noch nicht umgestellt (erscheint auf Englisch):** ACT-/SPR-/Paletten-/Karten-Editor-Dialoge, Vorschautexte, Status- und Fehlermeldungen aus dem Backend, die „(s)“-Stellen und zusammengesetzten Sätze aus dem Plan unten, Tooltips der in Skripten erzeugten Knöpfe. Das sind die nächsten Wellen von L0; jeder Dialog lässt sich einzeln umstellen, das Prüfskript meldet fehlende Schlüssel.
 
 **Nicht geprüft:** Aussehen aller Sprachen im echten Tauri-Fenster (nur im Browser mit dem echten Backend: Deutsch, Koreanisch, Pseudo, Japanisch, Filipino umgeschaltet, keine Skriptfehler); Mindestgröße 900 × 640 mit allen Sprachen und den Dialogen; Windows/Linux-Schriften für CJK; **die Übersetzungen selbst** (maschineller Entwurf; besonders die Erklärtexte, Verschlüsselung und Datenverlust gehören von Muttersprachlern gelesen).
 
