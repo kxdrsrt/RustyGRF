@@ -106,7 +106,7 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 
 | Funktion | RustyGRF | Stand |
 | --- | --- | --- |
-| Audio startet beim Auswählen (WAV/MP3/OGG) | Einstellung „Töne automatisch abspielen“ (Standard an); der vorige Klang wird gestoppt | ✅ im Browser (Chromium) geprüft; in den echten Webviews (WebView2, WKWebView) noch nicht |
+| Audio startet beim Auswählen (WAV/MP3/OGG) | Einstellung „Töne automatisch abspielen“ (Standard an); der vorige Klang wird gestoppt | ✅ im Browser (Chromium) und in WebView2 (Windows-VM, echter Klick: spielt bis zum Ende) geprüft; WKWebView (Mac) und Linux nicht |
 | WAV bearbeiten: Zuschneiden, Ausschneiden, Stille, Lautstärke (dB), Normalisieren, Ein-/Ausblenden, Umkehren, Mono, Umrechnen der Abtastrate, Tempo, Echo, Hall, Tief-/Hochpass | GUI „Klang bearbeiten…“ (Wellenform, Auswahl ziehen, Schrittliste, Vorhören) im Kontextmenü und in der Vorschau; CLI `rgrf audio info|edit`; Bibliothek `rgrf_formats::audio` | ✅ (Kern 6 Tests, alle 3.332 WAV der kRO-`data.grf` lassen sich lesen und bearbeiten, GUI-Test, CLI-Test) |
 | Ergebnis | 16-Bit-PCM-WAV (jeder Client spielt es); als vorgemerkte Änderung (rückgängig, Entwurf) | ✅ |
 | MP3/OGG bearbeiten | – (bräuchte einen Decoder und einen Encoder) | ❌ |
