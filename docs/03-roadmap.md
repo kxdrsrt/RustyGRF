@@ -173,7 +173,21 @@ Ziel: alle GRFs eines Clients so klein wie möglich, **ohne spürbaren Qualität
 
 **Warum nur −7 % bei `data`, gemessen (2026-11-20):** Die Eingabe war schon LZMA (Stufe 9); von 139.773 Strömen sind 573 zlib-Stufe 0 (PNG/Bink, schon komprimiert). Gespeichert sind 2.550 MB, davon BMP 1.122 MB (44 %), GND 299, SPR 203, PNG 193, ACT 167, WAV 161, TGA 143. Die 24-Bit-BMPs waren der einzige verlustarm angreifbare Teil und sind bis auf 3.682 (als 8 Bit *größer*, 1.416 unter 40 dB, 70 mit rauschigem Magenta) erledigt; bei 35 dB kämen nur 82 MiB dazu, bei 30 dB 91 MiB. Die übrigen 46.614 BMPs sind schon 8 Bit; große gemalte Texturen (1024², 256 Farben) liegen kaum unter ihrer Rohgröße (900 KB von 1.025 KB). LZMA-Parameter (lc/lp/pb) ändern nur ±1 % (Probe an 608 BMPs). 128 Farben statt 256 hielt bei großen gemalten Texturen nur etwa 37 dB (sichtbar) und sparte nichts. **Mehr geht nur mit sichtbarem Verlust oder durch Weglassen von Dateien** (etwa nie benutzte Texturen; dafür braucht es die Verweise aus Lua-Tabellen und Karten, siehe `client refs`).
 
-**Ungenutzte Dateien, gemessen (2026-11-20, `rgrf client unused` auf `test-smallest`, 3,7 s):** 1,7 Mio. Namen gesammelt, 196.546 Dateien angesehen, 83.146 von nichts genannt (897 MiB gespeichert), aber fast alles davon sind Fehlalarme: Effekt-Texturen, Oberflächen, Sprites (Robe, Körper, Zubehör) und Sounds werden aus Tabellen und Programmcode zusammengesetzt (Beispiel: `로브` 19.786 von 69.661 „ungenannt“, obwohl sie benutzt werden). **Verlässlich sind nur Karten-Ordner: 1.079 Dateien, 32 MiB (1,2 %)**, etwa Texturen und Modelle, die keine Karte mehr nennt. Das ist wenig; „weglassen“ lohnt sich also kaum, außer man entfernt bewusst ganze Bereiche (z. B. Karten, die der Server nicht nutzt, per `map extract`/Karten-Liste). Nicht im Spiel geprüft.
+**Ungenutzte Dateien, gemessen (2026-11-20, `rgrf client unused` auf `test-smallest`, 3,7 s):** 1,7 Mio. Namen gesammelt, 196.546 Dateien angesehen, 83.146 von nichts genannt (897 MiB gespeichert), aber fast alles davon sind Fehlalarme: Effekt-Texturen, Oberflächen, Sprites (Robe, Körper, Zubehör) und Sounds werden aus Tabellen und Programmcode zusammengesetzt (Beispiel: `로브` 19.786 von 69.661 „ungenannt“, obwohl sie benutzt werden). **Verlässlich sind nur Karten-Ordner: 1.033 Dateien, 31,6 MiB (1,2 %)**, etwa Texturen und Modelle, die keine Karte mehr nennt. Das ist wenig; „weglassen“ lohnt sich also kaum, außer man entfernt bewusst ganze Bereiche (z. B. Karten, die der Server nicht nutzt, per `map extract`/Karten-Liste). Nicht im Spiel geprüft.
+
+**Gesamtgröße der Client-Ordner (du.-Messung 2026-11-20):** `full` 8,0 GB (GRFs 7,5 GB) → `test-lzma` 3,2 GB (2,7 GB) → `test-smallest` 3,0 GB (2,5 GB). Der Rest außerhalb der GRFs: `BGM` 460 MB (MP3, Neukodieren wäre ein Qualitätsverlust und wurde nicht angefasst), `System` 25 MB, `skin` 19 MB.
+
+**Kompressionsverfahren im Vergleich (gemessen am 88-MB-`core.grf` von `test-lzma`, Mac, alles neu gepackt, 3-MiB-Wörterbuch wie der Client):**
+
+| Verfahren | Größe | Zeit |
+|---|---|---|
+| Original (gemischt) | 88,0 MB | – |
+| zlib 9 | 96,7 MB (+9,9 %) | 1,4 s |
+| zopfli (5 Durchläufe) | 92,1 MB (+4,7 %) | 126 s |
+| LZMA Stufe 6 | 80,5 MB (−8,5 %) | 7,9 s |
+| **LZMA Stufe 9** | **80,1 MB (−9,0 %)** | 12,3 s |
+
+LZMA ist also rund 17 % kleiner als zlib 9 und 13 % kleiner als Zopfli, Stufe 6 und 9 unterscheiden sich kaum (0,5 %). Größere Wörterbücher gehen nicht (die LZMA-`cps.dll` des Clients liest 3 MiB, siehe [02-format-notes.md](02-format-notes.md)). Die Spalte „zlib“ muss jeder Client lesen, LZMA nur mit der angepassten `cps.dll`. Für `data.grf` gibt es also keinen weiteren Gewinn durch ein anderes Verfahren: sie ist schon LZMA.
 
 **Nächste Stufe (Zukunft, nicht begonnen): so klein wie möglich *und* bessere Qualität** aller Texturen, Modelle, BMPs usw. Ideen, noch unbewertet:
 - besserer Quantisierer (Dithering nur wo es hilft, Fehlermaß SSIM statt nur PSNR, je Bild die kleinste Palette über der Schwelle);

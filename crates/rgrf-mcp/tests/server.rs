@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 10);
+    assert_eq!(ro.len(), 11);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 17);
+    assert_eq!(names(&rw).len(), 18);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -679,4 +679,20 @@ fn client_refs_needs_all_archives_and_counts_per_kind() {
     assert_eq!(v["by_kind"]["unreadable_sprite"], 1);
     assert!(v["by_kind"]["missing_sprite"].is_null());
     assert!(fails(&s, "grf_client_refs", json!({"paths": []})).contains("paths"));
+
+    // unused: a texture that a Lua file names and one nothing names
+    let u = make_grf(
+        &dir,
+        "unused.grf",
+        &[
+            ("data/texture/town/used.bmp", b"x"),
+            ("data/texture/town/lonely.bmp", b"y"),
+            ("data/luafiles514/t.lua", b"pic = \"town\\\\Used.bmp\""),
+        ],
+    );
+    let v = ok(&s, "grf_client_unused", json!({"paths": [u]}));
+    assert_eq!(v["files_looked_at"], 2);
+    assert_eq!(v["unnamed_files"], 1);
+    assert_eq!(v["folders"][0]["names_are_composed"], false);
+    assert!(fails(&s, "grf_client_unused", json!({"paths": []})).contains("paths"));
 }

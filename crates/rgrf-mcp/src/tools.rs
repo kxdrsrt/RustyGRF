@@ -238,6 +238,22 @@ pub const TOOLS: &[Tool] = &[
         run: client_refs_tool,
     },
     Tool {
+        name: "grf_client_unused",
+        title: "Find files nothing names",
+        description: "Lists the textures, sprites, sounds and models of the archives that no map, animation, effect, text, Lua table or XML names, per folder with the stored size: candidates to leave out of a smaller client. Give ALL archives of the client, highest priority first. Names the client puts together while it runs cannot be seen, so the result is only \"probably unused\": folders of maps (`names_are_composed` false: ground textures, models) are reliable, sprites, effects, interface and sounds are mostly false alarms (e.g. the robe sprites). Programs next to the archives are not scanned here (the CLI does that).",
+        params: &[
+            req(
+                "paths",
+                Ty::StrList,
+                "The archives of the client, highest priority first.",
+            ),
+            NAMES,
+            LIMIT,
+        ],
+        writes: false,
+        run: client_unused_tool,
+    },
+    Tool {
         name: "grf_lua_decompile",
         title: "Decompile a compiled Lua file",
         description: "Turns a compiled Lua 5.0 or 5.1 .lub entry back into source text. `complete` is false when some functions could only be shown as a commented bytecode listing (a few control-flow shapes are not understood yet); Lua 5.0 (62 files in the kRO client) is decompiled too. Set `listing` to get the plain bytecode listing instead.",
@@ -447,8 +463,16 @@ pub const TOOLS: &[Tool] = &[
                 Ty::Str,
                 "Which entries, as a glob (default \"*.bmp\").",
             ),
+            opt(
+                "recompress",
+                Ty::Bool,
+                "Also compress every unchanged entry again with `method` (needs `method`), e.g. a zlib archive to lzma (about 20 % smaller; needs the LZMA-capable cps.dll). Default: unchanged entries are copied as they are.",
+            ),
             NAMES,
             OUTPUT,
+            METHOD_OR_COPY,
+            LEVEL,
+            DEDUPE,
             OVERWRITE,
             DRY_RUN,
         ],
@@ -1090,7 +1114,13 @@ fn image_reduce_tool(ctx: &Ctx, a: &Args) -> Out {
     let min_psnr = a.opt_u64("min_psnr").unwrap_or(40) as f64;
     let only = a.opt_str("only").unwrap_or("*.bmp");
     let arc = open(ctx, a.str("path"))?;
-    let opts = repack_options(a, true)?;
+    let mut opts = repack_options(a, true)?;
+    if a.flag("recompress") {
+        if a.opt_str("method").is_none() {
+            return Err("`recompress` needs `method`".into());
+        }
+        opts.copy_streams = false;
+    }
     let idx = arc.select(Some(only), names_mode(a));
     let results: Vec<_> = idx
         .par_iter()
@@ -1286,6 +1316,95 @@ fn client_refs_tool(ctx: &Ctx, a: &Args) -> Out {
         "problems_truncated": list.len() > limit,
         "animations_without_sprite_by_folder": folders.iter().take(limit)
             .map(|(d, n)| json!({"folder": d, "count": n})).collect::<Vec<_>>(),
+    }))
+}
+
+fn client_unused_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::map_files::MapSource;
+    use rgrf_formats::unused::{Client, FileInfo, analyze, names_are_composed};
+    type Keyed = (Archive, HashMap<Vec<u8>, Vec<usize>>);
+    struct View {
+        archives: Vec<Keyed>,
+        files: Vec<FileInfo>,
+        at: Vec<(usize, usize)>,
+    }
+    impl View {
+        fn find(&self, path: &[u8]) -> Option<(usize, usize)> {
+            let key = GrfPath::new(path.to_vec()).key();
+            self.archives
+                .iter()
+                .enumerate()
+                .find_map(|(n, (_, m))| m.get(&key).and_then(|v| v.last()).map(|&i| (n, i)))
+        }
+    }
+    impl MapSource for View {
+        fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+            let (n, i) = self.find(path)?;
+            let d = self.archives[n].0.read(i).ok()?;
+            d.status.is_ok().then_some(d.data)
+        }
+        fn exists(&self, path: &[u8]) -> bool {
+            self.find(path).is_some()
+        }
+    }
+    impl Client for View {
+        fn files(&self) -> &[FileInfo] {
+            &self.files
+        }
+        fn read_file(&self, i: usize) -> Option<Vec<u8>> {
+            let (n, e) = self.at[i];
+            Some(self.archives[n].0.read(e).ok()?.data)
+        }
+    }
+    let paths = a.list("paths");
+    if paths.is_empty() {
+        return Err("give at least one archive in `paths`".into());
+    }
+    let mut v = View {
+        archives: Vec::new(),
+        files: Vec::new(),
+        at: Vec::new(),
+    };
+    for p in &paths {
+        let arc = open(ctx, p)?;
+        let keys = arc.index_by_key();
+        v.archives.push((arc, keys));
+    }
+    for n in 0..v.archives.len() {
+        let wins: Vec<(usize, Vec<u8>, u64)> = v.archives[n]
+            .1
+            .values()
+            .filter_map(|idxs| {
+                let &i = idxs.last()?;
+                let e = &v.archives[n].0.entries()[i];
+                e.is_file()
+                    .then(|| (i, e.name.as_bytes().to_vec(), u64::from(e.zsize)))
+            })
+            .collect();
+        for (i, path, zsize) in wins {
+            if v.find(&path) == Some((n, i)) {
+                v.files.push(FileInfo { path, zsize });
+                v.at.push((n, i));
+            }
+        }
+    }
+    ctx.control.check().map_err(err)?;
+    let r = analyze(&v, &[]);
+    let mode = names_mode(a);
+    let limit = a.opt_u64("limit").map_or(100, |n| n as usize);
+    let show = |b: &[u8]| GrfPath::new(b.to_vec()).display(mode);
+    Ok(json!({
+        "files_looked_at": r.files_looked_at,
+        "unnamed_files": r.unnamed, "unnamed_stored_bytes": r.unnamed_bytes,
+        "unnamed_in_map_folders": r.unnamed_reliable,
+        "unnamed_in_map_folders_stored_bytes": r.unnamed_reliable_bytes,
+        "names_found": r.names_found,
+        "folders": r.folders.iter().take(limit).map(|f| json!({
+            "folder": show(&f.name), "names_are_composed": names_are_composed(&f.name),
+            "files": f.files, "unnamed": f.unnamed, "unnamed_stored_bytes": f.unnamed_bytes,
+            "examples": f.examples.iter().map(|e| show(e)).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "folders_truncated": r.folders.len() > limit,
     }))
 }
 
