@@ -1,6 +1,28 @@
-# 12 – Lokalisierung (Plan, noch nichts umgesetzt)
+# 12 – Lokalisierung (L0–L2 für die Hauptoberfläche umgesetzt, Beta)
 
-Stand 2026-11-19. Ziel: die App (GUI) in diesen Sprachen, in dieser Reihenfolge der Wichtigkeit: **Deutsch, Spanisch, Portugiesisch (Brasilien), Koreanisch, Japanisch, Französisch, Indonesisch, Philippinisch**. Englisch bleibt die Ausgangssprache und der Rückfall.
+## Stand 2026-11-20: umgesetzt
+**Entscheidungen** (Nutzer: „ich folge allen Empfehlungen“): Fluent-Format, eine neutrale Spanisch-Fassung, Deutsch mit „du“, CLI bleibt Englisch, Dateien von Hand (Weblate erst, wenn das Projekt öffentlich wird), **maschinelle Entwürfe der KI, als Beta gekennzeichnet**, bis Muttersprachler sie gesehen haben.
+
+**Technik:**
+- `apps/gui/ui/i18n.js`: liest die benutzte **Teilmenge von Fluent** (Nachricht, Variablen `{ $n }`, Auswahl mit Mehrzahlkategorien und genauen Zahlen, Attribute `.title`/`.aria-label`/`.placeholder`/`.hint`, Kommentare). Keine Bibliothek; die Dateien bleiben echtes `.ftl` für Weblate und Co. Mehrzahl über `Intl.PluralRules`, Zahlen über `Intl.NumberFormat`. Fehlt ein Schlüssel, gilt **je Schlüssel** der englische Text.
+- `apps/gui/ui/i18n/<sprache>.ftl`: `en` (Quelle), `de`, `es`, `pt-BR`, `ko`, `ja`, `fr`, `id`, `fil`; dazu die **Pseudo-Sprache** `qps` (aus `en` erzeugt: Akzente, Länge +40 %, Klammern) zum Aufspüren von Texten, die nicht über den Katalog laufen. Französisch mit geschützten Leerzeichen vor `: ; » `.
+- HTML: `data-i18n="schlüssel"` (Text) und `data-i18n-attrs="schlüssel"` (Tooltip, Namen für Screenreader, Platzhalter); Skript: `t("schlüssel", { n })`.
+- **Einstellungen → Sprache** (Standard: Systemsprache; Wechsel ohne Neustart, gespeichert); Beta-Sprachen tragen „(Beta)“, dazu ein Hinweis.
+- **Native Menüleiste:** `set_menu_labels` baut sie beim Start und beim Sprachwechsel aus den `menu-*`-Schlüsseln neu auf. Die vom System gelieferten Einträge (Rückgängig, Kopieren, Beenden …) übersetzt das Betriebssystem selbst.
+- **Prüfskript** `node tools/check-i18n.mjs` (im Ordner `apps/gui`): Leser-Tests (Mehrzahl, Attribute), **gleiche Schlüssel und Platzhalter in allen Katalogen**, keine Klammern nach dem Formatieren, jeder von Seite und Skript benutzte Schlüssel steht in `en.ftl`. Stand: 242 Schlüssel, 8 Sprachen, alles grün.
+
+**Abgedeckt (L0 teilweise):** Haupt- und Ansichtsleiste (alle Tooltips und Namen für Screenreader), Sortierung, Typ- und Größenfilter, Typnamen, leerer Zustand, Spaltenköpfe, Statuszeile (Zählung mit Mehrzahl), Speichern-Zähler, gemeinsame Knöpfe (OK, Abbrechen, Schließen, Fertig, Schnell, Vollständig), **Prüfen-Dialog**, **ganze Einstellungsseite mit den Erklärtexten zu Kompression und Format** (auch im Build-Dialog), Menüleiste.
+
+**Noch nicht umgestellt (erscheint auf Englisch):** Build-, Merge-, Extrahieren-, Ersetzen-, Bild-verkleinern-, Hex-, ACT-/SPR-/Paletten-/Karten-Editor-Dialoge, Vorschautexte, Status- und Fehlermeldungen aus dem Backend, die „(s)“-Stellen und zusammengesetzten Sätze aus dem Plan unten, Tooltips der in Skripten erzeugten Knöpfe. Das sind die nächsten Wellen von L0; jeder Dialog lässt sich einzeln umstellen, das Prüfskript meldet fehlende Schlüssel.
+
+**Nicht geprüft:** Aussehen aller Sprachen im echten Tauri-Fenster (nur im Browser mit dem echten Backend: Deutsch, Koreanisch, Pseudo, Japanisch, Filipino umgeschaltet, keine Skriptfehler); Mindestgröße 900 × 640 mit allen Sprachen und den Dialogen; Windows/Linux-Schriften für CJK; **die Übersetzungen selbst** (maschineller Entwurf; besonders die Erklärtexte, Verschlüsselung und Datenverlust gehören von Muttersprachlern gelesen).
+
+**Neue Sprache hinzufügen:** `ui/i18n/<code>.ftl` anlegen (Schlüssel wie `en.ftl`), Eintrag in `LANGS` in `i18n.js`, `node tools/check-i18n.mjs`.
+
+---
+
+## Ursprünglicher Plan (Stand 2026-11-19)
+ Ziel: die App (GUI) in diesen Sprachen, in dieser Reihenfolge der Wichtigkeit: **Deutsch, Spanisch, Portugiesisch (Brasilien), Koreanisch, Japanisch, Französisch, Indonesisch, Philippinisch**. Englisch bleibt die Ausgangssprache und der Rückfall.
 
 ## Was übersetzt wird und was nicht
 

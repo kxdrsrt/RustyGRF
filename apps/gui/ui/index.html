@@ -66,119 +66,119 @@
   <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z"/></symbol>
   <symbol id="i-imf" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5"/></symbol>
 </svg>
-  <header class="toolbar maintoolbar" role="toolbar" aria-label="Main">
-    <div class="grp" role="group" aria-label="App">
-      <button id="btn-settings" type="button" title="Settings (Cmd/Ctrl+,)" aria-label="Settings"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></button>
-      <button id="btn-open" class="primary" title="Open a GRF archive (Cmd/Ctrl+O)"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open…</span></button>
+  <header class="toolbar maintoolbar" role="toolbar" data-i18n-attrs="tb-main">
+    <div class="grp" role="group" data-i18n-attrs="tb-app">
+      <button id="btn-settings" type="button" data-i18n-attrs="btn-settings"><svg class="ic" aria-hidden="true"><use href="#i-settings"/></svg></button>
+      <button id="btn-open" class="primary" data-i18n-attrs="btn-open"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span data-i18n="btn-open">Open…</span></button>
     </div>
-    <div class="grp" role="group" aria-label="Archive">
-      <button id="btn-build" title="Pack a folder into a new GRF"><svg class="ic" aria-hidden="true"><use href="#i-build"/></svg><span>Build…</span></button>
-      <button id="btn-merge" title="Merge several GRFs into a new one"><svg class="ic" aria-hidden="true"><use href="#i-merge"/></svg><span>Merge…</span></button>
-      <button id="btn-extract" disabled title="Extract the selected entries, or all shown"><svg class="ic" aria-hidden="true"><use href="#i-extract"/></svg><span>Extract…</span></button>
-      <button id="btn-verify" disabled title="Check the archive for errors"><svg class="ic" aria-hidden="true"><use href="#i-verify"/></svg><span>Verify</span></button>
+    <div class="grp" role="group" data-i18n-attrs="tb-archive">
+      <button id="btn-build" data-i18n-attrs="btn-build"><svg class="ic" aria-hidden="true"><use href="#i-build"/></svg><span data-i18n="btn-build">Build…</span></button>
+      <button id="btn-merge" data-i18n-attrs="btn-merge"><svg class="ic" aria-hidden="true"><use href="#i-merge"/></svg><span data-i18n="btn-merge">Merge…</span></button>
+      <button id="btn-extract" disabled data-i18n-attrs="btn-extract"><svg class="ic" aria-hidden="true"><use href="#i-extract"/></svg><span data-i18n="btn-extract">Extract…</span></button>
+      <button id="btn-verify" disabled data-i18n-attrs="btn-verify"><svg class="ic" aria-hidden="true"><use href="#i-verify"/></svg><span data-i18n="btn-verify">Verify</span></button>
     </div>
-    <div class="grp" role="group" aria-label="Edit">
-      <span class="grpmark" aria-hidden="true"><svg class="ic"><use href="#i-edit"/></svg>Edit</span>
-      <button id="btn-add" disabled title="Add a file from disk under a path in the archive"><svg class="ic" aria-hidden="true"><use href="#i-add"/></svg><span>Add file…</span></button>
-      <button id="btn-replace" disabled title="Replace the selected entry with a file from disk"><svg class="ic" aria-hidden="true"><use href="#i-replace"/></svg><span>Replace…</span></button>
-      <button id="btn-remove" disabled title="Leave the selected entry out of the saved archive"><svg class="ic" aria-hidden="true"><use href="#i-remove"/></svg><span>Remove</span></button>
-      <button id="btn-undo" disabled title="Undo the last staged change (Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span>Undo</span></button>
-      <button id="btn-redo" disabled title="Redo (Shift+Cmd/Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span>Redo</span></button>
-      <button id="btn-changes" disabled title="Review and save the pending changes as a new archive (Cmd/Ctrl+S)"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span id="changes-label">Save…</span><span id="changes-badge" class="badge" hidden>0</span></button>
+    <div class="grp" role="group" data-i18n-attrs="tb-edit">
+      <span class="grpmark" aria-hidden="true"><svg class="ic"><use href="#i-edit"/></svg><span data-i18n="tb-edit-mark">Edit</span></span>
+      <button id="btn-add" disabled data-i18n-attrs="btn-add"><svg class="ic" aria-hidden="true"><use href="#i-add"/></svg><span data-i18n="btn-add">Add file…</span></button>
+      <button id="btn-replace" disabled data-i18n-attrs="btn-replace"><svg class="ic" aria-hidden="true"><use href="#i-replace"/></svg><span data-i18n="btn-replace">Replace…</span></button>
+      <button id="btn-remove" disabled data-i18n-attrs="btn-remove"><svg class="ic" aria-hidden="true"><use href="#i-remove"/></svg><span data-i18n="btn-remove">Remove</span></button>
+      <button id="btn-undo" disabled data-i18n-attrs="btn-undo"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg><span data-i18n="btn-undo">Undo</span></button>
+      <button id="btn-redo" disabled data-i18n-attrs="btn-redo"><svg class="ic" aria-hidden="true"><use href="#i-redo"/></svg><span data-i18n="btn-redo">Redo</span></button>
+      <button id="btn-changes" disabled data-i18n-attrs="btn-save"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg><span id="changes-label" data-i18n="btn-save">Save…</span><span id="changes-badge" class="badge" hidden>0</span></button>
     </div>
     <span class="spacer"></span>
-    <input id="search" type="search" placeholder="Search: a name, or a pattern like *.spr" aria-label="Search" disabled autocomplete="off" spellcheck="false">
-    <div class="seg" id="preview-seg" role="group" aria-label="Preview position">
-      <button type="button" data-preview="right" title="Preview beside the list" aria-label="Preview on the right"><svg class="ic" aria-hidden="true"><use href="#i-preview-right"/></svg><span class="sr">Right</span></button>
-      <button type="button" data-preview="bottom" title="Preview below the list" aria-label="Preview at the bottom"><svg class="ic" aria-hidden="true"><use href="#i-preview-bottom"/></svg><span class="sr">Bottom</span></button>
-      <button type="button" data-preview="off" title="Hide the preview (Cmd/Ctrl+Shift+P)" aria-label="Hide the preview"><svg class="ic" aria-hidden="true"><use href="#i-preview-off"/></svg><span class="sr">Off</span></button>
+    <input id="search" type="search" data-i18n-attrs="search" disabled autocomplete="off" spellcheck="false">
+    <div class="seg" id="preview-seg" role="group" data-i18n-attrs="pv-group">
+      <button type="button" data-preview="right" data-i18n-attrs="pv-right"><svg class="ic" aria-hidden="true"><use href="#i-preview-right"/></svg><span class="sr" data-i18n="pv-right">Right</span></button>
+      <button type="button" data-preview="bottom" data-i18n-attrs="pv-bottom"><svg class="ic" aria-hidden="true"><use href="#i-preview-bottom"/></svg><span class="sr" data-i18n="pv-bottom">Bottom</span></button>
+      <button type="button" data-preview="off" data-i18n-attrs="pv-off"><svg class="ic" aria-hidden="true"><use href="#i-preview-off"/></svg><span class="sr" data-i18n="pv-off">Off</span></button>
     </div>
   </header>
 
-  <div class="toolbar viewbar" role="toolbar" aria-label="View and filter">
-    <div class="seg" id="view-seg" role="group" aria-label="List layout">
-      <button type="button" data-layout="tree" title="Folder tree with files (Cmd/Ctrl+1)"><svg class="ic" aria-hidden="true"><use href="#i-view-tree"/></svg><span>Tree</span></button>
-      <button type="button" data-layout="folders" title="Folders on the left, the files of the chosen folder on the right (Cmd/Ctrl+2)"><svg class="ic" aria-hidden="true"><use href="#i-view-folders"/></svg><span>Folders</span></button>
-      <button type="button" data-layout="list" title="Flat list: name, folder, size (Cmd/Ctrl+3)"><svg class="ic" aria-hidden="true"><use href="#i-view-list"/></svg><span>List</span></button>
-      <button type="button" data-layout="details" title="Flat table with sortable columns (Cmd/Ctrl+4)"><svg class="ic" aria-hidden="true"><use href="#i-view-details"/></svg><span>Details</span></button>
-      <button type="button" data-layout="gallery" title="Thumbnail gallery of pictures and sprites (Cmd/Ctrl+5)"><svg class="ic" aria-hidden="true"><use href="#i-view-gallery"/></svg><span>Gallery</span></button>
+  <div class="toolbar viewbar" role="toolbar" data-i18n-attrs="tb-view">
+    <div class="seg" id="view-seg" role="group" data-i18n-attrs="view-group">
+      <button type="button" data-layout="tree" data-i18n-attrs="view-tree"><svg class="ic" aria-hidden="true"><use href="#i-view-tree"/></svg><span data-i18n="view-tree">Tree</span></button>
+      <button type="button" data-layout="folders" data-i18n-attrs="view-folders"><svg class="ic" aria-hidden="true"><use href="#i-view-folders"/></svg><span data-i18n="view-folders">Folders</span></button>
+      <button type="button" data-layout="list" data-i18n-attrs="view-list"><svg class="ic" aria-hidden="true"><use href="#i-view-list"/></svg><span data-i18n="view-list">List</span></button>
+      <button type="button" data-layout="details" data-i18n-attrs="view-details"><svg class="ic" aria-hidden="true"><use href="#i-view-details"/></svg><span data-i18n="view-details">Details</span></button>
+      <button type="button" data-layout="gallery" data-i18n-attrs="view-gallery"><svg class="ic" aria-hidden="true"><use href="#i-view-gallery"/></svg><span data-i18n="view-gallery">Gallery</span></button>
     </div>
-    <label class="muted" for="sort"><span class="lbl">Sort</span>
+    <label class="muted" for="sort"><span class="lbl" data-i18n="sort">Sort</span>
       <select id="sort" disabled>
-        <option value="archive">Stored order</option>
-        <option value="name">Name</option>
-        <option value="path">Path</option>
-        <option value="type">Type</option>
-        <option value="size">Size</option>
-        <option value="stored">Stored size</option>
-        <option value="offset">Position in file</option>
+        <option value="archive" data-i18n="sort-archive">Stored order</option>
+        <option value="name" data-i18n="sort-name">Name</option>
+        <option value="path" data-i18n="sort-path">Path</option>
+        <option value="type" data-i18n="sort-type">Type</option>
+        <option value="size" data-i18n="sort-size">Size</option>
+        <option value="stored" data-i18n="sort-stored">Stored size</option>
+        <option value="offset" data-i18n="sort-offset">Position in file</option>
       </select>
     </label>
-    <button id="sort-dir" type="button" disabled title="Ascending or descending" aria-label="Sort direction"><svg class="ic" aria-hidden="true"><use id="sort-dir-use" href="#i-sort-asc"/></svg></button>
+    <button id="sort-dir" type="button" disabled data-i18n-attrs="sort-dir"><svg class="ic" aria-hidden="true"><use id="sort-dir-use" href="#i-sort-asc"/></svg></button>
     <details id="kind-filter" class="pop">
-      <summary class="btnlike" title="Show only some kinds of file"><svg class="ic" aria-hidden="true"><use href="#i-filter"/></svg><span id="kind-label">Type: all</span></summary>
+      <summary class="btnlike" data-i18n-attrs="kind-filter-title"><svg class="ic" aria-hidden="true"><use href="#i-filter"/></svg><span id="kind-label">Type: all</span></summary>
       <div class="popbody" id="kind-list"></div>
     </details>
-    <label class="muted" for="size-filter"><span class="lbl">Size</span>
+    <label class="muted" for="size-filter"><span class="lbl" data-i18n="size">Size</span>
       <select id="size-filter" disabled>
-        <option value="">any</option>
-        <option value="1k-">over 1 KB</option>
-        <option value="100k-">over 100 KB</option>
-        <option value="1m-">over 1 MB</option>
-        <option value="10m-">over 10 MB</option>
-        <option value="-1k">under 1 KB</option>
-        <option value="-100k">under 100 KB</option>
-        <option value="-1m">under 1 MB</option>
+        <option value="" data-i18n="size-any">any</option>
+        <option value="1k-" data-i18n="size-over-1k">over 1 KB</option>
+        <option value="100k-" data-i18n="size-over-100k">over 100 KB</option>
+        <option value="1m-" data-i18n="size-over-1m">over 1 MB</option>
+        <option value="10m-" data-i18n="size-over-10m">over 10 MB</option>
+        <option value="-1k" data-i18n="size-under-1k">under 1 KB</option>
+        <option value="-100k" data-i18n="size-under-100k">under 100 KB</option>
+        <option value="-1m" data-i18n="size-under-1m">under 1 MB</option>
       </select>
     </label>
-    <label id="recursive-wrap" class="muted" hidden title="Also list the files of the subfolders"><input type="checkbox" id="recursive"> Subfolders</label>
-    <button id="btn-expand" type="button" hidden title="Open every folder"><svg class="ic" aria-hidden="true"><use href="#i-expand"/></svg><span>Expand all</span></button>
-    <button id="btn-collapse" type="button" hidden title="Close every folder"><svg class="ic" aria-hidden="true"><use href="#i-collapse"/></svg><span>Collapse all</span></button>
-    <button id="btn-reset-filters" type="button" disabled title="Clear search, type and size filters"><svg class="ic" aria-hidden="true"><use href="#i-reset"/></svg><span>Reset</span></button>
+    <label id="recursive-wrap" class="muted" hidden data-i18n-attrs="subfolders"><input type="checkbox" id="recursive"> <span data-i18n="subfolders">Subfolders</span></label>
+    <button id="btn-expand" type="button" hidden data-i18n-attrs="expand-all"><svg class="ic" aria-hidden="true"><use href="#i-expand"/></svg><span data-i18n="expand-all">Expand all</span></button>
+    <button id="btn-collapse" type="button" hidden data-i18n-attrs="collapse-all"><svg class="ic" aria-hidden="true"><use href="#i-collapse"/></svg><span data-i18n="collapse-all">Collapse all</span></button>
+    <button id="btn-reset-filters" type="button" disabled data-i18n-attrs="reset-filters"><svg class="ic" aria-hidden="true"><use href="#i-reset"/></svg><span data-i18n="reset-filters">Reset</span></button>
   </div>
 
   <main class="pv-right">
-    <section id="list-pane" aria-label="Entries">
+    <section id="list-pane" data-i18n-attrs="entries-list">
       <div id="empty" class="empty">
         <h1>RustyGRF</h1>
-        <p>Open a GRF archive, or drop it on this window.</p>
-        <button id="btn-open-2" class="primary"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span>Open archive…</span></button>
+        <p data-i18n="empty-hint">Open a GRF archive, or drop it on this window.</p>
+        <button id="btn-open-2" class="primary" data-i18n-attrs="open-archive"><svg class="ic" aria-hidden="true"><use href="#i-open"/></svg><span data-i18n="open-archive">Open archive…</span></button>
       </div>
       <div id="lists" hidden>
-        <div id="folder-pane" hidden aria-label="Folders">
-          <button type="button" id="folder-all" class="folder-all" title="Show the files of every folder"><svg class="ic" aria-hidden="true"><use href="#i-folder-open"/></svg><span>All files</span></button>
-          <div id="folder-viewport" tabindex="0" role="tree" aria-label="Folders">
+        <div id="folder-pane" hidden data-i18n-attrs="folders-pane">
+          <button type="button" id="folder-all" class="folder-all" data-i18n-attrs="all-files"><svg class="ic" aria-hidden="true"><use href="#i-folder-open"/></svg><span data-i18n="all-files">All files</span></button>
+          <div id="folder-viewport" tabindex="0" role="tree" data-i18n-attrs="folders-pane">
             <div id="folder-spacer"><div id="folder-rows"></div></div>
           </div>
         </div>
-        <div id="split-folders" class="split v" hidden role="separator" aria-orientation="vertical" aria-label="Resize the folder list" tabindex="0"></div>
+        <div id="split-folders" class="split v" hidden role="separator" aria-orientation="vertical" data-i18n-attrs="split-folders" tabindex="0"></div>
         <div id="files-pane">
           <div id="colhead" hidden>
             <span></span>
-            <button type="button" data-sort="name">Name</button>
-            <button type="button" data-sort="type">Type</button>
-            <button type="button" data-sort="size">Size</button>
-            <button type="button" data-sort="stored">Stored</button>
+            <button type="button" data-sort="name" data-i18n="col-name">Name</button>
+            <button type="button" data-sort="type" data-i18n="col-type">Type</button>
+            <button type="button" data-sort="size" data-i18n="col-size">Size</button>
+            <button type="button" data-sort="stored" data-i18n="col-stored">Stored</button>
           </div>
-          <div id="viewport" tabindex="0" role="listbox" aria-label="Entries">
+          <div id="viewport" tabindex="0" role="listbox" data-i18n-attrs="entries-list">
             <div id="spacer"><div id="rows"></div></div>
           </div>
         </div>
       </div>
     </section>
-    <div id="split-main" class="split v" role="separator" aria-orientation="vertical" aria-label="Resize the preview (arrow keys)" title="Drag to resize, or focus and use the arrow keys" tabindex="0"></div>
-    <section id="preview-pane" aria-label="Preview">
+    <div id="split-main" class="split v" role="separator" aria-orientation="vertical" data-i18n-attrs="split-preview" tabindex="0"></div>
+    <section id="preview-pane" data-i18n-attrs="preview-pane">
       <div id="preview-head"></div>
       <div id="preview-body"></div>
     </section>
   </main>
 
   <footer class="statusbar">
-    <span id="status" role="status" aria-live="polite">Ready</span>
+    <span id="status" role="status" aria-live="polite" data-i18n="status-ready">Ready</span>
     <span id="count" class="muted" aria-live="polite"></span>
-    <label class="muted" for="names" title="How file names are shown and searched. Extracting always writes Latin-1 names, so the result matches `rgrf build`."><span class="lbl">Names</span>
+    <label class="muted" for="names" data-i18n-attrs="names"><span class="lbl" data-i18n="names">Names</span>
       <select id="names" disabled>
-        <option value="cp949" selected>Korean</option>
+        <option value="cp949" selected data-i18n="names-korean">Korean</option>
         <option value="cp1252">Latin-1</option>
         <option value="utf8">UTF-8</option>
       </select>
@@ -186,27 +186,27 @@
   </footer>
 
   <dialog id="act-dlg" class="wide">
-    <h2 id="act-title">Edit animation</h2>
+    <h2 id="act-title" data-i18n="dlg-edit-animation">Edit animation</h2>
     <div id="act-body"></div>
-    <form method="dialog" class="dlg-actions"><button id="act-close" class="primary">Close</button></form>
+    <form method="dialog" class="dlg-actions"><button id="act-close" class="primary" data-i18n="dlg-close">Close</button></form>
   </dialog>
 
   <dialog id="settings-dlg" class="wide" aria-labelledby="settings-title">
     <h2 id="settings-title"></h2>
-    <div id="settings-body" tabindex="0" role="group" aria-label="Settings"></div>
+    <div id="settings-body" tabindex="0" role="group" data-i18n-attrs="set-title"></div>
     <form method="dialog" class="dlg-actions" id="settings-actions"></form>
   </dialog>
 
   <dialog id="pix-dlg" class="wide" aria-labelledby="pix-title">
-    <h2 id="pix-title">Edit pixels</h2>
+    <h2 id="pix-title" data-i18n="dlg-edit-pixels">Edit pixels</h2>
     <div id="pix-body"></div>
     <form method="dialog" class="dlg-actions" id="pix-actions"></form>
   </dialog>
 
   <dialog id="text-dlg" class="wide">
-    <h2 id="text-title">Edit text</h2>
+    <h2 id="text-title" data-i18n="dlg-edit-text">Edit text</h2>
     <div id="text-body"></div>
-    <form method="dialog" class="dlg-actions"><button id="text-close">Close</button></form>
+    <form method="dialog" class="dlg-actions"><button id="text-close" data-i18n="dlg-close">Close</button></form>
   </dialog>
 
   <dialog id="dlg">
@@ -215,6 +215,7 @@
     <form method="dialog" class="dlg-actions" id="dlg-actions"></form>
   </dialog>
 
+  <script src="i18n.js"></script>
   <script src="mock.js"></script>
   <script src="viewer3d.js"></script>
   <script src="app.js"></script>

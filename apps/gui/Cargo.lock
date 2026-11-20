@@ -3085,6 +3085,7 @@ version = "0.0.0"
 dependencies = [
  "gif",
  "png",
+ "rayon",
  "thiserror 2.0.21",
 ]
 

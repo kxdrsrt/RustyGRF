@@ -1,0 +1,269 @@
+# RustyGRF – Português (Brasil) (Beta: rascunho automático, ainda não revisado por falantes nativos).
+
+tb-main = Principal
+    .aria-label = Principal
+tb-app = Aplicativo
+    .aria-label = Aplicativo
+tb-archive = Arquivo GRF
+    .aria-label = Arquivo GRF
+tb-edit = Edição
+    .aria-label = Edição
+tb-edit-mark = Edição
+tb-view = Exibição e filtros
+    .aria-label = Exibição e filtros
+
+btn-settings = Configurações
+    .title = Configurações (Cmd/Ctrl+,)
+    .aria-label = Configurações
+btn-open = Abrir…
+    .title = Abrir um arquivo GRF (Cmd/Ctrl+O)
+btn-build = Criar…
+    .title = Empacotar uma pasta em um novo GRF
+btn-merge = Mesclar…
+    .title = Mesclar vários GRFs em um novo
+btn-extract = Extrair…
+    .title = Extrair as entradas selecionadas, ou todas as exibidas
+btn-verify = Verificar
+    .title = Verificar se o arquivo tem erros
+btn-add = Adicionar arquivo…
+    .title = Adicionar um arquivo do disco em um caminho do GRF
+btn-replace = Substituir…
+    .title = Substituir a entrada selecionada por um arquivo do disco
+btn-remove = Remover
+    .title = Deixar a entrada selecionada fora do arquivo salvo
+btn-undo = Desfazer
+    .title = Desfazer a última alteração pendente (Cmd/Ctrl+Z)
+btn-redo = Refazer
+    .title = Refazer (Shift+Cmd/Ctrl+Z)
+btn-save = Salvar…
+    .title = Revisar e salvar as alterações pendentes como um novo arquivo (Cmd/Ctrl+S)
+
+search = Buscar
+    .placeholder = Buscar: um nome ou um padrão como *.spr
+    .aria-label = Buscar
+
+pv-group = Posição da visualização
+    .aria-label = Posição da visualização
+pv-right = Direita
+    .title = Visualização ao lado da lista
+    .aria-label = Visualização à direita
+pv-bottom = Abaixo
+    .title = Visualização abaixo da lista
+    .aria-label = Visualização abaixo
+pv-off = Não
+    .title = Ocultar a visualização (Cmd/Ctrl+Shift+P)
+    .aria-label = Ocultar a visualização
+
+view-group = Layout da lista
+    .aria-label = Layout da lista
+view-tree = Árvore
+    .title = Árvore de pastas com arquivos (Cmd/Ctrl+1)
+view-folders = Pastas
+    .title = Pastas à esquerda, arquivos da pasta escolhida à direita (Cmd/Ctrl+2)
+view-list = Lista
+    .title = Lista simples: nome, pasta, tamanho (Cmd/Ctrl+3)
+view-details = Detalhes
+    .title = Tabela simples com colunas ordenáveis (Cmd/Ctrl+4)
+view-gallery = Galeria
+    .title = Galeria de miniaturas de imagens e sprites (Cmd/Ctrl+5)
+
+sort = Ordem
+sort-archive = Ordem salva
+sort-name = Nome
+sort-path = Caminho
+sort-type = Tipo
+sort-size = Tamanho
+sort-stored = Tamanho compactado
+sort-offset = Posição no arquivo
+sort-dir = Direção da ordenação
+    .title = Crescente ou decrescente
+    .aria-label = Direção da ordenação
+
+kind-filter-title = Mostrar apenas alguns tipos de arquivo
+kind-label-all = Tipo: todos
+kind-label-pictures = Tipo: imagens
+kind-label-one = Tipo: { $kind }
+kind-label-n = Tipo: { $n } tipos
+kind-all = Todos
+kind-only-images = Só imagens
+kind-image = Imagens
+kind-sprite = Sprites
+kind-animation = Animações
+kind-palette = Paletas
+kind-map = Mapas
+kind-model = Modelos
+kind-audio = Áudio
+kind-text = Texto e Lua
+kind-effect = Efeitos
+kind-file = Outros
+
+size = Tamanho
+size-any = qualquer
+size-over-1k = mais de 1 KB
+size-over-100k = mais de 100 KB
+size-over-1m = mais de 1 MB
+size-over-10m = mais de 10 MB
+size-under-1k = menos de 1 KB
+size-under-100k = menos de 100 KB
+size-under-1m = menos de 1 MB
+
+subfolders = Subpastas
+    .title = Listar também os arquivos das subpastas
+expand-all = Expandir tudo
+    .title = Abrir todas as pastas
+collapse-all = Recolher tudo
+    .title = Fechar todas as pastas
+reset-filters = Limpar
+    .title = Limpar a busca e os filtros de tipo e tamanho
+
+empty-hint = Abra um arquivo GRF ou arraste-o para esta janela.
+open-archive = Abrir arquivo…
+folders-pane = Pastas
+    .aria-label = Pastas
+all-files = Todos os arquivos
+    .title = Mostrar os arquivos de todas as pastas
+col-name = Nome
+col-type = Tipo
+col-size = Tamanho
+col-stored = Compactado
+entries-list = Entradas
+    .aria-label = Entradas
+preview-pane = Visualização
+    .aria-label = Visualização
+split-folders = Redimensionar a lista de pastas
+    .aria-label = Redimensionar a lista de pastas
+split-preview = Redimensionar a visualização (setas do teclado)
+    .aria-label = Redimensionar a visualização (setas do teclado)
+    .title = Arraste, ou foque e use as setas do teclado
+
+status-ready = Pronto
+count-entries = { $n ->
+    [one] { $n } entrada
+   *[other] { $n } entradas
+ }
+count-filtered = { $n } de { $total }
+count-note-folders = (a busca abrange todas as pastas)
+count-note-pictures = (imagens e sprites)
+names = Nomes
+    .title = Como os nomes de arquivo são exibidos e buscados. Ao extrair, sempre são gravados nomes Latin-1, para que o resultado combine com `rgrf build`.
+names-korean = Coreano
+
+save-n = { $n ->
+    [one] Salvar a { $n } alteração pendente como um novo arquivo
+   *[other] Salvar as { $n } alterações pendentes como um novo arquivo
+ }
+save-none = Salvar as alterações pendentes como um novo arquivo
+save-aria-n = { $n ->
+    [one] Salvar { $n } alteração pendente como um novo arquivo
+   *[other] Salvar { $n } alterações pendentes como um novo arquivo
+ }
+save-aria-none = Salvar alterações
+
+dlg-ok = OK
+dlg-cancel = Cancelar
+dlg-close = Fechar
+dlg-done = Concluir
+dlg-quick = Rápida
+dlg-full = Completa
+dlg-edit-animation = Editar animação
+dlg-edit-pixels = Editar pixels
+dlg-edit-text = Editar texto
+
+verify-title = Verificar
+verify-body = A verificação rápida lê só a tabela de arquivos. A completa também decodifica cada entrada, o que lê o arquivo inteiro.
+verify-running = Verificando …
+verify-status = Verificado: { $errors } erros, { $warnings } avisos
+verify-summary-full = { $entries } entradas, todas decodificadas: { $errors } erros, { $warnings } avisos, { $infos } observações.
+verify-summary-quick = { $entries } entradas, só a tabela: { $errors } erros, { $warnings } avisos, { $infos } observações.
+verify-problems = Problemas encontrados
+verify-ok = Arquivo verificado
+verify-failed = A verificação falhou
+
+set-title = Configurações
+    .aria-label = Configurações
+set-appearance = Aparência
+set-theme = Tema
+set-theme-system = Seguir o sistema
+set-theme-light = Claro
+set-theme-dark = Escuro
+set-accent = Cor de destaque
+set-accent-orange = laranja
+set-accent-blue = azul
+set-accent-green = verde
+set-accent-purple = roxo
+set-textsize = Tamanho do texto
+set-small = Pequeno
+set-normal = Normal
+set-large = Grande
+set-density = Densidade da lista
+set-compact = Compacta
+set-comfortable = Confortável
+set-fileicons = Ícones de arquivo
+set-plainicons = Ícones simples (sem cores por tipo de arquivo)
+set-animations = Animações
+set-animations-hint = Desativa a seta e outras transições.
+set-motion-off = Não
+set-language = Idioma
+set-language-system = Seguir o sistema
+set-language-beta = { $name } (Beta)
+set-language-note = As traduções marcadas como Beta são rascunhos automáticos que nenhum falante nativo revisou ainda. Textos ainda não traduzidos aparecem em inglês.
+set-opening = Ao abrir um arquivo
+set-names = Nomes de arquivo
+set-names-cp949 = Coreano (CP949)
+set-names-cp1252 = Latin-1 (como o GRF Editor os mostra)
+set-names-utf8 = UTF-8
+set-layout = Layout da lista
+set-as-last = Como na última vez
+set-next-start = Vale a partir da próxima vez que o aplicativo iniciar.
+set-preview = Visualização
+set-startup = Inicialização
+set-reopen = Abrir novamente o último arquivo
+set-changes = Alterações
+set-warn-discard = Perguntar antes de descartar alterações pendentes
+set-building = Criar arquivos
+set-compression = Compressão
+set-format = Formato
+set-building-note = Estas são apenas as opções iniciais da caixa “Criar…”; lá você pode mudá-las para cada arquivo.
+set-stored-note = As configurações ficam guardadas só neste aplicativo. Atalho: { $key }+, abre esta janela.
+set-reset = Restaurar padrões
+
+method-zlib = zlib (todos os clientes)
+    .hint = O padrão. Todos os clientes conseguem ler e a criação é rápida. Escolha este, a menos que tenha um motivo para não fazê-lo.
+method-zopfli = zopfli (menor, lento)
+    .hint = Grava o mesmo formato zlib, então todos os clientes ainda conseguem ler, mas comprime um pouco mais os arquivos. A criação demora bem mais; a leitura é igualmente rápida.
+method-lzma = LZMA (precisa de suporte do cliente)
+    .hint = Menor que o zlib, mas só um cliente com suporte a LZMA consegue ler (por exemplo, um com uma cps.dll). Teste o arquivo no seu cliente antes de compartilhar.
+format-0x200 = 0x200 (todos os clientes)
+    .hint = O formato GRF padrão. Todos os clientes leem. As posições dos arquivos usam 32 bits, então o arquivo não pode passar de 4 GB.
+format-0x300 = 0x300 (acima de 4 GB)
+    .hint = Formato mais novo com posições de 64 bits, então o arquivo pode ter mais de 4 GB. Só clientes mais novos leem (medido: um cliente de 2025 lê, os de 2020 não). Use só quando 4 GB não bastarem.
+format-0x103 = 0x103 (clientes muito antigos)
+    .hint = Formato muito antigo, anterior ao 0x200: a tabela de arquivos não é compactada e os nomes e dados são embaralhados com a variante antiga do DES. Para clientes antigos demais para ler 0x200. Mesmo limite de 4 GB.
+format-0x102 = 0x102 (clientes muito antigos)
+    .hint = Igual ao 0x103 (só diferem no número da versão). Use se um cliente antigo pedir exatamente esta versão.
+
+menu-file = Arquivo
+menu-edit = Editar
+menu-view = Exibir
+menu-window = Janela
+menu-help = Ajuda
+menu-settings = Configurações...
+menu-open = Abrir...
+menu-build = Criar...
+menu-merge = Mesclar...
+menu-extract = Extrair...
+menu-verify = Verificar
+menu-changes-save = Salvar alterações como novo arquivo...
+menu-reduce-images = Reduzir imagens...
+menu-add = Adicionar arquivo...
+menu-replace = Substituir...
+menu-remove = Remover
+menu-changes-review = Revisar alterações...
+menu-layout-tree = Como árvore
+menu-layout-folders = Como pastas
+menu-layout-list = Como lista
+menu-layout-details = Como detalhes
+menu-layout-gallery = Como galeria
+menu-preview-right = Visualização à direita
+menu-preview-bottom = Visualização abaixo
+menu-preview-off = Ocultar visualização

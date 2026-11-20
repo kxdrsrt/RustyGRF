@@ -72,6 +72,10 @@ function dialogKind(title, buttons) {
   return buttons.length > 1 ? "question" : "info";
 }
 
+// buttons that appear in many dialogs come from the catalog
+const COMMON_LABELS = { OK: "dlg-ok", Cancel: "dlg-cancel", Close: "dlg-close", Done: "dlg-done", Quick: "dlg-quick", Full: "dlg-full" };
+const label = (x) => (COMMON_LABELS[x] ? t(COMMON_LABELS[x]) : x);
+
 function ask(title, body, buttons, kind) {
   return new Promise((resolve) => {
     const dlg = $("dlg");
@@ -85,7 +89,7 @@ function ask(title, body, buttons, kind) {
         el("button", {
           type: "button",
           class: x.primary ? "primary" : "",
-          text: x.label,
+          text: label(x.label),
           onclick: () => {
             dlg.close();
             resolve(x.value);
@@ -215,7 +219,8 @@ async function offerDraft(d) {
 
 // ---------- lists ----------
 
-const KINDS = [["image", "Images"], ["sprite", "Sprites"], ["animation", "Animations"], ["palette", "Palettes"], ["map", "Maps"], ["model", "Models"], ["audio", "Audio"], ["text", "Text and Lua"], ["effect", "Effects"], ["file", "Other"]];
+const KINDS = ["image", "sprite", "animation", "palette", "map", "model", "audio", "text", "effect", "file"];
+const kindName = (k) => (KINDS.includes(k) ? t(`kind-${k}`) : k);
 const SIZE_UNITS = { k: 1024, m: 1024 * 1024 };
 const PREFS_KEY = "rustygrf-view";
 
@@ -596,9 +601,9 @@ async function applyView({ keepSelection = true, autoExpand = false, pane = true
     clearPreview();
   }
   if (V.layout === "folders" && pane) await applyFolderPane(autoExpand);
-  $("count").textContent = filtersActive() ? `${fmtNum(S.matches)} of ${fmtNum(S.info.entries)}` : `${fmtNum(S.matches)} entries`;
+  $("count").textContent = filtersActive() ? t("count-filtered", { n: S.matches, total: S.info.entries }) : t("count-entries", { n: S.matches });
   $("btn-reset-filters").disabled = !filtersActive();
-  const note = V.layout === "folders" && S.query ? " (search covers all folders)" : V.layout === "gallery" && !V.kinds.length ? " (pictures and sprites)" : "";
+  const note = V.layout === "folders" && S.query ? ` ${t("count-note-folders")}` : V.layout === "gallery" && !V.kinds.length ? ` ${t("count-note-pictures")}` : "";
   if (note) $("count").textContent += note;
 }
 
@@ -667,7 +672,7 @@ function syncViewBar() {
   $("size-filter").value = V.size;
   for (const b of document.querySelectorAll("#colhead button")) b.classList.toggle("on", b.dataset.sort === V.sort);
   const kinds = $("kind-label");
-  kinds.textContent = V.layout === "gallery" && !V.kinds.length ? "Type: pictures" : V.kinds.length ? `Type: ${V.kinds.length === 1 ? (KINDS.find((k) => k[0] === V.kinds[0]) || [0, V.kinds[0]])[1] : `${V.kinds.length} kinds`}` : "Type: all";
+  kinds.textContent = V.layout === "gallery" && !V.kinds.length ? t("kind-label-pictures") : V.kinds.length ? (V.kinds.length === 1 ? t("kind-label-one", { kind: kindName(V.kinds[0]) }) : t("kind-label-n", { n: V.kinds.length })) : t("kind-label-all");
   $("kind-filter").querySelector("summary").classList.toggle("active", V.kinds.length > 0);
   $("viewport").setAttribute("role", V.layout === "tree" ? "tree" : "listbox");
   setGrid();
@@ -700,8 +705,8 @@ function setPreviewMode(mode) {
 function buildKindFilter() {
   const box = $("kind-list");
   box.replaceChildren(
-    ...KINDS.map(([k, label]) => el("label", {}, el("input", { type: "checkbox", value: k, checked: V.kinds.includes(k), onchange: onKindChange }), label)),
-    el("div", { class: "links" }, el("a", { text: "All", onclick: () => setKinds([]) }), el("a", { text: "Only images", onclick: () => setKinds(["image"]) })),
+    ...KINDS.map((k) => el("label", {}, el("input", { type: "checkbox", value: k, checked: V.kinds.includes(k), onchange: onKindChange }), kindName(k))),
+    el("div", { class: "links" }, el("a", { text: t("kind-all"), onclick: () => setKinds([]) }), el("a", { text: t("kind-only-images"), onclick: () => setKinds(["image"]) })),
   );
 }
 
@@ -1178,8 +1183,8 @@ function updateEditBar() {
   const n = S.changes.length;
   $("changes-badge").textContent = n;
   $("changes-badge").hidden = n === 0;
-  $("btn-changes").setAttribute("aria-label", n ? `Save ${n} pending changes as a new archive` : "Save changes");
-  $("btn-changes").title = (n ? `Save the ${n} pending change${n === 1 ? "" : "s"} as a new archive` : "Save the pending changes as a new archive") + " (Cmd/Ctrl+S)";
+  $("btn-changes").setAttribute("aria-label", n ? t("save-aria-n", { n }) : t("save-aria-none"));
+  $("btn-changes").title = (n ? t("save-n", { n }) : t("save-none")) + " (Cmd/Ctrl+S)";
   if (S.info) {
     invoke("history")
       .then((h) => {
@@ -2177,17 +2182,8 @@ async function saveEdited() {
 }
 
 // What the build options mean, shown next to the choice (Build dialog and Settings)
-const METHODS = [
-  ["zlib", "zlib (every client)", "The standard. Every client can read it and it builds fast. Choose this unless you have a reason not to."],
-  ["zopfli", "zopfli (smaller, slow)", "Writes the same zlib format, so every client can still read it, but squeezes the files a little further. Building takes much longer; reading is just as fast."],
-  ["lzma", "LZMA (needs client support)", "Smaller than zlib, but only a client with LZMA support can read it (for example one with a cps.dll). Try the archive in your client before you share it."],
-];
-const FORMATS = [
-  ["0x200", "0x200 (every client)", "The standard GRF format. Every client reads it. File positions are stored in 32 bits, so the archive cannot grow beyond 4 GB."],
-  ["0x300", "0x300 (over 4 GB)", "Newer format with 64-bit file positions, so the archive can be larger than 4 GB. Only newer clients read it (measured: a 2025 client does, 2020 clients do not). Use it only when 4 GB is not enough."],
-  ["0x103", "0x103 (very old clients)", "Very old format from before 0x200: the file table is not compressed and names and data are scrambled with the old DES variant. For clients too old to read 0x200. Same 4 GB limit."],
-  ["0x102", "0x102 (very old clients)", "Same as 0x103 (they differ only in the version number). Use it if an old client asks for exactly this version."],
-];
+const METHODS = () => ["zlib", "zopfli", "lzma"].map((k) => [k, t(`method-${k}`), t(`method-${k}.hint`)]);
+const FORMATS = () => ["0x200", "0x300", "0x103", "0x102"].map((k) => [k, t(`format-${k}`), t(`format-${k}.hint`)]);
 /** A select for one of `table`'s choices with a line under it that explains the current choice. */
 function explained(table, value, onchange) {
   const hint = el("div", { class: "hint" });
@@ -2203,8 +2199,8 @@ async function doBuild() {
   const src = await T.dialog.open({ directory: true, multiple: false, title: "Folder to pack (the folder that contains data\\ …)" });
   if (!src) return;
   const dedupe = el("input", { type: "checkbox" });
-  const m = explained(METHODS, SET.method);
-  const f = explained(FORMATS, SET.format, (v) => {
+  const m = explained(METHODS(), SET.method);
+  const f = explained(FORMATS(), SET.format, (v) => {
     const old = v === "0x102" || v === "0x103";
     dedupe.disabled = old;
     if (old) dedupe.checked = false;
@@ -2424,30 +2420,30 @@ function showJob(title) {
 
 async function doVerify() {
   if (!S.info) return;
-  const mode = await ask("Verify", el("p", { text: "A quick check reads only the file table. A full check also decodes every entry; that reads the whole archive." }), [
+  const mode = await ask(t("verify-title"), el("p", { text: t("verify-body") }), [
     { label: "Quick", value: false },
     { label: "Full", value: true, primary: true },
     { label: "Cancel", value: null },
   ]);
   if (mode === null) return;
-  setStatus("Verifying …");
+  setStatus(t("verify-running"));
   try {
     const r = await invoke("verify", { decode: mode });
-    setStatus(`Verified: ${r.errors} errors, ${r.warnings} warnings`);
-    const lines = [`${fmtNum(r.entries)} entries, ${r.decoded ? "all decoded" : "table only"}: ${r.errors} errors, ${r.warnings} warnings, ${r.infos} notes.`];
+    setStatus(t("verify-status", { errors: r.errors, warnings: r.warnings }));
+    const lines = [t(r.decoded ? "verify-summary-full" : "verify-summary-quick", { entries: r.entries, errors: r.errors, warnings: r.warnings, infos: r.infos })];
     const body = [el("p", { text: lines[0] })];
     if (r.issues.length) body.push(el("pre", { text: r.issues.join("\n") }));
-    await ask(r.errors ? "Problems found" : "Archive checked", body, [{ label: "OK", value: true, primary: true }]);
+    await ask(r.errors ? t("verify-problems") : t("verify-ok"), body, [{ label: "OK", value: true, primary: true }]);
   } catch (e) {
-    setStatus("Verification failed");
-    await note("Verification failed", errText(e), true);
+    setStatus(t("verify-failed"));
+    await note(t("verify-failed"), errText(e), true);
   }
 }
 
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, method: "zlib", format: "0x200", lastArchive: "" };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, method: "zlib", format: "0x200", lastArchive: "" };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -2484,15 +2480,15 @@ function applySettings() {
 
 function openSettings() {
   const dlg = $("settings-dlg");
-  $("settings-title").replaceChildren(svgIcon("settings", "dlg-ic"), "Settings");
+  $("settings-title").replaceChildren(svgIcon("settings", "dlg-ic"), t("set-title"));
   const change = (key, value) => {
     SET[key] = value;
     saveSettings();
     applySettings();
   };
   const row = (label, control, hint) => el("div", { class: "srow" }, el("label", { text: label }), control, hint ? el("div", { class: "hint", text: hint }) : null);
-  const pick = (key, options, hint) => {
-    const sel = el("select", { "aria-label": key }, options.map(([v, t]) => el("option", { value: v, text: t, selected: SET[key] === v })));
+  const pick = (key, label, options, hint) => {
+    const sel = el("select", { "aria-label": label }, options.map(([v, text]) => el("option", { value: v, text, selected: SET[key] === v })));
     sel.addEventListener("change", () => change(key, sel.value));
     return sel;
   };
@@ -2501,8 +2497,8 @@ function openSettings() {
     i.addEventListener("change", () => change(key, i.checked));
     return el("label", { class: "check" }, i, text);
   };
-  const accents = el("div", { class: "accents", role: "group", "aria-label": "Accent colour" }, [["orange", "#ea580c"], ["blue", "#3b82f6"], ["green", "#22a553"], ["purple", "#8b5cf6"]].map(([name, col]) => {
-    const b = el("button", { type: "button", title: name, "aria-label": name, "aria-pressed": String(SET.accent === name), class: SET.accent === name ? "on" : "", style: `background:${col}` });
+  const accents = el("div", { class: "accents", role: "group", "aria-label": t("set-accent") }, [["orange", "#ea580c"], ["blue", "#3b82f6"], ["green", "#22a553"], ["purple", "#8b5cf6"]].map(([name, col]) => {
+    const b = el("button", { type: "button", title: t(`set-accent-${name}`), "aria-label": t(`set-accent-${name}`), "aria-pressed": String(SET.accent === name), class: SET.accent === name ? "on" : "", style: `background:${col}` });
     b.addEventListener("click", () => {
       change("accent", name);
       for (const x of accents.children) {
@@ -2512,47 +2508,70 @@ function openSettings() {
     });
     return b;
   }));
+  const languages = [["system", t("set-language-system")], ...I18N.LANGS.map(([code, name, beta]) => [code, beta ? t("set-language-beta", { name }) : name])];
+  const langSel = pick("language", t("set-language"), languages);
+  langSel.addEventListener("change", () => {
+    setLanguage();
+    openSettings();
+  });
+  const layouts = [["last", t("set-as-last")], ["tree", t("view-tree")], ["folders", t("view-folders")], ["list", t("view-list")], ["details", t("view-details")], ["gallery", t("view-gallery")]];
+  const L = (label, key, table) => {
+    const e = explained(table, SET[key], (v) => change(key, v));
+    e.sel.setAttribute("aria-label", label);
+    return el("div", { class: "srow" }, el("label", { text: label }), e.sel, e.hint);
+  };
   $("settings-body").replaceChildren(
     el(
       "div",
       { class: "settings" },
-      el("h3", { text: "Appearance" }),
-      row("Theme", pick("theme", [["system", "Follow the system"], ["light", "Light"], ["dark", "Dark"]])),
-      row("Accent colour", accents),
-      row("Text size", pick("fontsize", [["small", "Small"], ["normal", "Normal"], ["large", "Large"]])),
-      row("List density", pick("density", [["compact", "Compact"], ["normal", "Normal"], ["comfortable", "Comfortable"]])),
-      row("File icons", check("plainIcons", "Plain icons (no colours by file type)")),
-      row("Animations", pick("motion", [["system", "Follow the system"], ["off", "Off"]]), "Turns off the arrow and other transitions."),
-      el("h3", { text: "When opening an archive" }),
-      row("File names", pick("names", [["cp949", "Korean (CP949)"], ["cp1252", "Latin-1 (as GRF Editor shows them)"], ["utf8", "UTF-8"]])),
-      row("List layout", pick("layout", [["last", "As last used"], ["tree", "Tree"], ["folders", "Folders"], ["list", "List"], ["details", "Details"], ["gallery", "Gallery"]]), "Takes effect the next time the app starts."),
-      row("Preview", pick("preview", [["last", "As last used"], ["right", "Right"], ["bottom", "Bottom"], ["off", "Off"]]), "Takes effect the next time the app starts."),
-      row("Start-up", check("reopen", "Open the last archive again")),
-      row("Changes", check("warnDiscard", "Ask before pending changes are discarded")),
-      el("h3", { text: "Building archives" }),
-      ...[["Compression", "method", METHODS], ["Format", "format", FORMATS]].map(([label, key, table]) => {
-        const e = explained(table, SET[key], (v) => change(key, v));
-        e.sel.setAttribute("aria-label", label);
-        return el("div", { class: "srow" }, el("label", { text: label }), e.sel, e.hint);
-      }),
-      el("p", { class: "muted", text: "These are only the starting choices of the Build… dialog; you can change them there for each archive." }),
-      el("p", { class: "muted", text: `Settings are stored in this app only. Shortcut: ${/Mac/.test(navigator.platform) ? "Cmd" : "Ctrl"}+, opens this window.` }),
+      el("h3", { text: t("set-appearance") }),
+      row(t("set-theme"), pick("theme", t("set-theme"), [["system", t("set-theme-system")], ["light", t("set-theme-light")], ["dark", t("set-theme-dark")]])),
+      row(t("set-language"), langSel, t("set-language-note")),
+      row(t("set-accent"), accents),
+      row(t("set-textsize"), pick("fontsize", t("set-textsize"), [["small", t("set-small")], ["normal", t("set-normal")], ["large", t("set-large")]])),
+      row(t("set-density"), pick("density", t("set-density"), [["compact", t("set-compact")], ["normal", t("set-normal")], ["comfortable", t("set-comfortable")]])),
+      row(t("set-fileicons"), check("plainIcons", t("set-plainicons"))),
+      row(t("set-animations"), pick("motion", t("set-animations"), [["system", t("set-theme-system")], ["off", t("set-motion-off")]]), t("set-animations-hint")),
+      el("h3", { text: t("set-opening") }),
+      row(t("set-names"), pick("names", t("set-names"), [["cp949", t("set-names-cp949")], ["cp1252", t("set-names-cp1252")], ["utf8", t("set-names-utf8")]])),
+      row(t("set-layout"), pick("layout", t("set-layout"), layouts), t("set-next-start")),
+      row(t("set-preview"), pick("preview", t("set-preview"), [["last", t("set-as-last")], ["right", t("pv-right")], ["bottom", t("pv-bottom")], ["off", t("pv-off")]]), t("set-next-start")),
+      row(t("set-startup"), check("reopen", t("set-reopen"))),
+      row(t("set-changes"), check("warnDiscard", t("set-warn-discard"))),
+      el("h3", { text: t("set-building") }),
+      L(t("set-compression"), "method", METHODS()),
+      L(t("set-format"), "format", FORMATS()),
+      el("p", { class: "muted", text: t("set-building-note") }),
+      el("p", { class: "muted", text: t("set-stored-note", { key: /Mac/.test(navigator.platform) ? "Cmd" : "Ctrl" }) }),
     ),
   );
   $("settings-actions").replaceChildren(
-    el("button", { type: "button", icon: "reset", text: "Reset to defaults", onclick: () => {
+    el("button", { type: "button", icon: "reset", text: t("set-reset"), onclick: () => {
       Object.assign(SET, DEFAULTS, { lastArchive: SET.lastArchive });
       saveSettings();
       applySettings();
+      setLanguage();
       openSettings();
     } }),
-    el("button", { type: "button", class: "primary", icon: "success", text: "Done", onclick: () => dlg.close() }),
+    el("button", { type: "button", class: "primary", icon: "success", text: t("dlg-done"), onclick: () => dlg.close() }),
   );
   if (!dlg.open) {
     dlg.showModal();
     // showModal focuses the first focusable element, which is the scrolling body itself
     $("settings-body").querySelector("select, input, button")?.focus();
   }
+}
+
+/** Loads the catalog of the chosen language and puts it on the window, the lists and the native menu. */
+function setLanguage() {
+  I18N.load(I18N.resolve(SET.language));
+  I18N.apply();
+  syncViewBar();
+  buildKindFilter();
+  if (typeof updateEditBar === "function") updateEditBar();
+  if (S.info) $("count").textContent = filtersActive() ? t("count-filtered", { n: S.matches, total: S.info.entries }) : t("count-entries", { n: S.matches });
+  mainList.draw();
+  invoke("set_menu_labels", { labels: I18N.menuLabels() }).catch(() => {});
 }
 
 // ---------- wiring ----------
@@ -2815,6 +2834,9 @@ for (const b of document.querySelectorAll("button")) {
   if (t && !b.hasAttribute("aria-label")) b.setAttribute("aria-label", t.replace(/…$/, ""));
   if (t && !b.title) b.title = t;
 }
+I18N.load(I18N.resolve(SET.language));
+I18N.apply();
+invoke("set_menu_labels", { labels: I18N.menuLabels() }).catch(() => {});
 if (SET.layout !== "last") V.layout = SET.layout;
 if (SET.preview !== "last") V.preview = SET.preview;
 applySettings();

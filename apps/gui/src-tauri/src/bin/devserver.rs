@@ -79,6 +79,8 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             let limit: usize = arg(a, "limit")?;
             to_json(s.page_view(arg(a, "view")?, arg(a, "offset")?, limit.min(500)))
         }),
+        // there is no native menu in the browser
+        "set_menu_labels" => Ok(serde_json::Value::Null),
         "thumbnails" => with(state, |s| {
             let entries: Vec<usize> = arg(a, "entries")?;
             to_json(s.thumbnails(&entries, arg(a, "side")?))
@@ -359,6 +361,7 @@ fn mime_of(p: &Path) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("png") => "image/png",
         Some("svg") => "image/svg+xml",
+        Some("ftl") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }

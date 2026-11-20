@@ -9,6 +9,7 @@ pub mod spr_editor;
 pub mod thumb;
 pub mod view;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -113,6 +114,12 @@ async fn thumbnails(
     side: u32,
 ) -> Res<Vec<backend::ThumbOut>> {
     with_session(&state, move |s| Ok(s.thumbnails(&entries, side))).await
+}
+
+/// Rebuilds the menu bar with the texts of the chosen language (`menu-*` entries of the catalog).
+#[tauri::command]
+fn set_menu_labels(app: AppHandle, labels: HashMap<String, String>) -> Res<()> {
+    build_menu(&app, &labels).map_err(|e| e.to_string())
 }
 
 /// Opens or closes a folder of a tree list; returns the number of lines.
@@ -742,14 +749,27 @@ const COMMAND_PREFIX: &str = "cmd:";
 ///
 /// Built in one go from filled submenus, like Tauri's own default menu: on Windows a submenu
 /// inserted into a finished menu bar does not show up, and Linux has no File menu by default.
-fn build_menu(app: &AppHandle) -> tauri::Result<()> {
+fn build_menu(app: &AppHandle, labels: &HashMap<String, String>) -> tauri::Result<()> {
     use tauri::menu::{AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
     type Item = Box<dyn IsMenuItem<tauri::Wry>>;
+    // the text of a menu entry: the catalog's (`menu-<key>`), else the English default
+    let lab = |key: &str, default: &str| -> String {
+        labels
+            .get(&format!("menu-{key}"))
+            .cloned()
+            .unwrap_or_else(|| default.to_string())
+    };
     let item = |id: &str, text: &str, accel: Option<&str>| -> tauri::Result<Item> {
+        // `id` is the command; its label key is the same except for the two "changes" entries
+        let key = match (id, text) {
+            ("changes", "Review Changes...") => "changes-review",
+            ("changes", _) => "changes-save",
+            _ => id,
+        };
         Ok(Box::new(MenuItem::with_id(
             app,
             format!("{COMMAND_PREFIX}{id}"),
-            text,
+            lab(key, text),
             true,
             accel,
         )?))
@@ -762,7 +782,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
     let settings: Item = Box::new(MenuItem::with_id(
         app,
         SETTINGS_MENU_ID,
-        "Settings...",
+        lab("settings", "Settings..."),
         true,
         Some("CmdOrCtrl+,"),
     )?);
@@ -843,12 +863,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<()> {
         file.push(Box::new(PredefinedMenuItem::quit(app, None)?));
         edit.push(sep()?);
         edit.push(settings);
-        help = Some(submenu("Help", &[about])?);
+        help = Some(submenu(&lab("help", "Help"), &[about])?);
     }
-    menus.push(submenu("File", &file)?);
-    menus.push(submenu("Edit", &edit)?);
-    menus.push(submenu("View", &view)?);
-    menus.push(submenu("Window", &window)?);
+    menus.push(submenu(&lab("file", "File"), &file)?);
+    menus.push(submenu(&lab("edit", "Edit"), &edit)?);
+    menus.push(submenu(&lab("view", "View"), &view)?);
+    menus.push(submenu(&lab("window", "Window"), &window)?);
     menus.extend(help);
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = menus
         .iter()
@@ -874,7 +894,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
-            build_menu(app.handle())?;
+            build_menu(app.handle(), &HashMap::new())?;
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -893,6 +913,7 @@ pub fn run() {
             set_view,
             page_view,
             thumbnails,
+            set_menu_labels,
             tree_toggle,
             tree_set_all,
             locate,
