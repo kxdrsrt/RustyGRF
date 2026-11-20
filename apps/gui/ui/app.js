@@ -1145,29 +1145,29 @@ async function doExtract() {
   if (!S.info) return;
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   const buttons = [];
-  if (sel) buttons.push({ label: sel.folder ? `Folder (${fmtNum(sel.count)} files)` : "Selected entry", value: "one", primary: true });
-  buttons.push({ label: `All ${fmtNum(S.matches)} in the list`, value: "all", primary: !sel });
+  if (sel) buttons.push({ label: sel.folder ? t("ext-folder", { n: sel.count }) : t("ext-entry"), value: "one", primary: true });
+  buttons.push({ label: t("ext-all", { n: S.matches }), value: "all", primary: !sel });
   buttons.push({ label: "Cancel", value: null });
-  const what = await ask("Extract", el("p", { text: filtersActive() ? "The list is filtered; \"all\" means the entries that match." : "The list shows the whole archive." }), buttons);
+  const what = await ask(t("ext-title"), el("p", { text: filtersActive() ? t("ext-filtered") : t("ext-whole") }), buttons);
   if (!what) return;
-  const dest = await T.dialog.open({ directory: true, multiple: false, title: "Extract into folder" });
+  const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
   if (!dest) return;
   const indices = what === "one" ? await entriesOf(sel) : [];
-  if (what === "one" && !indices.length) return note("Extract", "This folder holds no files.");
-  setStatus("Extracting …");
+  if (what === "one" && !indices.length) return note(t("ext-title"), t("ext-empty-folder"));
+  setStatus(t("ext-running"));
   let rename = false;
   for (;;) {
     try {
       const r = await invoke("extract", { indices, dest, rename });
-      setStatus(`Extracted ${fmtNum(r.files)} file(s) to ${r.dest}${r.damaged ? ` (${r.damaged} damaged)` : ""}`);
-      await note("Extracted", `${fmtNum(r.files)} file(s) written to ${r.dest}.${r.damaged ? ` ${r.damaged} entries were damaged; their recoverable part was written.` : ""}`);
+      setStatus(t("ext-done-status", { files: r.files, dest: r.dest }));
+      await ask(t("ext-done-title"), el("p", { text: `${t("ext-done-body", { files: r.files, dest: r.dest })}${r.damaged ? ` ${t("ext-damaged", { n: r.damaged })}` : ""}` }), [{ label: "OK", value: true, primary: true }], "success");
       return;
     } catch (e) {
-      setStatus("Extraction stopped");
-      const again = await ask("Could not extract", el("p", { class: "error", text: errText(e) }), [
-        { label: "Rename new files", value: true },
+      setStatus(t("ext-stopped"));
+      const again = await ask(t("ext-could-not"), el("p", { class: "error", text: errText(e) }), [
+        { label: t("ext-rename"), value: true },
         { label: "Cancel", value: false, primary: true },
-      ]);
+      ], "error");
       if (!again) return;
       rename = true;
     }
@@ -1222,11 +1222,11 @@ function setPending(rows) {
 async function doHistory(redo) {
   try {
     setPending(await invoke(redo ? "redo_change" : "undo_change"));
-    setStatus(redo ? "Change redone" : "Change undone");
+    setStatus(redo ? t("history-redone") : t("history-undone"));
     if ($("act-dlg").open) await loadActFrame();
     refreshPreview($("act-dlg").open ? E.action : undefined);
   } catch (e) {
-    await note("Could not change the history", errText(e), true);
+    await note(t("history-failed"), errText(e), true);
   }
 }
 
@@ -2096,64 +2096,64 @@ async function setInterval_(row, action, current) {
 async function doReplace() {
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   if (!sel) return;
-  const file = await T.dialog.open({ multiple: false, directory: false, title: `File that replaces ${sel.name}` });
+  const file = await T.dialog.open({ multiple: false, directory: false, title: t("replace-pick", { name: sel.name }) });
   if (!file) return;
   try {
     setPending(await invoke("stage_replace", { index: sel.index, file }));
-    setStatus(`Replacement staged for ${sel.name}; save it with Changes…`);
+    setStatus(t("replace-status", { name: sel.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not stage the replacement", errText(e), true);
+    await note(t("replace-failed"), errText(e), true);
   }
 }
 
 async function doAdd() {
-  const file = await T.dialog.open({ multiple: false, directory: false, title: "File to add" });
+  const file = await T.dialog.open({ multiple: false, directory: false, title: t("add-pick") });
   if (!file) return;
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   const folder = sel ? (sel.folder ? `${sel.name}\\` : sel.name.slice(0, sel.name.lastIndexOf("\\") + 1)) : "data\\";
   const input = el("input", { type: "text", class: "field", value: folder + file.split(/[\\/]/).pop(), spellcheck: "false" });
-  const go = await ask("Add file", [el("p", { text: "Path inside the archive (an existing path is replaced):" }), input], [{ label: "Add", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("add-title"), [el("p", { text: t("add-prompt") }), input], [{ label: t("dlg-add"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   try {
     setPending(await invoke("stage_add", { path: input.value, file }));
-    setStatus(`Staged ${input.value}; save it with Changes…`);
+    setStatus(t("add-status", { path: input.value }));
   } catch (e) {
-    await note("Could not stage the file", errText(e), true);
+    await note(t("add-failed"), errText(e), true);
   }
 }
 
 async function doRemove() {
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   const buttons = [];
-  if (sel) buttons.push({ label: sel.folder ? `Folder (${fmtNum(sel.count)} files)` : "Selected entry", value: "one", primary: true });
-  buttons.push({ label: `All ${fmtNum(S.matches)} in the list`, value: "all", primary: !sel });
+  if (sel) buttons.push({ label: sel.folder ? t("ext-folder", { n: sel.count }) : t("ext-entry"), value: "one", primary: true });
+  buttons.push({ label: t("ext-all", { n: S.matches }), value: "all", primary: !sel });
   buttons.push({ label: "Cancel", value: null });
-  const what = await ask("Remove from the saved archive", el("p", { text: "Nothing is deleted now: the entries are left out when you save the changes as a new archive." }), buttons);
+  const what = await ask(t("remove-title"), el("p", { text: t("remove-body") }), buttons, "warning");
   if (!what) return;
   try {
     const list = what === "one" ? await entriesOf(sel) : [];
-    if (what === "one" && !list.length) return note("Remove", "This folder holds no files.");
+    if (what === "one" && !list.length) return note(t("btn-remove"), t("ext-empty-folder"));
     setPending(await invoke("stage_remove", { indices: list }));
-    setStatus(`${what === "one" ? `${fmtNum(list.length)} ${list.length === 1 ? "entry" : "entries"}` : `${fmtNum(S.matches)} entries`} marked for removal`);
+    setStatus(t("remove-status", { n: what === "one" ? list.length : S.matches }));
     refreshPreview();
   } catch (e) {
-    await note("Could not stage the removal", errText(e), true);
+    await note(t("remove-failed"), errText(e), true);
   }
 }
 
 async function doChanges() {
   if (!S.changes.length) {
-    await note("Changes", "No pending changes. Use Replace…, Add file… or Remove; the open archive is never modified, the result is saved as a new archive.");
+    await note(t("changes-title"), t("changes-none"));
     return;
   }
   const list = el("ul", { class: "pending" }, ...S.changes.slice(0, 500).map((p) => el("li", {}, el("span", { class: "kind", text: p.kind }), el("span", { text: p.name }), p.file ? el("span", { class: "file", text: p.file }) : null)));
-  const more = S.changes.length > 500 ? el("p", { class: "muted", text: `… and ${fmtNum(S.changes.length - 500)} more` }) : null;
-  const act = await ask(`${fmtNum(S.changes.length)} pending change(s)`, [list, more], [{ label: "Save as new archive…", value: "save", primary: true }, { label: "Discard all", value: "discard" }, { label: "Close", value: null }]);
+  const more = S.changes.length > 500 ? el("p", { class: "muted", text: t("changes-more", { n: S.changes.length - 500 }) }) : null;
+  const act = await ask(t("changes-heading", { n: S.changes.length }), [list, more], [{ label: t("changes-save"), value: "save", primary: true }, { label: t("changes-discard"), value: "discard" }, { label: "Close", value: null }]);
   if (act === "discard") {
     await invoke("discard_pending");
     setPending([]);
-    setStatus("Changes discarded");
+    setStatus(t("changes-discarded"));
     refreshPreview();
   } else if (act === "save") {
     await saveEdited();
@@ -2162,22 +2162,22 @@ async function doChanges() {
 
 async function saveEdited() {
   const base = S.info.file_name.replace(/\.[^.]+$/, "");
-  const dst = await T.dialog.save({ title: "Save changed archive as", defaultPath: `${base}-edited.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  const dst = await T.dialog.save({ title: t("save-pick"), defaultPath: `${base}-edited.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
   if (!dst) return;
-  const job = showJob("Saving archive");
-  setStatus(`Saving ${dst} …`);
+  const job = showJob(t("save-running"));
+  setStatus(t("save-status", { dst }));
   try {
     const r = await invoke("save_edited", { dst });
     job.close();
-    setStatus(`Saved ${dst}`);
-    const body = [el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}: ${fmtNum(r.added)} added, ${fmtNum(r.replaced)} replaced, ${fmtNum(r.removed)} removed.` }), el("p", { class: "muted", text: "The original archive was not changed. The pending changes are kept until you discard them." })];
-    const open = await ask("Archive saved", body, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    setStatus(t("save-done-status", { dst }));
+    const body = [el("p", { text: t("save-result", { files: r.files, size: fmtBytes(r.file_bytes), verified: r.verified ? t("verified-yes") : t("verified-no"), added: r.added, replaced: r.replaced, removed: r.removed }) }), el("p", { class: "muted", text: t("save-note") })];
+    const open = await ask(t("save-done-title"), body, [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }]);
     if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
     const cancelled = /cancel/i.test(errText(e));
-    setStatus(cancelled ? "Save cancelled" : "Save failed");
-    await note(cancelled ? "Save cancelled" : "Could not save", cancelled ? "Nothing was written." : errText(e), !cancelled);
+    setStatus(cancelled ? t("save-cancelled") : t("save-failed"));
+    await note(cancelled ? t("save-cancelled") : t("save-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
 }
 
@@ -2196,7 +2196,7 @@ function explained(table, value, onchange) {
 }
 
 async function doBuild() {
-  const src = await T.dialog.open({ directory: true, multiple: false, title: "Folder to pack (the folder that contains data\\ …)" });
+  const src = await T.dialog.open({ directory: true, multiple: false, title: t("build-pick") });
   if (!src) return;
   const dedupe = el("input", { type: "checkbox" });
   const m = explained(METHODS(), SET.method);
@@ -2208,43 +2208,43 @@ async function doBuild() {
   const method = m.sel, format = f.sel;
   dedupe.disabled = format.value === "0x102" || format.value === "0x103";
   const body = [
-    el("p", { text: `Pack ${src}` }),
+    el("p", { text: t("build-pack", { src }) }),
     el("div", { class: "form buildform" },
-      el("label", {}, el("span", { class: "fl", text: "Compression" }), method), m.hint,
-      el("label", {}, el("span", { class: "fl", text: "Format" }), format), f.hint,
-      el("label", {}, dedupe, " Share identical files"),
-      el("div", { class: "hint", text: "Stores files with identical content only once, which saves space. Not possible in 0x102 and 0x103." })),
-    el("p", { class: "muted", text: "The finished archive is verified against the files on disk." }),
+      el("label", {}, el("span", { class: "fl", text: t("set-compression") }), method), m.hint,
+      el("label", {}, el("span", { class: "fl", text: t("set-format") }), format), f.hint,
+      el("label", {}, dedupe, ` ${t("build-share")}`),
+      el("div", { class: "hint", text: t("build-share-hint") })),
+    el("p", { class: "muted", text: t("build-verify-note") }),
   ];
-  const go = await ask("Build archive", body, [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("build-title"), body, [{ label: t("dlg-choose-target"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   const base = src.split(/[\\/]/).filter(Boolean).pop() || "data";
-  const dst = await T.dialog.save({ title: "Save archive as", defaultPath: `${base}.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  const dst = await T.dialog.save({ title: t("build-save-as"), defaultPath: `${base}.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
   if (!dst) return;
-  const job = showJob("Building archive");
-  setStatus(`Building ${dst} …`);
+  const job = showJob(t("build-running"));
+  setStatus(t("build-status", { dst }));
   try {
     const r = await invoke("build_archive", { req: { src, dst, method: method.value, format: format.value, dedupe: dedupe.checked, overwrite: true } });
     job.close();
-    setStatus(`Built ${dst}: ${fmtNum(r.files)} files`);
-    const body = [el("p", { text: `${fmtNum(r.files)} files in ${fmtNum(r.blocks)} blocks (${fmtBytes(r.unpacked_bytes)} → ${fmtBytes(r.file_bytes)}), ${r.verified ? "verified" : "not verified"}.` })];
-    if (r.shared) body.push(el("p", { class: "muted", text: `${fmtNum(r.shared)} identical files share a block.` }));
-    if (r.skipped.length) body.push(el("p", { text: `${r.skipped.length} item(s) skipped:` }), el("pre", { text: r.skipped.join("\n") }));
-    const open = await ask("Archive built", body, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    setStatus(t("build-done-status", { dst, files: r.files }));
+    const body = [el("p", { text: t("build-result", { files: r.files, blocks: r.blocks, from: fmtBytes(r.unpacked_bytes), to: fmtBytes(r.file_bytes), verified: r.verified ? t("verified-yes") : t("verified-no") }) })];
+    if (r.shared) body.push(el("p", { class: "muted", text: t("build-shared", { n: r.shared }) }));
+    if (r.skipped.length) body.push(el("p", { text: t("build-skipped", { n: r.skipped.length }) }), el("pre", { text: r.skipped.join("\n") }));
+    const open = await ask(t("build-done-title"), body, [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }]);
     if (open) await openPath(dst);
   } catch (e) {
     job.close();
     const cancelled = /cancel/i.test(errText(e));
-    setStatus(cancelled ? "Build cancelled" : "Build failed");
-    await note(cancelled ? "Build cancelled" : "Could not build", cancelled ? "Nothing was written." : errText(e), !cancelled);
+    setStatus(cancelled ? t("build-cancelled") : t("build-failed"));
+    await note(cancelled ? t("build-cancelled") : t("build-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
 }
 
 async function doMerge() {
-  const picked = await T.dialog.open({ multiple: true, directory: false, title: "Archives to merge (at least two)", filters: [{ name: "GRF, GPF, Thor and RGZ archives", extensions: ["grf", "gpf", "thor", "rgz"] }] });
+  const picked = await T.dialog.open({ multiple: true, directory: false, title: t("merge-pick"), filters: [{ name: "GRF, GPF, Thor and RGZ archives", extensions: ["grf", "gpf", "thor", "rgz"] }] });
   const paths = Array.isArray(picked) ? [...picked] : picked ? [picked] : [];
   if (paths.length < 2) {
-    if (paths.length) await note("Merge", "Choose at least two archives.", true);
+    if (paths.length) await note(t("merge-title"), t("merge-need-two"), true);
     return;
   }
   const replaceOnly = el("input", { type: "checkbox" });
@@ -2256,36 +2256,36 @@ async function doMerge() {
           "li",
           {},
           el("span", { class: "name", text: p.split(/[\\/]/).pop(), title: p }),
-          el("button", { type: "button", text: "↑", title: "Higher priority", disabled: i === 0, onclick: () => { [paths[i - 1], paths[i]] = [paths[i], paths[i - 1]]; draw(); } }),
-          el("button", { type: "button", text: "↓", title: "Lower priority", disabled: i === paths.length - 1, onclick: () => { [paths[i + 1], paths[i]] = [paths[i], paths[i + 1]]; draw(); } }),
+          el("button", { type: "button", text: "↑", title: t("merge-higher"), disabled: i === 0, onclick: () => { [paths[i - 1], paths[i]] = [paths[i], paths[i - 1]]; draw(); } }),
+          el("button", { type: "button", text: "↓", title: t("merge-lower"), disabled: i === paths.length - 1, onclick: () => { [paths[i + 1], paths[i]] = [paths[i], paths[i + 1]]; draw(); } }),
         ),
       ),
     );
   draw();
   const body = [
-    el("p", { text: "Order = priority: for a path in several archives, the top one wins. The inputs are not changed." }),
+    el("p", { text: t("merge-intro") }),
     list,
-    el("div", { class: "form" }, el("label", {}, replaceOnly, " Replace only: the last archive is the base, the others add no new paths")),
+    el("div", { class: "form" }, el("label", {}, replaceOnly, ` ${t("merge-replace-only")}`)),
   ];
-  const go = await ask("Merge archives", body, [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("merge-title"), body, [{ label: t("dlg-choose-target"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
-  const dst = await T.dialog.save({ title: "Save merged archive as", defaultPath: "merged.grf", filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  const dst = await T.dialog.save({ title: t("merge-save-as"), defaultPath: "merged.grf", filters: [{ name: "GRF archives", extensions: ["grf"] }] });
   if (!dst) return;
-  const job = showJob("Merging archives");
-  setStatus(`Merging into ${dst} …`);
+  const job = showJob(t("merge-running"));
+  setStatus(t("merge-status", { dst }));
   try {
     const r = await invoke("merge_archives", { req: { sources: paths, dst, replace_only: replaceOnly.checked, overwrite: true } });
     job.close();
-    setStatus(`Merged into ${dst}: ${fmtNum(r.files)} files`);
-    const lines = r.sources.map((s) => `${fmtNum(s.files)} files, ${fmtNum(s.used)} used, ${fmtNum(s.overridden)} replaced${s.ignored_new ? `, ${fmtNum(s.ignored_new)} new paths ignored` : ""}  ${s.path.split(/[\\/]/).pop()}`);
-    const out = [el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}.${r.damaged ? ` ${r.damaged} damaged block(s) copied unchanged.` : ""}` }), el("pre", { text: lines.join("\n") })];
-    const open = await ask("Archives merged", out, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    setStatus(t("merge-done-status", { dst, files: r.files }));
+    const lines = r.sources.map((s) => `${t("merge-line", { files: s.files, used: s.used, replaced: s.overridden })}${s.ignored_new ? t("merge-line-ignored", { n: s.ignored_new }) : ""}  ${s.path.split(/[\\/]/).pop()}`);
+    const out = [el("p", { text: `${t("merge-result", { files: r.files, size: fmtBytes(r.file_bytes), verified: r.verified ? t("verified-yes") : t("verified-no") })}${r.damaged ? ` ${t("merge-damaged", { n: r.damaged })}` : ""}` }), el("pre", { text: lines.join("\n") })];
+    const open = await ask(t("merge-done-title"), out, [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }]);
     if (open) await openPath(dst);
   } catch (e) {
     job.close();
     const cancelled = /cancel/i.test(errText(e));
-    setStatus(cancelled ? "Merge cancelled" : "Merge failed");
-    await note(cancelled ? "Merge cancelled" : "Could not merge", cancelled ? "Nothing was written." : errText(e), !cancelled);
+    setStatus(cancelled ? t("merge-cancelled") : t("merge-failed"));
+    await note(cancelled ? t("merge-cancelled") : t("merge-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
 }
 
@@ -2388,13 +2388,13 @@ async function doReduceImages() {
 /** A progress dialog for a long job; the page feeds it with `job-progress` events. */
 function showJob(title) {
   const bar = el("progress", { max: 100, value: 0 });
-  const label = el("p", { class: "muted", text: "Starting …" });
+  const label = el("p", { class: "muted", text: t("job-starting") });
   const cancel = el("button", {
     type: "button",
-    text: "Cancel",
+    text: t("dlg-cancel"),
     onclick: () => {
       cancel.disabled = true;
-      label.textContent = "Cancelling …";
+      label.textContent = t("job-cancelling");
       invoke("cancel_job").catch(() => {});
     },
   });
@@ -2406,7 +2406,7 @@ function showJob(title) {
   dlg.addEventListener("cancel", keep);
   S.onJob = (p) => {
     bar.value = p.total ? (p.done * 100) / p.total : 0;
-    label.textContent = `${fmtNum(p.done)} of ${fmtNum(p.total)}`;
+    label.textContent = t("job-progress", { done: p.done, total: p.total });
   };
   dlg.showModal();
   return {
