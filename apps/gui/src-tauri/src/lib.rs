@@ -199,8 +199,8 @@ fn window_ready(window: WebviewWindow) {
     }
 }
 
-/// Remembers the colour scheme the page uses ("light", "dark" or "system"), so new windows start
-/// in its background colour, and recolours the open windows.
+/// Remembers the colour scheme the page shows ("light" or "dark", the system's already resolved),
+/// so the next window starts in its background colour, and recolours the open windows.
 #[tauri::command]
 fn remember_theme(app: AppHandle, theme: String) {
     if let Ok(dir) = app.path().app_config_dir() {
@@ -227,19 +227,24 @@ fn open_link(url: String) -> Res<()> {
 const DARK_BG: tauri::window::Color = tauri::window::Color(0x1b, 0x1a, 0x19, 0xff);
 const LIGHT_BG: tauri::window::Color = tauri::window::Color(0xf6, 0xf5, 0xf3, 0xff);
 
-/// The background of the page (`--bg` in style.css) for the remembered scheme or the system's.
-fn background_for(app: &AppHandle, w: &WebviewWindow) -> tauri::window::Color {
+/// The scheme the page showed last ("dark" or "light"), if it is known.
+fn remembered_dark(app: &AppHandle) -> Option<bool> {
     let chosen = app
         .path()
         .app_config_dir()
         .ok()
-        .and_then(|d| std::fs::read_to_string(d.join("theme")).ok())
-        .unwrap_or_default();
-    let dark = match chosen.trim() {
-        "dark" => true,
-        "light" => false,
-        _ => w.theme().map(|t| t == tauri::Theme::Dark).unwrap_or(false),
-    };
+        .and_then(|d| std::fs::read_to_string(d.join("theme")).ok())?;
+    match chosen.trim() {
+        "dark" => Some(true),
+        "light" => Some(false),
+        _ => None,
+    }
+}
+
+/// The background of the page (`--bg` in style.css) for the remembered scheme or the system's.
+fn background_for(app: &AppHandle, w: &WebviewWindow) -> tauri::window::Color {
+    let dark = remembered_dark(app)
+        .unwrap_or_else(|| w.theme().map(|t| t == tauri::Theme::Dark).unwrap_or(false));
     if dark { DARK_BG } else { LIGHT_BG }
 }
 
@@ -266,8 +271,11 @@ fn focus(app: &AppHandle, label: &str) {
     }
 }
 
-/// Makes a window; it opens `startup` once its page is loaded. The window starts hidden in the
-/// page's background colour and shows itself when the page is drawn (or after two seconds).
+/// Makes a window; it opens `startup` once its page is loaded. When the page's colour scheme is
+/// known from the last start, window and webview are created in that background colour and the
+/// window shows as soon as the webview starts loading (measured on Windows: a window shown right
+/// away is white for its first frames). On the very first start it stays hidden until the page is
+/// drawn. Either way it shows after two seconds at the latest.
 fn create_window(app: &AppHandle, startup: Option<String>) -> tauri::Result<WebviewWindow> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let state = app.state::<AppState>();
@@ -283,11 +291,15 @@ fn create_window(app: &AppHandle, startup: Option<String>) -> tauri::Result<Webv
             .unwrap_or_else(|e| e.into_inner())
             .insert(label.clone(), p);
     }
+    let known = remembered_dark(app);
     let mut b = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
         .title("RustyGRF")
         .inner_size(1240.0, 800.0)
         .min_inner_size(900.0, 640.0)
         .visible(false);
+    if let Some(dark) = known {
+        b = b.background_color(if dark { DARK_BG } else { LIGHT_BG });
+    }
     // a new window sits a little below and right of the one in front
     if let Some(front) = front_window(app)
         && let (Ok(pos), Ok(scale)) = (front.outer_position(), front.scale_factor())
@@ -298,7 +310,13 @@ fn create_window(app: &AppHandle, startup: Option<String>) -> tauri::Result<Webv
         b = b.center();
     }
     let w = b.build()?;
-    let _ = w.set_background_color(Some(background_for(app, &w)));
+    if known.is_none() {
+        let _ = w.set_background_color(Some(background_for(app, &w)));
+    } else {
+        // shown only now that window and webview exist in the background colour
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
     let late = w.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(2));

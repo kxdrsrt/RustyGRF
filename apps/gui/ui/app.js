@@ -2827,13 +2827,20 @@ function saveSettings() {
 }
 const DENSITY = { compact: 22, normal: 24, comfortable: 30 };
 
+/** Tells the app the scheme the page shows, so the next window starts in its background colour. */
+const DARK_QUERY = window.matchMedia?.("(prefers-color-scheme: dark)");
+function rememberScheme() {
+  const scheme = SET.theme === "system" ? (DARK_QUERY?.matches ? "dark" : "light") : SET.theme;
+  if (scheme === rememberScheme.last) return;
+  rememberScheme.last = scheme;
+  invoke("remember_theme", { theme: scheme }).catch(() => {});
+}
+DARK_QUERY?.addEventListener?.("change", rememberScheme);
+
 /** Puts the settings on the page; called at start and after each change. */
 function applySettings() {
   const root = document.documentElement;
-  if (SET.theme !== applySettings.theme) {
-    applySettings.theme = SET.theme;
-    invoke("remember_theme", { theme: SET.theme }).catch(() => {});
-  }
+  rememberScheme();
   const flag = (name, on, value = "") => (on ? root.setAttribute(name, value) : root.removeAttribute(name));
   flag("data-theme", SET.theme !== "system", SET.theme);
   flag("data-accent", SET.accent !== "orange", SET.accent);
