@@ -516,6 +516,30 @@ pub fn open_with_system(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("no program could be started for {}: {e}", path.display()))
 }
 
+/// Shows the file in the system's file manager, selected where the system can (Finder, Explorer).
+pub fn reveal_with_system(path: &Path) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg("-R").arg(path);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = Command::new("explorer");
+        c.arg(format!("/select,{}", path.display()));
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(path.parent().unwrap_or(path));
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("the file manager could not be started: {e}"))
+}
+
 /// Most bytes one hex page returns.
 const HEX_PAGE_MAX: usize = 4096;
 
@@ -1121,6 +1145,74 @@ pub enum Preview {
     Message {
         text: Note,
     },
+}
+
+/// Most content a rename holds in memory (it is staged as bytes).
+const RENAME_MAX_BYTES: u64 = 512 << 20;
+
+#[derive(Serialize, Debug)]
+pub struct ExportSummary {
+    pub files: usize,
+    pub file_bytes: u64,
+    pub verified: bool,
+}
+
+/// Writes `dst` as a new archive holding only the entries `indices` of the open archive (as saved
+/// on disk; staged changes are not part of it): extracted to a temporary folder, then built.
+/// `method` is `zlib`, `zopfli` or `lzma`.
+pub fn export_selection(
+    plan: &EditPlan,
+    indices: &[usize],
+    dst: &Path,
+    method: &str,
+    ctl: &Control,
+) -> Result<ExportSummary, String> {
+    if same_file(&plan.src, dst) {
+        return Err(err!("err-target-open"));
+    }
+    if dst.exists() {
+        return Err(err!("err-export-exists", "path": dst.display().to_string()));
+    }
+    let method = match method {
+        "zlib" => Method::DEFAULT,
+        "zopfli" => Method::Zopfli { iterations: 10 },
+        "lzma" => Method::Lzma { preset: 9 },
+        other => return Err(format!("unknown method '{other}'")),
+    };
+    let arc = plan.open()?;
+    let tmp = std::env::temp_dir().join(format!(
+        "rustygrf-export-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    let result = (|| {
+        let opts = ExtractOptions {
+            names: NameMode::Cp1252,
+            on_collision: OnCollision::Abort,
+            overwrite: false,
+        };
+        extract(&arc, indices, &tmp, &opts, ctl).map_err(|e| e.to_string())?;
+        let ext = dst
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase());
+        let opts = BuildOptions {
+            method,
+            format: Format::V200,
+            names: NameMode::Cp1252,
+            dedupe: ext.as_deref() != Some("gpf"),
+            ..BuildOptions::default()
+        };
+        build(&tmp, dst, &opts, ctl).map_err(|e| e.to_string())
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let rep = result?;
+    Ok(ExportSummary {
+        files: rep.files,
+        file_bytes: rep.output_file_len,
+        verified: rep.verified,
+    })
 }
 
 #[derive(Serialize, Debug)]
@@ -2035,6 +2127,18 @@ impl Session {
         })
     }
 
+    /// Gives the entries `indices` new paths: `from` (a file, or a folder they lie below) is
+    /// replaced by `to`. One undo step; the old paths are removed and the content is staged under
+    /// the new ones.
+    pub fn stage_rename(
+        &mut self,
+        indices: &[usize],
+        from: &str,
+        to: &str,
+    ) -> Result<usize, String> {
+        self.transact(|s| s.stage_rename_impl(indices, from, to))
+    }
+
     pub fn stage_remove(&mut self, indices: &[usize]) -> Result<usize, String> {
         self.transact(|s| s.stage_remove_impl(indices))
     }
@@ -2518,6 +2622,85 @@ impl Session {
             what,
         });
         Ok(())
+    }
+
+    fn stage_rename_impl(
+        &mut self,
+        indices: &[usize],
+        from: &str,
+        to: &str,
+    ) -> Result<usize, String> {
+        let clean = |t: &str| t.trim().replace('/', "\\").trim_matches('\\').to_string();
+        let (from, to) = (clean(from), clean(to));
+        if to.is_empty() || from.is_empty() {
+            return Err(err!("err-enter-path"));
+        }
+        if indices.is_empty() {
+            return Err(err!("err-rename-nothing"));
+        }
+        let total: u64 = indices
+            .iter()
+            .filter_map(|&i| self.arc.entries().get(i))
+            .map(|e| u64::from(e.size))
+            .sum();
+        if total > RENAME_MAX_BYTES {
+            return Err(err!("err-rename-large", "mb": RENAME_MAX_BYTES >> 20));
+        }
+        // (old name, new name, content, what) for every entry; nothing is staged before all are checked
+        let mut plan: Vec<(GrfPath, GrfPath, Vec<u8>, Vec<String>)> = Vec::new();
+        for &i in indices {
+            let old = self.entry_name(i)?;
+            let shown = old.display(self.mode);
+            let rest = if shown.eq_ignore_ascii_case(&from) {
+                ""
+            } else if shown.len() > from.len()
+                && shown.is_char_boundary(from.len())
+                && shown[..from.len()].eq_ignore_ascii_case(&from)
+                && shown[from.len()..].starts_with('\\')
+            {
+                &shown[from.len()..]
+            } else {
+                return Err(err!("err-rename-mismatch", "name": shown));
+            };
+            let new = GrfPath::from_display(&format!("{to}{rest}"), self.mode)
+                .ok_or_else(|| err!("err-name-chars"))?;
+            let (_, data, mut what) = self.working_bytes(i)?;
+            what.push(format!("renamed from {shown}"));
+            plan.push((old, new, data, what));
+        }
+        let moving: std::collections::HashSet<Vec<u8>> =
+            plan.iter().map(|(o, ..)| o.key()).collect();
+        let mut seen = std::collections::HashSet::new();
+        for (_, new, ..) in &plan {
+            let key = new.key();
+            let taken = self
+                .key_index()
+                .get(&key)
+                .is_some_and(|_| !moving.contains(&key))
+                || self.pending.iter().any(|c| {
+                    c.name().key() == key
+                        && !matches!(c, Change::Remove { .. })
+                        && !moving.contains(&key)
+                })
+                || !seen.insert(key);
+            if taken {
+                return Err(err!("err-rename-exists", "name": new.display(self.mode)));
+            }
+        }
+        let n = plan.len();
+        for (old, new, ..) in &plan {
+            if old.key() != new.key() {
+                self.stage(Change::Remove { name: old.clone() });
+            }
+        }
+        for (_, new, data, what) in plan {
+            self.stage(Change::PutBytes {
+                name: new,
+                data: Arc::new(data),
+                what,
+            });
+        }
+        Ok(n)
     }
 
     fn stage_remove_impl(&mut self, indices: &[usize]) -> Result<usize, String> {
@@ -4169,6 +4352,84 @@ mod tests {
             .iter()
             .position(|n| n.to_ascii_lowercase().ends_with(name))
             .unwrap()
+    }
+
+    fn tiny_archive(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = tmp(tag);
+        let src = dir.join("src/data/dir/sub");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(dir.join("src/data/a.txt"), b"alpha").unwrap();
+        fs::write(dir.join("src/data/dir/b.txt"), b"beta").unwrap();
+        fs::write(src.join("c.txt"), b"gamma").unwrap();
+        let grf = dir.join("t.grf");
+        let ctl = Control {
+            cancel: None,
+            progress: None,
+        };
+        build(&dir.join("src"), &grf, &BuildOptions::default(), &ctl).unwrap();
+        (dir, grf)
+    }
+
+    #[test]
+    fn renaming_moves_files_and_folders_in_one_step_and_refuses_clashes() {
+        let (dir, grf) = tiny_archive("rename");
+        let mut s = Session::open(&grf).unwrap();
+        let a = find(&s, "a.txt");
+        // a file
+        assert_eq!(s.stage_rename(&[a], r"data\a.txt", r"data\z\a2.txt"), Ok(1));
+        let rows = s.pending();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.kind, r.name.as_str()))
+                .collect::<Vec<_>>(),
+            [("remove", r"data\a.txt"), ("replace", r"data\z\a2.txt")]
+        );
+        assert_eq!(s.history_steps(5).0.len(), 1);
+        assert!(s.undo());
+        assert!(s.pending().is_empty());
+        // a folder: everything below it, as one step
+        let folder: Vec<usize> = ["b.txt", "c.txt"].iter().map(|n| find(&s, n)).collect();
+        assert_eq!(s.stage_rename(&folder, r"data\dir", r"data\Renamed"), Ok(2));
+        let names: Vec<String> = s.pending().into_iter().map(|r| r.name).collect();
+        assert!(
+            names.contains(&r"data\Renamed\sub\c.txt".to_string()),
+            "{names:?}"
+        );
+        assert!(names.contains(&r"data\dir\b.txt".to_string()));
+        assert_eq!(s.history_steps(5).0.len(), 1);
+        assert!(s.undo());
+        // onto an existing path, and an entry outside the folder: refused, nothing staged
+        assert!(
+            s.stage_rename(&[a], r"data\a.txt", r"data\dir\b.txt")
+                .is_err()
+        );
+        assert!(s.stage_rename(&[a], r"data\dir", r"data\x").is_err());
+        assert!(s.pending().is_empty() && s.history_steps(5).0.is_empty());
+        // only the case changes: a single replacement, no removal
+        assert_eq!(s.stage_rename(&[a], r"data\a.txt", r"data\A.TXT"), Ok(1));
+        assert_eq!(s.pending().len(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_selection_is_exported_as_its_own_archive() {
+        let (dir, grf) = tiny_archive("export");
+        let s = Session::open(&grf).unwrap();
+        let picked = vec![find(&s, "b.txt"), find(&s, "c.txt")];
+        let ctl = Control {
+            cancel: None,
+            progress: None,
+        };
+        let out = dir.join("part.grf");
+        let r = export_selection(&s.plan(), &picked, &out, "zlib", &ctl).unwrap();
+        assert_eq!((r.files, r.verified), (2, true));
+        let part = Session::open(&out).unwrap();
+        assert_eq!(part.names.len(), 2);
+        assert!(part.names.iter().any(|n| n == r"data\dir\sub\c.txt"));
+        // an existing target and the open archive itself are refused
+        assert!(export_selection(&s.plan(), &picked, &out, "zlib", &ctl).is_err());
+        assert!(export_selection(&s.plan(), &picked, &grf, "zlib", &ctl).is_err());
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -65,6 +65,29 @@ Aus `EditorMainWindow.xaml` und `EMenuInteraction.cs` gelesen, in der Windows-VM
 | Grf patcher | Zusammenführen (Patch über das Archiv legen) | ✅ |
 | Settings | Einstellungen | ✅ |
 
+### Kontextmenü der Eintragsliste (2026-11-21)
+
+Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Details, Ordneransicht (linker Teil) und Galerie. Pfeiltasten, Pos1/Ende, Esc (Fokus kehrt zurück); schließt bei Klick daneben, Größenänderung, Fensterwechsel.
+
+| GRF Editor | RustyGRF | Stand |
+| --- | --- | --- |
+| Open file | Öffnen | ✅ |
+| Select in explorer | Im Finder/Explorer zeigen (entpackt in temporären Ordner) | ✅ |
+| Extract / Extract… | Extrahieren…, In letzten Ordner extrahieren | ✅ |
+| Export selection… | In Archiv exportieren… (Auswahl oder Ordner als eigenes Archiv, Methode wählbar, geprüft; liest die gespeicherte Datei, nicht die vorgemerkten Änderungen) | ✅ |
+| Export map files… | Karte extrahieren… (rsw/gnd/gat mit allem, was sie brauchen) | ✅ |
+| Save map as… | Karte ändern… (flach machen) und Karte extrahieren | ◐ anderer Weg |
+| Downgrade / Downgrade to… (Kartenversion) | – | ❌ |
+| Delete | Entfernen (vormerken, rückgängig) | ✅ |
+| Rename… | Umbenennen… (Datei und Ordner, ein Rückgängig-Schritt; prüft Namenskonflikte, Grenze 512 MB je Eintrag) | ✅ |
+| Find usages… | Name in Dateien suchen… (Textsuche; kompilierte Lua-Dateien sind binär und werden übersprungen) | ◐ |
+| Copy NPC name | Name kopieren, Pfad kopieren | ◐ |
+| Encryption ▸ (je Eintrag) | – (Verschlüsseln nur für das ganze Archiv) | ❌ |
+| Properties | Eigenschaften… (Größen, Kodierung, Versatz, Flags, CRC32, MD5, SHA-256) | ✅ |
+| – | Hex-Ansicht, Text bearbeiten, 8 Bit, Ersetzen, Datei hier hinzufügen | ✅ zusätzlich |
+
+**Behoben (2026-11-21):** Bei schmalem Fenster (unter 900 px) lag die Liste nur auf halber Höhe neben einem 6 px breiten Vorschaustreifen, weil die Regel für die Ordneransicht mit Vorschau rechts die allgemeine Schmalfenster-Regel überstimmte. Jetzt eine Spalte, Liste oben (55 %), Vorschau darunter; in allen vier Ansichten bei 768×925, 880×700 und 1280×900 im Browser gemessen.
+
 ## ACT Editor (Tokeiburu)
 
 | Funktion (laut README, Changelog, Ordner) | RustyGRF | Stand |

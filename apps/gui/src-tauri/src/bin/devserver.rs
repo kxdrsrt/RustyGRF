@@ -119,6 +119,29 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 arg(a, "flat")?,
             )?)
         }),
+        "reveal_entry" => with(state, |s| {
+            let p = s.export_temp(arg(a, "index")?)?;
+            backend::reveal_with_system(&p)?;
+            to_json(p.display().to_string())
+        }),
+        "stage_rename" => with(state, |s| {
+            s.stage_rename(
+                &arg::<Vec<usize>>(a, "indices")?,
+                &arg::<String>(a, "from")?,
+                &arg::<String>(a, "to")?,
+            )?;
+            to_json(s.pending())
+        }),
+        "export_selection" => {
+            let plan = with(state, |s| Ok(s.plan()))?;
+            to_json(backend::export_selection(
+                &plan,
+                &arg::<Vec<usize>>(a, "indices")?,
+                &PathBuf::from(arg::<String>(a, "dst")?),
+                &arg::<String>(a, "method")?,
+                &none,
+            )?)
+        }
         "stage_flat_map" => with(state, |s| {
             s.stage_flat_map(arg(a, "index")?, arg(a, "options")?)?;
             to_json(s.pending())

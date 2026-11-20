@@ -1281,8 +1281,8 @@ function renderPreview(p, row, meta) {
 // ---------- actions ----------
 
 /** The entries a selected line stands for: the file itself, or everything below a folder. */
-async function entriesOf(row) {
-  return row.folder ? invoke("folder_entries", { view: 0, path: row.name }) : [row.index];
+async function entriesOf(row, view = 0) {
+  return row.folder ? invoke("folder_entries", { view, path: row.name }) : [row.index];
 }
 
 /** Saves the 3D view of a map as it is now as PNG. */
@@ -1450,6 +1450,8 @@ async function doExtractMap(row, shown = {}) {
   }
 }
 
+const LAST_EXTRACT_KEY = "rustygrf-last-extract";
+
 async function doExtract() {
   if (!S.info) return;
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
@@ -1463,6 +1465,12 @@ async function doExtract() {
   if (!dest) return;
   const indices = what === "one" ? await entriesOf(sel) : [];
   if (what === "one" && !indices.length) return note(t("ext-title"), t("ext-empty-folder"));
+  return extractIndices(indices, dest);
+}
+
+/** Writes entries below a folder; when files exist there, offers to keep both. */
+async function extractIndices(indices, dest) {
+  localStorage.setItem(LAST_EXTRACT_KEY, dest);
   setStatus(t("ext-running"));
   let rename = false;
   for (;;) {
@@ -3307,6 +3315,202 @@ function setLanguage() {
   syncMenu();
 }
 
+// ---------- context menu (right click on an entry or folder; Menu key or Shift+F10) ----------
+
+let ctxClose = null;
+
+/** A menu at (x, y). Items: { label, icon, run, disabled } or "-" for a separator. Arrow keys, Home/End, Enter, Esc. */
+function showContextMenu(x, y, items, returnFocus, label) {
+  ctxClose?.(false);
+  const menu = el("div", { class: "popmenu ctx", role: "menu", "aria-label": label || "" });
+  const buttons = [];
+  for (const it of items) {
+    if (it === "-") {
+      menu.append(el("hr", { role: "separator" }));
+      continue;
+    }
+    const b = el("button", { type: "button", role: "menuitem", tabindex: "-1", disabled: !!it.disabled, icon: it.icon || "blank" }, el("span", { class: "lbl", text: it.label }));
+    b.addEventListener("click", () => {
+      close(false);
+      it.run();
+    });
+    menu.append(b);
+    if (!it.disabled) buttons.push(b);
+  }
+  document.body.append(menu);
+  const box = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - box.width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - box.height - 4))}px`;
+  let at = -1;
+  const focusAt = (i) => {
+    at = (i + buttons.length) % buttons.length;
+    buttons[at]?.focus();
+  };
+  const key = (e) => {
+    if (e.key === "Escape") (e.preventDefault(), close(true));
+    else if (e.key === "ArrowDown") (e.preventDefault(), focusAt(at + 1));
+    else if (e.key === "ArrowUp") (e.preventDefault(), focusAt(at - 1));
+    else if (e.key === "Home") (e.preventDefault(), focusAt(0));
+    else if (e.key === "End") (e.preventDefault(), focusAt(buttons.length - 1));
+    else if (e.key === "Tab") (e.preventDefault(), close(true));
+  };
+  const outside = (e) => !menu.contains(e.target) && close(false);
+  const away = () => close(false);
+  function close(restore) {
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", key, true);
+    window.removeEventListener("blur", away);
+    window.removeEventListener("resize", away);
+    document.removeEventListener("wheel", away, true);
+    menu.remove();
+    ctxClose = null;
+    if (restore) returnFocus?.focus?.();
+  }
+  ctxClose = close;
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", key, true);
+  window.addEventListener("blur", away);
+  window.addEventListener("resize", away);
+  document.addEventListener("wheel", away, true);
+  focusAt(0);
+}
+
+const FILE_MANAGER = () => (/Mac/.test(navigator.platform) ? "Finder" : /Win/.test(navigator.platform) ? "Explorer" : t("ctx-fm"));
+
+/** The entries a row stands for, in the list it was clicked in. */
+const entriesIn = (list, row) => entriesOf(row, list.view);
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = el("textarea", { style: "position:fixed;opacity:0" });
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  setStatus(t("ctx-copied", { text }));
+}
+
+function entryMenu(list, row) {
+  const items = [];
+  const last = localStorage.getItem(LAST_EXTRACT_KEY);
+  const pickAndExtract = async () => {
+    const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
+    if (!dest) return;
+    const indices = await entriesIn(list, row);
+    if (!indices.length) return note(t("ext-title"), t("ext-empty-folder"));
+    return extractIndices(indices, dest);
+  };
+  const guard = (fn) => () => Promise.resolve(fn()).catch((e) => note(t("open-failed"), errText(e), true));
+  if (row.folder) {
+    items.push({ label: t("ctx-extract-folder"), icon: "extract", run: guard(pickAndExtract) });
+    if (last) items.push({ label: t("ctx-extract-last", { folder: baseOf(last.replace(/\//g, "\\")) || last }), icon: "extract", run: guard(async () => extractIndices(await entriesIn(list, row), last)) });
+    items.push({ label: t("ctx-export-folder"), icon: "export", run: guard(() => exportRows(list, row)) });
+    items.push("-", { label: t("ctx-add-here"), icon: "add", run: guard(doAdd) });
+    items.push({ label: t("ctx-rename-folder"), icon: "pencil", run: guard(() => renameRow(list, row)) });
+    items.push({ label: t("ctx-delete-folder"), icon: "remove", run: guard(() => deleteRow(list, row)) });
+    items.push("-", { label: t("ctx-copy-path"), icon: "copy", run: () => copyText(row.name) });
+    items.push({ label: t("ctx-props"), icon: "info", run: guard(() => showProperties(list, row)) });
+    return items;
+  }
+  const ext = extOf(row.name).toLowerCase();
+  items.push({ label: t("ctx-open"), icon: "open", run: guard(async () => setStatus(t("ctx-opened", { path: await invoke("open_external", { index: row.index }) }))) });
+  items.push({ label: t("ctx-reveal", { app: FILE_MANAGER() }), icon: "folder", run: guard(() => invoke("reveal_entry", { index: row.index })) });
+  items.push("-", { label: t("ctx-extract"), icon: "extract", run: guard(pickAndExtract) });
+  if (last) items.push({ label: t("ctx-extract-last", { folder: baseOf(last.replace(/\//g, "\\")) || last }), icon: "extract", run: guard(() => extractIndices([row.index], last)) });
+  items.push({ label: t("ctx-export"), icon: "export", run: guard(() => exportRows(list, row)) });
+  if (["rsw", "gnd", "gat"].includes(ext)) items.push({ label: t("ctx-map-extract"), icon: "map", run: guard(() => doExtractMap(row)) }, { label: t("pvw-flat-map"), icon: "edit", run: guard(() => doFlatMap(row)) });
+  const edit = [];
+  if (row.kind === "text") edit.push({ label: t("ctx-edit"), icon: "edit", run: guard(() => openTextEditor(row)) });
+  if (ext === "bmp") edit.push({ label: t("ctx-reduce"), icon: "image", run: guard(() => openReduceDialog(row)) });
+  edit.push({ label: t("ctx-hex"), icon: "file", run: guard(async () => openHexEditor(row, (await invoke("details", { index: row.index })).name)) });
+  items.push("-", ...edit, "-");
+  items.push({ label: t("ctx-replace"), icon: "replace", run: guard(doReplace) });
+  items.push({ label: t("ctx-rename"), icon: "pencil", run: guard(() => renameRow(list, row)) });
+  items.push({ label: t("ctx-delete"), icon: "remove", run: guard(() => deleteRow(list, row)) });
+  items.push("-", { label: t("ctx-usages"), icon: "search", run: guard(() => findUsages(row)) });
+  items.push({ label: t("ctx-copy-name"), icon: "copy", run: () => copyText(baseOf(row.name)) });
+  items.push({ label: t("ctx-copy-path"), icon: "copy", run: () => copyText(row.name) });
+  items.push("-", { label: t("ctx-props"), icon: "info", run: guard(() => showProperties(list, row)) });
+  return items;
+}
+
+/** The new path of a file, or of a folder (everything below it moves along). */
+async function renameRow(list, row) {
+  const input = el("input", { type: "text", class: "field", value: row.name, spellcheck: "false", "aria-label": t(row.folder ? "ren-title-folder" : "ren-title") });
+  input.addEventListener("keydown", (e) => e.key === "Enter" && (e.preventDefault(), $("dlg-actions").querySelector(".primary")?.click()));
+  setTimeout(() => (input.focus(), input.select()), 50);
+  const go = await ask(t(row.folder ? "ren-title-folder" : "ren-title"), [el("p", { text: t(row.folder ? "ren-intro-folder" : "ren-intro") }), input, el("p", { class: "hint", text: t("ren-hint") })], [{ label: t("ren-go"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  const to = input.value.trim();
+  if (!go || !to || to === row.name) return;
+  try {
+    const indices = await entriesIn(list, row);
+    setPending(await invoke("stage_rename", { indices, from: row.name, to }));
+    setStatus(t("ren-status", { from: baseOf(row.name), to }));
+    refreshPreview();
+  } catch (e) {
+    await note(t("ren-failed"), errText(e), true);
+  }
+}
+
+async function deleteRow(list, row) {
+  try {
+    const indices = await entriesIn(list, row);
+    if (!indices.length) return note(t("btn-remove"), t("ext-empty-folder"));
+    setPending(await invoke("stage_remove", { indices }));
+    setStatus(t("remove-status", { n: indices.length }));
+    refreshPreview();
+  } catch (e) {
+    await note(t("remove-failed"), errText(e), true);
+  }
+}
+
+/** The search dialog with the file's name (without extension) filled in. */
+function findUsages(row) {
+  SET.contentSearch = { ...(SET.contentSearch || { files: "*.lua;*.txt;*.xml" }), query: baseOf(row.name).replace(/\.[^.]+$/, ""), regex: false, word: false, inList: false };
+  return doSearchContents();
+}
+
+/** A new archive with only this entry, or everything below this folder. */
+async function exportRows(list, row) {
+  const indices = await entriesIn(list, row);
+  if (!indices.length) return note(t("ext-title"), t("ext-empty-folder"));
+  const method = el("select", { class: "field" }, ...["zlib", "lzma", "zopfli"].map((m) => el("option", { value: m, text: t(`exp-m-${m}`) })));
+  const go = await ask(t("exp-title"), [el("p", { text: t("exp-intro", { n: indices.length }) }), el("div", { class: "form" }, el("label", {}, `${t("exp-method")} `, method)), el("p", { class: "muted", text: t("exp-note") })], [{ label: t("exp-choose"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const base = baseOf(row.name).replace(/\.[^.]+$/, "") || "export";
+  const dst = await T.dialog.save({ title: t("exp-save-as"), defaultPath: `${base}.grf`, filters: [{ name: "GRF, GPF", extensions: ["grf", "gpf"] }] });
+  if (!dst) return;
+  const job = showJob(t("exp-running"));
+  try {
+    const r = await invoke("export_selection", { indices, dst, method: method.value });
+    job.close();
+    setStatus(t("exp-status", { n: r.files, dst }));
+    const open = await ask(t("exp-done"), el("p", { text: t("exp-done-body", { files: t("pvw-files", { n: r.files }), dst, size: fmtBytes(r.file_bytes), verified: r.verified ? t("verified-yes") : t("verified-no") }) }), [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }], "success");
+    if (open) await openPath(dst, true);
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? t("nothing-written") : t("exp-failed"));
+    await note(cancelled ? t("nothing-written") : t("exp-failed"), cancelled ? "" : errText(e), !cancelled);
+  }
+}
+
+/** Everything the archive knows about an entry (and its checksums), or the size of a folder. */
+async function showProperties(list, row) {
+  const line = (k, v) => [el("dt", { text: k }), el("dd", {}, el("code", { text: String(v) }))];
+  if (row.folder) {
+    await ask(t("prop-title"), el("dl", { class: "facts selectable" }, ...line(t("prop-path"), row.name), ...line(t("prop-files"), fmtNum(row.count)), ...line(t("prop-total"), `${fmtBytes(row.bytes)} (${fmtNum(row.bytes)} B)`)), [{ label: "OK", value: true, primary: true }], "info");
+    return;
+  }
+  const d = await invoke("details", { index: row.index });
+  const h = await invoke("entry_hashes", { index: row.index });
+  await ask(t("prop-title"), el("dl", { class: "facts selectable" }, ...line(t("prop-path"), d.name), ...line(t("prop-type"), row.kind), ...line(t("prop-size"), `${fmtBytes(d.size)} (${fmtNum(d.size)} B)`), ...line(t("prop-stored"), `${fmtBytes(d.stored)} (${fmtNum(d.stored)} B)`), ...line(t("prop-codec"), d.codec), ...line(t("prop-offset"), fmtNum(d.offset)), ...line(t("prop-flags"), `0x${d.flags.toString(16).padStart(2, "0")}`), ...line("CRC32", h.crc32), ...line("MD5", h.md5), ...line("SHA-256", h.sha256)), [{ label: "OK", value: true, primary: true }], "info");
+}
+
 // ---------- wiring ----------
 
 let searchTimer = 0;
@@ -3352,6 +3556,10 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   editHistory(e.shiftKey);
 }, true);
+// in the app the browser's own menu (Reload, Inspect …) is of no use; text keeps its Copy
+document.addEventListener("contextmenu", (e) => {
+  if (IN_APP && !e.defaultPrevented && !e.target.closest("input, textarea, pre, .selectable, [contenteditable]")) e.preventDefault();
+});
 $("btn-build").addEventListener("click", doBuild);
 $("btn-extract").addEventListener("click", doExtract);
 $("btn-verify").addEventListener("click", doVerify);
@@ -3378,6 +3586,22 @@ function wireList(list) {
     const pos = Number(row.dataset.pos);
     await list.pick(pos, false);
     if (e.target.closest("[data-twist]")) await toggleFolder(list, pos);
+  });
+  vp.addEventListener("contextmenu", async (e) => {
+    e.preventDefault();
+    if (!S.info) return;
+    const cell = e.target.closest(".row");
+    let pos = cell ? Number(cell.dataset.pos) : list.st.selected;
+    if (pos == null) return;
+    let [x, y] = [e.clientX, e.clientY];
+    if (!cell) {
+      // the Menu key or Shift+F10: next to the selected line
+      const b = (vp.querySelector(`.row[data-pos="${pos}"]`) || vp).getBoundingClientRect();
+      [x, y] = [b.left + 32, b.bottom];
+    }
+    await list.pick(pos, false);
+    const row = list.row(pos);
+    if (row) showContextMenu(x, y, entryMenu(list, row), vp, rowLabel(row));
   });
   vp.addEventListener("dblclick", (e) => {
     const row = e.target.closest(".row");

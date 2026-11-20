@@ -235,3 +235,7 @@ Lokale Archive (nicht im Repo):
 - Referenzwerkzeuge: `RO/1 CLIENT-SIDE/1 CLIENT TOOLS/5 GRF Editor/` (GRF Editor, `GrfCL` mit LZMA-Option)
 
 Im Repo liegen nur Hashlisten (Golden Files), keine Archive.
+
+## Stand 2026-11-21: Kontextmenü
+
+Kontextmenü der Eintragsliste neu (Umbenennen, Export in Archiv, Eigenschaften, Im Finder zeigen u. a.), Schmalfenster-Layout behoben. Offen gegenüber GRF Editor: Kartenversion herabstufen (Downgrade), Verschlüsselung je Eintrag, „Find usages“ in binären Lua-Dateien. Nächste Stufe für `data.grf` (≈2,55 GB, davon BMP 1,1 GB): PNG/TGA/JPG-Neukodierung, WAV, ungenutzte Dateien; immer aus `grf/` nach `grf-opt/`.

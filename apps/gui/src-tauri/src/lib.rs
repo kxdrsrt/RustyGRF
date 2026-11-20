@@ -985,6 +985,51 @@ async fn open_external(
     Ok(path.display().to_string())
 }
 
+/// Shows a copy of an entry (with staged changes) in the file manager, selected.
+#[tauri::command]
+async fn reveal_entry(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+) -> Res<String> {
+    let path = with_session(&state, &window, move |s| s.export_temp(index)).await?;
+    backend::reveal_with_system(&path)?;
+    Ok(path.display().to_string())
+}
+
+/// Gives entries new paths (`from` is a file or the folder they lie below); one undo step.
+#[tauri::command]
+async fn stage_rename(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    indices: Vec<usize>,
+    from: String,
+    to: String,
+) -> Res<Vec<backend::PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_rename(&indices, &from, &to)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Writes a new archive with only the given entries.
+#[tauri::command]
+async fn export_selection(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    indices: Vec<usize>,
+    dst: String,
+    method: String,
+) -> Res<backend::ExportSummary> {
+    let plan = with_session(&state, &window, |s| Ok(s.plan())).await?;
+    run_job(app, &state, &window, move |ctl| {
+        backend::export_selection(&plan, &indices, &PathBuf::from(dst), &method, ctl)
+    })
+    .await
+}
+
 /// A page of bytes of an entry for the hex editor.
 #[tauri::command]
 async fn hex_page(
@@ -1696,6 +1741,9 @@ pub fn run() {
             reduce_preview,
             act_sound,
             open_external,
+            reveal_entry,
+            stage_rename,
+            export_selection,
             hex_page,
             hex_find,
             stage_hex,
