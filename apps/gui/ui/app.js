@@ -3342,7 +3342,7 @@ function showContextMenu(x, y, items, returnFocus, label) {
       menu.append(el("hr", { role: "separator" }));
       continue;
     }
-    const b = el("button", { type: "button", role: "menuitem", tabindex: "-1", disabled: !!it.disabled, icon: it.icon || "blank" }, el("span", { class: "lbl", text: it.label }));
+    const b = el("button", { type: "button", role: "menuitem", tabindex: "-1", disabled: !!it.disabled, icon: it.icon || "blank" }, el("span", { class: "mlabel", text: it.label }));
     b.addEventListener("click", () => {
       close(false);
       it.run();

@@ -86,7 +86,7 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 | Properties | Eigenschaften… (Größen, Kodierung, Versatz, Flags, CRC32, MD5, SHA-256) | ✅ |
 | – | Hex-Ansicht, Text bearbeiten, 8 Bit, Ersetzen, Datei hier hinzufügen | ✅ zusätzlich |
 
-**Behoben (2026-11-21):** Bei schmalem Fenster (unter 900 px) lag die Liste nur auf halber Höhe neben einem 6 px breiten Vorschaustreifen, weil die Regel für die Ordneransicht mit Vorschau rechts die allgemeine Schmalfenster-Regel überstimmte. Jetzt eine Spalte, Liste oben (55 %), Vorschau darunter; in allen vier Ansichten bei 768×925, 880×700 und 1280×900 im Browser gemessen.
+**Behoben (2026-11-21):** Bei schmalem Fenster (unter 900 px) lag die Liste nur auf halber Höhe neben einem 6 px breiten Vorschaustreifen, weil die Regel für die Ordneransicht mit Vorschau rechts die allgemeine Schmalfenster-Regel überstimmte. Jetzt bleibt die Vorschau bis 721 px rechts (schmalere Spalte), darunter liegt sie unter der Liste (60 %); im Browser (alle vier Ansichten) und im echten Windows-Fenster der VM (angedockt 960×540: ganze Liste sichtbar) gemessen.
 
 ## ACT Editor (Tokeiburu)
 

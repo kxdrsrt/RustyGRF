@@ -288,11 +288,16 @@ dialog progress { width: min(420px, 80vw); height: 10px; accent-color: var(--acc
 .prio .name { display: inline-block; min-width: 260px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
 .prio button { padding: 0 8px; margin-right: 4px; }
 
-/* narrow window: the preview moves below the list. The selectors match the ones that set the
+/* very narrow window (below the 900 px minimum, e.g. a docked half screen on a small display): the
+   preview moves below the list. Down to 720 px the preview stays at the side with a narrower column. The selectors match the ones that set the
    columns above (main.lay-folders.pv-right), otherwise those win and the list ends up half high
    next to a 6 px preview column. */
-@media (max-width: 900px) {
-  main.pv-right, main.lay-folders.pv-right { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 55%) minmax(0, 1fr); }
+@media (max-width: 900px) and (min-width: 721px) {
+  main.pv-right { grid-template-columns: minmax(0, 1fr) 6px minmax(220px, 34%); }
+  main.lay-folders.pv-right { grid-template-columns: minmax(0, 1fr) 6px minmax(220px, 34%); }
+}
+@media (max-width: 720px) {
+  main.pv-right, main.lay-folders.pv-right { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 60%) minmax(0, 1fr); }
   main.pv-right #list-pane { border-right: none; border-bottom: 1px solid var(--line); }
   main.pv-right #split-main { display: none; }
 }
@@ -530,6 +535,7 @@ input.hexb[aria-invalid="true"] { border-color: #d33; }
 .popmenu.ctx button:hover .ic, .popmenu.ctx button:focus-visible .ic { color: inherit; }
 .popmenu.ctx button:disabled { opacity: 0.45; }
 .popmenu.ctx button:disabled:hover { background: none; }
+.popmenu.ctx .mlabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .popmenu.ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
 ol.history { margin: 0 0 6px; padding-left: 22px; }
 ol.history li { margin: 2px 0; }
