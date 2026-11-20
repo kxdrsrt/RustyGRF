@@ -1,12 +1,16 @@
 //! Gravity's protection of single entries (flag `0x80`, GRF 0x300) and the archive key block
 //! behind the file table.
 //!
-//! Ported from GRF Editor by Tokeiburu (`GRF/Core/GrfCompression/ProtectedGrfDecoder.cs` and
-//! `ProtectedGrfCiphers.cs`, with permission, see `docs/05-licensing.md`). The kRO variant is
-//! ported: entry headers of type 1, 2, 15 and 113, body ciphers 1, 5, 7, 128 and 133, data stored,
-//! zlib or LZ4, key blocks encrypted with CHAM or holding the kRO default keys. Not ported: the
-//! jRO (header 241, bodies 259, 260, 269) and Chinese variants; such entries are reported as
-//! unsupported. Checked against the 40 vectors GRF Editor ships (`tests/fixtures`).
+//! Ported from GRF Editor by Tokeiburu (`GRF/Core/GrfCompression/ProtectedGrfDecoder.cs`,
+//! `ProtectedGrfCiphers.cs`, `ProtectedJroDecoder.cs` and `JroArchiveProfiles.cs`, with
+//! permission, see `docs/05-licensing.md`). Ported: the kRO variant (entry headers of type 1, 2, 15
+//! and 113, body ciphers 1, 5, 7, 128 and 133, key blocks encrypted with CHAM or holding the kRO
+//! default keys) and the jRO variant (header 241 with IDEA, bodies 259 XTEA-CFB, 260 TEA-CFB and
+//! 269 RC5-OFB, key blocks GRF Editor recognises by their SHA-256); data stored, zlib or LZ4.
+//! Not ported: the Chinese variant (`ProtectedCnDecoder.cs`), which GRF Editor itself cannot reach:
+//! its entry header reader refuses the header version 2 that variant needs, and its 64-byte keys
+//! fail the 60-byte check. Checked against the 40 vectors GRF Editor ships and 24 jRO vectors made
+//! with GRF Editor's own decoder (`tests/fixtures`).
 //!
 //! An entry is a 104-byte header (encrypted, with an XXH32 checksum) and a body whose first 128
 //! bytes are plain and whose rest is encrypted with keys derived from the raw file name bytes,
@@ -104,10 +108,13 @@ pub fn decode_archive_keys(raw: &[u8]) -> Result<ArchiveKeys> {
     if raw.len() < 20 {
         return invalid("unsupported or truncated archive key block");
     }
+    if let Some(keys) = jro_archive_keys(raw)? {
+        return Ok(keys);
+    }
     let size = word(raw, 12) as usize;
     if size == 0 || !size.is_multiple_of(64) || size / 64 > 65535 || size != raw.len() - 20 {
         return Err(GravityError::Unsupported(
-            "archive key block of an unknown layout (perhaps the jRO or Chinese variant, not supported)"
+            "archive key block of an unknown layout (perhaps the Chinese variant, not supported)"
                 .into(),
         ));
     }
@@ -170,14 +177,8 @@ pub fn decode(
         return invalid("body size lies outside the stored data");
     }
     let cipher = u16::from_le_bytes([header[8], header[9]]);
-    match cipher {
-        1 | 5 | 7 | 128 | 133 => {}
-        259 | 260 | 269 => {
-            return Err(GravityError::Unsupported(format!(
-                "body cipher {cipher} of the jRO variant (not supported)"
-            )));
-        }
-        _ => return invalid(format!("unsupported body cipher {cipher}")),
+    if !matches!(cipher, 1 | 5 | 7 | 128 | 133 | 259 | 260 | 269) {
+        return invalid(format!("unsupported body cipher {cipher}"));
     }
     let compression = header[10];
     if compression > 2 {
@@ -207,7 +208,10 @@ pub fn decode(
             };
     }
     let mut body = payload[HEADER_SIZE..HEADER_SIZE + padded].to_vec();
-    if compressed > 128 {
+    if matches!(cipher, 259 | 260 | 269) {
+        let material: &[u8; 60] = params[..60].try_into().expect("60 bytes");
+        body = jro_body(body, &header, raw_name, cipher, material)?;
+    } else if compressed > 128 {
         match cipher {
             1 => decrypt_cham_tail(
                 &params,
@@ -265,9 +269,7 @@ fn decode_header(payload: &[u8], name_hash: &[u8; 16]) -> Result<[u8; HEADER_SIZ
         return invalid("unsupported or truncated entry header");
     }
     if payload[1] == 241 {
-        return Err(GravityError::Unsupported(
-            "entry header of the jRO variant (not supported)".into(),
-        ));
+        return jro_header(payload);
     }
     let mut header = [0u8; HEADER_SIZE];
     header.copy_from_slice(&payload[..HEADER_SIZE]);
@@ -684,6 +686,355 @@ fn decrypt_cham_tail(
     Ok(())
 }
 
+// ---- jRO variant (`ProtectedJroDecoder.cs`, `JroArchiveProfiles.cs`) ----
+
+/// SHA-256 of the archive key blocks of jRO archives that GRF Editor knows; only those stand for
+/// the keys below.
+const JRO_PROFILES: [&str; 59] = [
+    "8a9a46ee197b2b2d25477e3e2ce26bd29743708876da93af2c925cc1c068234c",
+    "339dd2684dba8b0891ca9a844b83b058f289306538218ae95c26c557ceaceb1d",
+    "ffa05695215712a114f42d4f0fef6d86637fe17bcc19b45ab569cfd0585c2a64",
+    "f380962ffbc567c042cf184fb78f0f5ea2b1cc1c3a97af3e1c59d9102a5253b8",
+    "8f61c45431931d665fe3d3b684e153e01d7479da260929a473a566313d766431",
+    "207712f8feba4c8caa80f890091b955223d4e614397f5bd4de3ad5e32959b232",
+    "cba6060a8286e2c8a9149c80b4bb50af48b965ee651c520c6389f85aa0dbb1d4",
+    "e5cc90f1c7374f3db9156ea0f03ef52a90022c437574be11aed3c0f8dd8a4c5a",
+    "7e53096d2ec7bea38d431d2f86a5a59afef23b067a3f0e082278f52de227c366",
+    "befe0beed6ee15228e49a13d0138efb39c21ebce43a38512a934030107b718ef",
+    "41efcc11a18f89d2db2a730342f7abda60eb1bfc8b3812421c965c7178fca06f",
+    "2b6983d7259731973b24589b7f6ecd424001600ded5f77a5542b9efc99dfe264",
+    "34d6e536d7ed6fd43fdd61c8650a8713c6fb0846255a668fe2f565d94b3ab48a",
+    "df3e6c9ee8d40c20edd5d73b865b2ef2bd82263c173485a85b70d61644e555a8",
+    "528789bb71559699d22c8d54ca46495e50191dbaab6ccb5c69525c01b92e7d2e",
+    "702e03f4e962b405435b84b61bfbbf9cc78b7c78f7014080f1e997bc38b7c1a4",
+    "a9bf5983797858d1b4f4fe2b7f2a845221a37336e739407d7fbc1feaf21ae216",
+    "a0799230b1112580c02908dcac0365cabdf6fc8447a34850356a8f76050504b9",
+    "b9cde4e50366af90f959c93aa5938cea69115fe3d99d1b6115c570273516758d",
+    "5d7142c159af8b49f8014c413ca0caecc39de5c6369db69118fa467e96edf4bf",
+    "d68f249a940230b44ae30ca5938718ad31200debbbb5db2460a8d9dd817ccc01",
+    "f4267e762541a2fb09028b2f1514f8a18fd825291817f1752069ab8dabb5751b",
+    "0c6fe00a49d9d3eb3ab85295bf011c7214d71915bad029022818594fec64e2c1",
+    "3648ddcc2865bc2ef8f04f2f04bf5e8cbd2d1a2b4eb9bd9816a790dc12801f90",
+    "cc636f8084295b2272e7cc10771b4fcf3e3b1889bb8b22a4d2c2a18b4d197575",
+    "b66feec0b438bfff4e5d88c2aeedfe8d6df57aa6961cdca162278fc12ecc2d27",
+    "4afcf4bdaf9ce3e44d70b56e6c4018e4c517c966bfc1c2b5e69c21bb0ff1becf",
+    "438cc2e29834ce62352170eb48e2a688820d7c142d80ff838c008ad0851c004b",
+    "54ad6e64af2818cc7dfe885dcbd06a4285eb4121cc004dcaae3277f35932cef9",
+    "bf3035c4594a516ff6376c3dbf33a0ab50cbf787b89eea35e0062c3d7ac877ec",
+    "08c9f274a2389e8610f6534bbfd22f4be447328d29fae870be5fee87dd2f6ab2",
+    "2da9e6d108ef153873c8da82db7b985aa7255a86d72ba24d99af3b92258357a7",
+    "1af0c37bb2efbc7ed19f08ecf6f29156476e95a144d08585ef45cb865c78859c",
+    "f4294137e2edd6cd24a985a854adbaaaad831a503f1c391b529b2750ae928014",
+    "0a66e9f99572586fc854330285bbaf7d1eeb9ebf81fa3954bd12b40ab0514aac",
+    "4df44e7ee74829a3725654a4eda66734572f12620202ada24c3e9d10cc762015",
+    "d071e72579ab6af3ad5decb99fb4bb3f8ccb3fe6fd66c60a1b02421dfbe3f932",
+    "ba08f3a06cd970ddc2c654f15b0f559783ae346c1ae71a15bc7ac246e15177fa",
+    "ac5760d4fde02601d40b9cf46e8deabf15e3e29f520f5719436ee8362e958941",
+    "f14d9b94576b35ffc67367eaf951112f803233c930267a1d5faf5496ce0ca431",
+    "9007481ede0bfab52ab2a5611e87fd643fd57aab3244ef84f388342c9ba669fb",
+    "3dead688f25e7ca8e51c67f073bf496fcb91d94967155f7be163bd05730706b1",
+    "ffcdb9f6e4c285fe16150e34e7989d7cb79f2f4a4972907d70f649ba42fb04f2",
+    "c52c6aa91e6175aaaa83894a294e9563566d7d3427950848a97c0c7fd2eff420",
+    "4f2c9f0e256c7de35a6a2626766076788078d1f0815977b4599e1d34d664a31c",
+    "dfa1b839b18f8ae5cfd83c6a0f02cd93d68044818fbe8b758a6b405c696e50d7",
+    "455d37dab1b57e13dd8229589c5bc67780fbf47b7e803b21689d2ed05d9f2591",
+    "df175a48d280e64d899f7827345916991db3635611f86d1dc92153e5f4107b14",
+    "f84df52839b92e206e6e302512ec9031cc0238b76b29c165cd81b070cbc0820f",
+    "5a89c68aedc3e0ff887d95df96ad14c740fb2c8394aa42e99e5552707549a3fe",
+    "0cbbcac4090506c9bfb3389b7ea8cee67b553cd7b06bb12e7255fff14d521fc3",
+    "456a4e52b30965ab45e7a13670dadbb81f3219ec6d1c295002ebe480d7af6047",
+    "b8db7ff719440061fa40b3471711d324e337cd9076d6fcd5436f6308143e8aa0",
+    "39cac3868800c4fa1308a5c6ee41787b18b8ec503b07fad22e72bfac407bc80f",
+    "8eb62476abe9859bcebea5b101ed61de89e0c6d67bdb310b1b6a1851293adfa3",
+    "ad804545419047cfc57c77d9c7af9c8cfe7b93c79c98c442eda883700b35fa60",
+    "38295a7239c790215ceb53601685e6379484da94879b2db91e0f5f2f31c34e65",
+    "345ab8280c5e3f62e61450f94b085d015241d9fd145f0ab0732b480d30413087",
+    "34c3ac066164d6f96bd88e9c3ce841e45791113b86896ffeb8b634ed9ab28e7b",
+];
+
+/// The jRO archive keys as GRF Editor embeds them: three 64-byte records (`u16` id, two unused
+/// bytes, 60 bytes of material) with the ids 3, 1 and 2.
+const JRO_KEY_BLOCK: [u8; 192] = [
+    0x03, 0x00, 0x01, 0x00, 0xe4, 0xe6, 0x9f, 0xe3, 0x9b, 0x8c, 0xd0, 0x79, 0xaa, 0xe0, 0x2e, 0x7c,
+    0x8f, 0xfc, 0xf2, 0xf4, 0xa8, 0xcc, 0xfa, 0xb1, 0xa9, 0x4b, 0xd2, 0xca, 0xae, 0x5f, 0x74, 0x7c,
+    0x94, 0x5f, 0x8f, 0x80, 0xab, 0xe1, 0xe2, 0xf8, 0xfe, 0xb4, 0x3e, 0x22, 0xdf, 0xe8, 0x96, 0x58,
+    0x03, 0x89, 0x50, 0x32, 0xd4, 0x76, 0x9a, 0x35, 0x51, 0x74, 0x19, 0xed, 0xff, 0x0b, 0xfa, 0x97,
+    0x01, 0x00, 0x00, 0x00, 0xfb, 0x04, 0x3c, 0x63, 0x2c, 0x60, 0xa9, 0x33, 0xe4, 0x00, 0x0d, 0xf9,
+    0x4d, 0xd7, 0x72, 0xf4, 0xc6, 0xe7, 0x89, 0xe0, 0xb3, 0x20, 0x77, 0xb0, 0x01, 0x5e, 0x38, 0x12,
+    0x3d, 0x19, 0xe9, 0x63, 0xb1, 0xd3, 0x05, 0x78, 0x74, 0x99, 0x0d, 0x62, 0x6a, 0x58, 0x4b, 0xe0,
+    0xa9, 0x90, 0xcb, 0x8f, 0x1c, 0x43, 0x6f, 0x53, 0xc3, 0xc1, 0xc8, 0x8f, 0xb9, 0x07, 0x3b, 0xd1,
+    0x02, 0x00, 0x00, 0x00, 0x4f, 0x7a, 0xef, 0xb5, 0xbb, 0xae, 0x61, 0x67, 0x52, 0x96, 0xaa, 0x46,
+    0x6d, 0x2f, 0x5d, 0x7c, 0xfb, 0x6a, 0x79, 0xcf, 0xee, 0x46, 0x04, 0x81, 0xae, 0xb2, 0x30, 0x67,
+    0x87, 0x4a, 0x94, 0x8b, 0x6f, 0x36, 0xb7, 0xcc, 0x76, 0x20, 0xe2, 0x0f, 0xc3, 0x96, 0x0e, 0xfd,
+    0x29, 0x8b, 0x3e, 0xca, 0xba, 0x0b, 0x8f, 0xe7, 0x62, 0x6d, 0xd2, 0xb2, 0x93, 0xdc, 0xee, 0x17,
+];
+
+/// IDEA key and CBC start value of the entry header type 241.
+const JRO_HEADER_KEY: [u8; 16] = [
+    0x56, 0xfd, 0x7e, 0x71, 0x2f, 0x6d, 0x36, 0xf5, 0x5c, 0xa5, 0x99, 0xe6, 0x7b, 0x18, 0x10, 0x7a,
+];
+const JRO_HEADER_IV: [u8; 8] = [0x4c, 0xe8, 0xa1, 0xae, 0x45, 0xb3, 0x21, 0x60];
+
+const TEA_DELTA: u32 = 0x9e37_79b9;
+
+/// The keys of a jRO archive key block, `None` when the block is not one GRF Editor knows.
+fn jro_archive_keys(raw: &[u8]) -> Result<Option<ArchiveKeys>> {
+    if !matches!(raw.len(), 84 | 148 | 212)
+        || !matches!(word(raw, 0), 1 | 257)
+        || word(raw, 12) as usize != raw.len() - 20
+    {
+        return Ok(None);
+    }
+    let digest = Sha256::digest(raw);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    if !JRO_PROFILES.contains(&hex.as_str()) {
+        return Ok(None);
+    }
+    let records: Vec<u8> = match word(raw, 12) {
+        64 => JRO_KEY_BLOCK[64..128].to_vec(),
+        128 => [&JRO_KEY_BLOCK[128..192], &JRO_KEY_BLOCK[64..128]].concat(),
+        _ => JRO_KEY_BLOCK.to_vec(),
+    };
+    if xxh32(&records) != word(raw, 16) {
+        return invalid("jRO archive key checksum mismatch");
+    }
+    let mut keys = ArchiveKeys::new();
+    for rec in records.as_chunks::<64>().0 {
+        let id = u32::from(u16::from_le_bytes([rec[0], rec[1]]));
+        if id == 0 || keys.contains_key(&id) {
+            return invalid("invalid jRO key id");
+        }
+        keys.insert(id, rec[4..64].try_into().expect("60 bytes"));
+    }
+    Ok(Some(keys))
+}
+
+/// Entry header type 241: bytes 8 to 104 IDEA-CBC encrypted, checksum as for the others.
+fn jro_header(payload: &[u8]) -> Result<[u8; HEADER_SIZE]> {
+    let mut header = [0u8; HEADER_SIZE];
+    header.copy_from_slice(&payload[..HEADER_SIZE]);
+    let keys = idea_decrypt_keys(&idea_keys(&JRO_HEADER_KEY));
+    let mut prev = JRO_HEADER_IV;
+    for block in header[8..104].as_chunks_mut::<8>().0 {
+        let cipher = *block;
+        let plain = idea_encrypt(&cipher, &keys);
+        for i in 0..8 {
+            block[i] = plain[i] ^ prev[i];
+        }
+        prev = cipher;
+    }
+    if xxh32(&header[8..104]) != word(&header, 4) {
+        return invalid("entry header checksum mismatch");
+    }
+    Ok(header)
+}
+
+/// Multiplicative inverse modulo 65537, with 0 standing for 65536 (IDEA's convention).
+fn idea_mul_inv(x: u16) -> u16 {
+    if x <= 1 {
+        return x;
+    }
+    // 65537 is prime: x^(65537 - 2)
+    let (mut base, mut exp, mut acc) = (u64::from(x), 65535u32, 1u64);
+    while exp > 0 {
+        if exp & 1 == 1 {
+            acc = acc * base % 65537;
+        }
+        base = base * base % 65537;
+        exp >>= 1;
+    }
+    acc as u16
+}
+
+/// The decryption subkeys of IDEA from the encryption subkeys; [`idea_encrypt`] with them decrypts.
+fn idea_decrypt_keys(ek: &[u16; 52]) -> [u16; 52] {
+    let mut dk = [0u16; 52];
+    for r in 0..9 {
+        let e = 48 - 6 * r;
+        let (b, c) = if r == 0 || r == 8 { (1, 2) } else { (2, 1) };
+        dk[6 * r] = idea_mul_inv(ek[e]);
+        dk[6 * r + 1] = ek[e + b].wrapping_neg();
+        dk[6 * r + 2] = ek[e + c].wrapping_neg();
+        dk[6 * r + 3] = idea_mul_inv(ek[e + 3]);
+        if r < 8 {
+            dk[6 * r + 4] = ek[e - 2];
+            dk[6 * r + 5] = ek[e - 1];
+        }
+    }
+    dk
+}
+
+/// GRF Editor's TEA and XTEA with 16 cycles (not the usual 32), big-endian words.
+fn tea_encrypt(key: &[u32; 4], block: &[u8; 8], xtea: bool) -> [u8; 8] {
+    let (mut l, mut r) = (big_word(block, 0), big_word(block, 4));
+    let mut sum = 0u32;
+    for _ in 0..16 {
+        if xtea {
+            l = l.wrapping_add(
+                ((r << 4) ^ (r >> 5)).wrapping_add(r) ^ sum.wrapping_add(key[(sum & 3) as usize]),
+            );
+            sum = sum.wrapping_add(TEA_DELTA);
+            r = r.wrapping_add(
+                ((l << 4) ^ (l >> 5)).wrapping_add(l)
+                    ^ sum.wrapping_add(key[((sum >> 11) & 3) as usize]),
+            );
+        } else {
+            sum = sum.wrapping_add(TEA_DELTA);
+            l = l.wrapping_add(
+                (r << 4).wrapping_add(key[0]) ^ r.wrapping_add(sum) ^ (r >> 5).wrapping_add(key[1]),
+            );
+            r = r.wrapping_add(
+                (l << 4).wrapping_add(key[2]) ^ l.wrapping_add(sum) ^ (l >> 5).wrapping_add(key[3]),
+            );
+        }
+    }
+    let mut out = [0u8; 8];
+    put_big(&mut out, 0, l);
+    put_big(&mut out, 4, r);
+    out
+}
+
+/// CFB decryption with (X)TEA over `data` (whole 8-byte blocks).
+fn tea_cfb_decrypt(data: &mut [u8], material: &[u8; 60], key_at: usize, iv_at: usize, xtea: bool) {
+    let key = [0, 1, 2, 3].map(|i| big_word(material, key_at + i * 4));
+    let mut feedback: [u8; 8] = material[iv_at..iv_at + 8].try_into().expect("8 bytes");
+    for block in data.as_chunks_mut::<8>().0 {
+        let cipher = *block;
+        let stream = tea_encrypt(&key, &feedback, xtea);
+        for i in 0..8 {
+            block[i] ^= stream[i];
+        }
+        feedback = cipher;
+    }
+}
+
+/// RC5-32 with 20 rounds in OFB mode: key bytes 16..32 of the material, start value bytes 0..8.
+fn rc5_ofb(data: &mut [u8], material: &[u8; 60]) {
+    let mut s = [0u32; 42];
+    s[0] = 0xb7e1_5163;
+    for i in 1..42 {
+        s[i] = s[i - 1].wrapping_add(TEA_DELTA);
+    }
+    let mut l = [0, 1, 2, 3].map(|i| word(material, 16 + i * 4));
+    let (mut a, mut b) = (0u32, 0u32);
+    for k in 0..126 {
+        let (i, j) = (k % 42, k % 4);
+        a = s[i].wrapping_add(a).wrapping_add(b).rotate_left(3);
+        s[i] = a;
+        b = l[j]
+            .wrapping_add(a)
+            .wrapping_add(b)
+            .rotate_left(a.wrapping_add(b));
+        l[j] = b;
+    }
+    let mut feedback: [u8; 8] = material[..8].try_into().expect("8 bytes");
+    for block in data.as_chunks_mut::<8>().0 {
+        let mut x = word(&feedback, 0).wrapping_add(s[0]);
+        let mut y = word(&feedback, 4).wrapping_add(s[1]);
+        for r in 1..=20 {
+            x = (x ^ y).rotate_left(y).wrapping_add(s[2 * r]);
+            y = (y ^ x).rotate_left(x).wrapping_add(s[2 * r + 1]);
+        }
+        put_le(&mut feedback, 0, x);
+        put_le(&mut feedback, 4, y);
+        for i in 0..8 {
+            block[i] ^= feedback[i];
+        }
+    }
+}
+
+/// The 16-byte mask of a jRO body: IDEA-CBC of one hash under the other, start value from the
+/// material.
+fn jro_mask(
+    material: &[u8; 60],
+    header: &[u8],
+    name: &[u8],
+    iv_at: usize,
+    checksum_as_key: bool,
+) -> [u8; 16] {
+    let name_hash = native_hash(name, 0);
+    let header_hash: [u8; 16] = header[24..40].try_into().expect("16 bytes");
+    let iv = &material[iv_at..iv_at + 8];
+    if checksum_as_key {
+        idea_mask(&header_hash, &name_hash, iv)
+    } else {
+        idea_mask(&name_hash, &header_hash, iv)
+    }
+}
+
+fn xor_mask(data: &mut [u8], mask: &[u8; 16]) {
+    for (i, x) in data.iter_mut().enumerate() {
+        *x ^= mask[i & 15];
+    }
+}
+
+/// Body ciphers 259, 260 and 269 of the jRO variant; the first 128 bytes stay plain.
+fn jro_body(
+    mut body: Vec<u8>,
+    header: &[u8; HEADER_SIZE],
+    name: &[u8],
+    cipher: u16,
+    material: &[u8; 60],
+) -> Result<Vec<u8>> {
+    if body.len() <= 128 {
+        return Ok(body);
+    }
+    match cipher {
+        259 => {
+            let n = ((body.len() - 128) & !7).min(1024);
+            tea_cfb_decrypt(&mut body[128..128 + n], material, 0, 32, true);
+            xor_mask(
+                &mut body[128..],
+                &jro_mask(material, header, name, 50, true),
+            );
+            Ok(body)
+        }
+        260 => {
+            let rest = body.len() - 128;
+            let (at, n) = if rest >= 3072 {
+                (2176, 1024)
+            } else {
+                (128, rest & !7)
+            };
+            tea_cfb_decrypt(&mut body[at..at + n], material, 32, 0, false);
+            xor_mask(
+                &mut body[128..],
+                &jro_mask(material, header, name, 48, false),
+            );
+            Ok(body)
+        }
+        _ => {
+            let decoded = word(header, 16) as usize;
+            let mask = jro_mask(material, header, name, 50, false);
+            if decoded <= 2176 {
+                if decoded != body.len() {
+                    return invalid("body 269 length mismatch");
+                }
+                xor_mask(&mut body[128..], &mask);
+                return Ok(body);
+            }
+            let n = (decoded - 2176).min(1024);
+            let pad = 8 - (n & 7);
+            if body.len() != decoded + pad || body.len() < 2176 + n + pad {
+                return invalid("body 269 padded length mismatch");
+            }
+            let mut window = body[2176..2176 + n + pad].to_vec();
+            rc5_ofb(&mut window, material);
+            if window[n..].iter().any(|&b| b as usize != pad) {
+                return invalid("body 269 PKCS#7 padding mismatch");
+            }
+            let mut out = Vec::with_capacity(decoded);
+            out.extend_from_slice(&body[..2176]);
+            xor_mask(&mut out[128..2176], &mask);
+            out.extend_from_slice(&window[..n]);
+            let tail = out.len();
+            out.extend_from_slice(&body[2176 + n + pad..]);
+            xor_mask(&mut out[tail..], &mask);
+            Ok(out)
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -700,7 +1051,10 @@ pub(crate) mod tests {
     /// GRF Editor's vector bundle (`Tests/fixtures/protected-grf.bin`): generated bytes only, no
     /// client files. A record count, then per record five length-prefixed fields and the size.
     pub(crate) fn read_vectors() -> Vec<Vector> {
-        let d: &[u8] = include_bytes!("../tests/fixtures/protected-grf.bin");
+        read_bundle(include_bytes!("../tests/fixtures/protected-grf.bin"), 40)
+    }
+
+    fn read_bundle(d: &[u8], expected: usize) -> Vec<Vector> {
         let int = |p: &mut usize| {
             let v = u32::from_le_bytes(d[*p..*p + 4].try_into().unwrap()) as usize;
             *p += 4;
@@ -727,10 +1081,43 @@ pub(crate) mod tests {
         }
         assert_eq!(
             (out.len(), p),
-            (40, d.len()),
+            (expected, d.len()),
             "fixture bundle is incomplete"
         );
         out
+    }
+
+    /// jRO entries (header 241, bodies 259, 260 and 269; stored, zlib and LZ4; 100 bytes to 9 KB,
+    /// with and without the material flag) made by `tools/jro-vectors` from GRF Editor's own
+    /// decoder sources and checked there with `ProtectedGrfDecoder.Decode`: 24 decode, 5 are
+    /// rejected (header checksum, output hash, 269 length and padding, unknown cipher).
+    #[test]
+    fn jro_vectors_decode_or_are_rejected_like_in_grf_editor() {
+        let vectors = read_bundle(
+            include_bytes!("../tests/fixtures/protected-grf-jro.bin"),
+            29,
+        );
+        let keys = ArchiveKeys::new();
+        let (mut accepted, mut rejected) = (0, 0);
+        for v in vectors {
+            match decode(&v.payload, &v.name, v.size, &keys) {
+                Ok(out) => {
+                    assert!(
+                        v.tag.starts_with("jro-ok-"),
+                        "malformed vector accepted: {}",
+                        v.tag
+                    );
+                    assert_eq!(out, v.output, "{}", v.tag);
+                    accepted += 1;
+                }
+                Err(e) => {
+                    assert!(v.tag.starts_with("jro-bad-"), "{}: {e}", v.tag);
+                    assert!(matches!(e, GravityError::Invalid(_)), "{}: {e:?}", v.tag);
+                    rejected += 1;
+                }
+            }
+        }
+        assert_eq!((accepted, rejected), (24, 5));
     }
 
     /// Same classification as GRF Editor's `CheckDecoder`: 25 vectors decode to their output, the
@@ -769,6 +1156,42 @@ pub(crate) mod tests {
             }
         }
         assert_eq!((accepted, rejected), (25, 15));
+    }
+
+    #[test]
+    fn idea_decryption_undoes_encryption() {
+        let mut x = 0x1234_5678u32;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        };
+        for _ in 0..200 {
+            let key: [u8; 16] = std::array::from_fn(|_| next());
+            let block: [u8; 8] = std::array::from_fn(|_| next());
+            let ek = idea_keys(&key);
+            let back = idea_encrypt(&idea_encrypt(&block, &ek), &idea_decrypt_keys(&ek));
+            assert_eq!(back, block);
+        }
+        assert_eq!(idea_mul(idea_mul_inv(0), 0), 1);
+        assert_eq!(idea_mul(idea_mul_inv(12345), 12345), 1);
+    }
+
+    #[test]
+    fn the_embedded_jro_keys_have_the_ids_grf_editor_reads() {
+        let ids: Vec<u16> = JRO_KEY_BLOCK
+            .as_chunks::<64>()
+            .0
+            .iter()
+            .map(|r| u16::from_le_bytes([r[0], r[1]]))
+            .collect();
+        assert_eq!(ids, [3, 1, 2]);
+        // a block of the right shape but unknown content is not taken for jRO
+        let mut raw = vec![0u8; 84];
+        raw[0] = 1;
+        raw[12] = 64;
+        assert_eq!(jro_archive_keys(&raw), Ok(None));
     }
 
     #[test]

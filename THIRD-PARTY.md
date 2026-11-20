@@ -25,6 +25,8 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 
 **Testdaten aus GRF Editor:** `crates/rgrf-core/tests/fixtures/protected-grf.bin` (59.280 Byte, SHA-256 `e6d1ff95…1c4f`) ist GRF Editors `Tests/fixtures/protected-grf.bin` unverändert: laut dessen `Tests/README.md` nur erzeugte Bytes, keine Client-Dateien; übernommen mit Tokeiburus Erlaubnis (siehe `docs/05-licensing.md`).
 
+**Selbst erzeugte jRO-Testdaten:** `crates/rgrf-core/tests/fixtures/protected-grf-jro.bin` (166.638 Byte, SHA-256 `731b998c…20b7`): 29 Einträge im selben Aufbau, in der Windows-VM von einem kleinen Programm aus GRF Editors Decoder-Quellen (`ProtectedGrfDecoder.cs`, `ProtectedGrfCiphers.cs`, `ProtectedJroDecoder.cs`, `ProtectedCnDecoder.cs`, `JroArchiveProfiles.cs`, `ZlibNet`) mit BouncyCastle.Cryptography 2.7.0 (MIT), System.IO.Hashing 8.0.0 (MIT) und K4os.Compression.LZ4 1.3.8 (MIT) erzeugt und dort mit `ProtectedGrfDecoder.Decode` geprüft; nur Zufallsbytes, keine Client-Dateien. Das Programm liegt in `tools/jro-vectors` (eigener Code; GRF Editors Quellen kopiert `build.ps1` beim Bauen dazu).
+
 Stand 2026-11-16: `cargo deny check` (Lizenzen, Verbote, Quellen, Advisories) ohne Befund. Transitive Abhängigkeiten stehen in `Cargo.lock`; erlaubte Lizenzen in `deny.toml`.
 
 ## Lua 5.1.5 und 5.0.3 (Quelltext portiert in `crates/rgrf-formats/src/luacomp.rs` und `luacomp50.rs`)

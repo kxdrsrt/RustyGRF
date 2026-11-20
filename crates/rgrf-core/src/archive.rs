@@ -371,7 +371,7 @@ impl<R: ReadAt> Archive<R> {
                         data,
                         status: codec::DecodeStatus::Ok,
                     },
-                    // a variant that is not ported (jRO): readable for GRF Editor, not here
+                    // a variant that is not ported (Chinese key blocks): reported as encrypted
                     Err(gravity::GravityError::Unsupported(_)) => Decoded {
                         data: Vec::new(),
                         status: codec::DecodeStatus::Encrypted,
