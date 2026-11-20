@@ -486,6 +486,7 @@ input.hexb { width: 2.2em; padding: 1px 2px; text-align: center; font: inherit; 
 input.hexb:hover { border-color: var(--line); }
 input.hexb:focus { border-color: var(--accent); background: var(--panel); outline: none; }
 input.hexb.changed { background: var(--select); border-color: var(--accent); }
+input.hexb.found { outline: 2px solid var(--accent); outline-offset: -1px; }
 input.hexb[aria-invalid="true"] { border-color: #d33; }
 .hexascii { margin-left: 10px; color: var(--muted); letter-spacing: 0.05em; }
 .hexascii span { display: inline-block; width: 0.62em; }

@@ -2637,6 +2637,21 @@ impl Session {
         })
     }
 
+    /// The first place at or after `from` where `pattern` occurs in the entry (with staged
+    /// changes), wrapping round to the start once; `None` when it is nowhere.
+    pub fn hex_find(&self, index: usize, pattern: &[u8], from: u64) -> Result<Option<u64>, String> {
+        if pattern.is_empty() || pattern.len() > 256 {
+            return Err("the search needs 1 to 256 bytes".into());
+        }
+        let (_, data, _) = self.working_bytes(index)?;
+        let from = usize::try_from(from).map_or(data.len(), |f| f.min(data.len()));
+        let find = |range: &[u8]| range.windows(pattern.len()).position(|w| w == pattern);
+        Ok(find(&data[from..])
+            .map(|p| p + from)
+            .or_else(|| find(&data[..(from + pattern.len() - 1).min(data.len())]))
+            .map(|p| p as u64))
+    }
+
     /// Overwrites single bytes of an entry (the size never changes) and stages the result.
     pub fn stage_hex(&mut self, index: usize, edits: &[(u64, u8)]) -> Result<(), String> {
         self.transact(|s| {
@@ -3651,6 +3666,23 @@ mod tests {
         assert!(t[1].data.is_some() && t[1].mime == "image/png");
         assert!(t[2].data.is_none() && t[2].error.is_some());
         assert_eq!(t[3].error.as_deref(), Some("no such entry"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_bytes_and_wraps_round() {
+        let (dir, grf) = sample("hexfind");
+        let s = Session::open(&grf).unwrap();
+        // blob.bin holds the bytes 0 to 99
+        let blob = find(&s, "blob.bin");
+        assert_eq!(s.hex_find(blob, &[40, 41, 42], 0).unwrap(), Some(40));
+        assert_eq!(s.hex_find(blob, &[40, 41, 42], 40).unwrap(), Some(40));
+        // after the only hit the search wraps round to it
+        assert_eq!(s.hex_find(blob, &[40, 41, 42], 41).unwrap(), Some(40));
+        assert_eq!(s.hex_find(blob, &[99], 50).unwrap(), Some(99));
+        assert_eq!(s.hex_find(blob, &[200, 201], 0).unwrap(), None);
+        assert!(s.hex_find(blob, &[], 0).is_err());
+        assert!(s.hex_find(blob, &[0; 257], 0).is_err());
         let _ = fs::remove_dir_all(dir);
     }
 

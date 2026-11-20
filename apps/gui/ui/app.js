@@ -799,12 +799,13 @@ async function openHexEditor(row, title) {
   const edits = new Map();
   let offset = 0;
   let size = 0;
-  const grid = el("div", { class: "hexgrid", role: "group", "aria-label": "Bytes of the file" });
+  let hit = null; // the bytes the last search found
+  const grid = el("div", { class: "hexgrid", role: "group", "aria-label": t("hex-bytes-aria") });
   const where = el("span", { class: "muted", role: "status" });
-  const goto = el("input", { type: "text", class: "field", size: "10", placeholder: "offset, e.g. 0x400", "aria-label": "Go to offset" });
+  const goto = el("input", { type: "text", class: "field", size: "10", placeholder: t("hex-goto-ph"), "aria-label": t("hex-goto-aria") });
   const count = el("span", { class: "muted" });
-  const prev = el("button", { type: "button", class: "small", text: "◀ Previous", onclick: () => load(offset - PAGE) });
-  const next = el("button", { type: "button", class: "small", text: "Next ▶", onclick: () => load(offset + PAGE) });
+  const prev = el("button", { type: "button", class: "small", text: t("hex-prev"), onclick: () => load(offset - PAGE) });
+  const next = el("button", { type: "button", class: "small", text: t("hex-next"), onclick: () => load(offset + PAGE) });
   const hex2b = (n) => n.toString(16).padStart(2, "0");
   const asciiOf = (b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".");
   async function load(at) {
@@ -820,8 +821,9 @@ async function openHexEditor(row, title) {
       const ascii = el("span", { class: "hexascii" });
       for (let c = 0; c < 16 && r * 16 + c < bytes.length; c++) {
         const at2 = offset + r * 16 + c;
-        const input = el("input", { type: "text", class: "hexb", maxlength: "2", value: hex2b(edits.get(at2) ?? bytes[r * 16 + c]), "aria-label": `Byte at offset ${at2}`, spellcheck: "false", autocomplete: "off" });
+        const input = el("input", { type: "text", class: "hexb", maxlength: "2", value: hex2b(edits.get(at2) ?? bytes[r * 16 + c]), "aria-label": t("hex-byte-aria", { at: at2 }), spellcheck: "false", autocomplete: "off" });
         input.classList.toggle("changed", edits.has(at2));
+        input.classList.toggle("found", hit != null && at2 >= hit.at && at2 < hit.at + hit.len);
         const glyph = el("span", { text: asciiOf(edits.get(at2) ?? bytes[r * 16 + c]) });
         ascii.append(glyph);
         input.addEventListener("focus", () => input.select());
@@ -834,7 +836,7 @@ async function openHexEditor(row, title) {
           else edits.set(at2, v);
           input.classList.toggle("changed", edits.has(at2));
           glyph.textContent = asciiOf(v);
-          count.textContent = edits.size ? `${edits.size} byte(s) changed` : "";
+          count.textContent = edits.size ? t("hex-count", { n: edits.size }) : "";
           // two digits typed: on to the next byte
           if (input.value.length === 2) (input.parentElement.nextElementSibling?.querySelector?.("input") ?? input.closest(".hexrow").nextElementSibling?.querySelector("input"))?.focus();
         });
@@ -847,10 +849,50 @@ async function openHexEditor(row, title) {
       }
       grid.append(el("div", { class: "hexrow" }, el("span", { class: "hexoff", text: (offset + r * 16).toString(16).padStart(8, "0") }), ...cells, ascii));
     }
-    where.textContent = `Offset ${offset.toString(16).padStart(8, "0")} – ${(offset + bytes.length).toString(16)} of ${size.toString(16)} (${fmtBytes(size)})`;
+    where.textContent = t("hex-where", { from: offset.toString(16).padStart(8, "0"), to: (offset + bytes.length).toString(16), size: size.toString(16), human: fmtBytes(size) });
     prev.disabled = offset === 0;
     next.disabled = offset + PAGE >= size;
   }
+  const mode = el("select", { "aria-label": t("hex-find-mode") }, el("option", { value: "hex", text: t("hex-mode-hex") }), el("option", { value: "text", text: t("hex-mode-text") }));
+  const needle = el("input", { type: "text", class: "field", size: "14", placeholder: t("hex-find-ph"), "aria-label": t("hex-find-btn"), spellcheck: "false", autocomplete: "off" });
+  const found = el("span", { class: "muted", role: "status" });
+  let searchFrom = 0;
+  async function findNext() {
+    let pattern;
+    if (mode.value === "text") pattern = [...new TextEncoder().encode(needle.value)];
+    else {
+      const t2 = needle.value.replace(/\s+/g, "");
+      pattern = /^([0-9a-f]{2})+$/i.test(t2) ? t2.match(/../g).map((h) => parseInt(h, 16)) : null;
+      if (!pattern) {
+        found.textContent = t("hex-bad-pattern");
+        return;
+      }
+    }
+    if (!pattern.length) return;
+    try {
+      const at = await invoke("hex_find", { index: row.index, pattern, from: searchFrom });
+      if (at == null) {
+        hit = null;
+        for (const e of grid.querySelectorAll(".found")) e.classList.remove("found");
+        found.textContent = t("hex-not-found");
+        return;
+      }
+      hit = { at, len: pattern.length };
+      searchFrom = at + 1;
+      found.textContent = t("hex-found", { at: at.toString(16).padStart(8, "0") });
+      await load(at);
+    } catch (e) {
+      found.textContent = errText(e);
+    }
+  }
+  needle.addEventListener("input", () => (searchFrom = 0));
+  mode.addEventListener("change", () => (searchFrom = 0));
+  needle.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    findNext();
+  });
+  const findBtn = el("button", { type: "button", class: "small", text: t("hex-find-btn"), onclick: findNext });
   goto.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -861,23 +903,23 @@ async function openHexEditor(row, title) {
   try {
     await load(0);
   } catch (e) {
-    return note("Cannot show the bytes", errText(e), true);
+    return note(t("hex-cannot"), errText(e), true);
   }
   const dlg = $("dlg");
   dlg.classList.add("wide");
   const go = await ask(
-    `Bytes of ${title.split("\\").pop()}`,
-    [el("p", { class: "muted", text: "Type two hex digits to change a byte. The size of the file stays the same; changes are staged like any other and can be undone." }), el("div", { class: "controls" }, prev, next, goto, where, count), grid],
-    [{ label: "Apply changes", value: true, primary: true }, { label: "Close", value: null }],
+    t("hex-title", { name: title.split("\\").pop() }),
+    [el("p", { class: "muted", text: t("hex-intro") }), el("div", { class: "controls" }, prev, next, goto, where, count), el("div", { class: "controls" }, mode, needle, findBtn, found), grid],
+    [{ label: t("hex-apply"), value: true, primary: true }, { label: "Close", value: null }],
   );
   dlg.classList.remove("wide");
   if (!go || !edits.size) return;
   try {
     setPending(await invoke("stage_hex", { index: row.index, edits: [...edits] }));
-    setStatus(`${edits.size} byte(s) of ${title} changed (staged)`);
+    setStatus(t("hex-status", { name: title, n: edits.size }));
     refreshPreview();
   } catch (e) {
-    await note("Could not change the bytes", errText(e), true);
+    await note(t("hex-failed"), errText(e), true);
   }
 }
 
@@ -910,7 +952,7 @@ function renderPreview(p, row, meta) {
           ? el(
               "div",
               { class: "controls" },
-              el("button", { type: "button", class: "small", icon: "palette", text: "8-bit…", title: "Store this picture with 256 colours (smaller; magenta stays transparent). Shows both to compare first (staged)", onclick: () => openReduceDialog(row) }),
+              el("button", { type: "button", class: "small", icon: "palette", text: t("reduce1-btn"), title: t("reduce1-btn-title"), onclick: () => openReduceDialog(row) }),
             )
           : null;
       return [reduce, el("div", { class: "checker" }, img)];
@@ -2289,7 +2331,7 @@ async function doMerge() {
   }
 }
 
-const PSNR_HINT = "PSNR measures how far the colours moved: from 40 dB on the difference is hard to see, below 35 dB smooth gradients show bands.";
+const PSNR_HINT = () => t("psnr-hint");
 
 /** One true-colour BMP next to its 8-bit version; staging replaces the entry. */
 async function openReduceDialog(row) {
@@ -2297,7 +2339,7 @@ async function openReduceDialog(row) {
   try {
     p = await invoke("reduce_preview", { index: row.index });
   } catch (e) {
-    return note("Cannot reduce this picture", errText(e), true);
+    return note(t("reduce1-cannot"), errText(e), true);
   }
   const pic = (data, caption) => {
     const img = el("img", { src: dataUrl("image/bmp", data), alt: caption });
@@ -2309,23 +2351,23 @@ async function openReduceDialog(row) {
     });
     return el("figure", {}, el("div", { class: "checker" }, img), el("figcaption", { class: "muted", text: caption }));
   };
-  const quality = p.psnr == null ? "lossless: the picture has no more than 256 colours" : `PSNR ${p.psnr.toFixed(1)} dB`;
+  const quality = p.psnr == null ? t("reduce1-lossless") : t("reduce1-psnr", { db: p.psnr.toFixed(1) });
   const go = await ask(
-    "Reduce to 8 bits?",
+    t("reduce1-title"),
     [
-      el("p", { text: `${fmtBytes(p.bytes_before)} → ${fmtBytes(p.bytes_after)} unpacked, ${fmtNum(p.colors)} colours, ${quality}. Magenta (transparent) stays exact.` }),
-      p.psnr == null ? null : el("p", { class: "muted", text: PSNR_HINT }),
-      el("div", { class: "compare" }, pic(p.before, "Original"), pic(p.after, "8-bit")),
+      el("p", { text: t("reduce1-info", { before: fmtBytes(p.bytes_before), after: fmtBytes(p.bytes_after), colors: p.colors, quality }) }),
+      p.psnr == null ? null : el("p", { class: "muted", text: PSNR_HINT() }),
+      el("div", { class: "compare" }, pic(p.before, t("reduce1-original")), pic(p.after, t("reduce1-8bit"))),
     ],
-    [{ label: "Reduce", value: true, primary: true }, { label: "Cancel", value: null }],
+    [{ label: t("reduce1-go"), value: true, primary: true }, { label: "Cancel", value: null }],
   );
   if (!go) return;
   try {
     setPending(await invoke("stage_reduce", { index: row.index }));
-    setStatus(`${row.name} reduced to 8 bits (staged)`);
+    setStatus(t("reduce1-status", { name: row.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not reduce", errText(e), true);
+    await note(t("reduce-could-not"), errText(e), true);
   }
 }
 
@@ -2335,53 +2377,48 @@ async function doReduceImages() {
   const level = el(
     "select",
     { class: "field" },
-    ...[
-      [45, "45 dB: best, smallest savings"],
-      [40, "40 dB: hard to tell apart (recommended)"],
-      [38, "38 dB: smaller, slight loss in gradients"],
-      [35, "35 dB: smallest, gradients may show bands"],
-    ].map(([v, t]) => el("option", { value: String(v), text: t, selected: v === 40 })),
+    ...[45, 40, 38, 35].map((v) => el("option", { value: String(v), text: t(`reduce-level-${v}`), selected: v === 40 })),
   );
   const pending = S.changes.length;
   const go = await ask(
-    "Reduce images",
+    t("reduce-title"),
     [
-      el("p", { text: "Writes a copy of this archive in which every true-colour BMP is stored with 256 colours, where the picture keeps the quality below and the stored file gets smaller. The open archive is not changed. The client loads 8-bit BMPs (many of its own are)." }),
-      el("p", { class: "muted", text: `${PSNR_HINT} Magenta (transparent) stays exact, and no other colour becomes transparent. Pictures with at most 256 colours lose nothing.` }),
-      el("div", { class: "form" }, el("label", {}, "Lowest quality ", level)),
-      pending ? el("p", { text: `The ${fmtNum(pending)} pending change(s) are written into the copy too; those entries are not reduced.` }) : null,
+      el("p", { text: t("reduce-intro") }),
+      el("p", { class: "muted", text: `${PSNR_HINT()} ${t("reduce-notes")}` }),
+      el("div", { class: "form" }, el("label", {}, `${t("reduce-quality")} `, level)),
+      pending ? el("p", { text: t("reduce-pending", { n: pending }) }) : null,
     ],
-    [{ label: "Choose target…", value: true, primary: true }, { label: "Cancel", value: null }],
+    [{ label: t("dlg-choose-target"), value: true, primary: true }, { label: "Cancel", value: null }],
   );
   if (!go) return;
   const base = S.info.file_name.replace(/\.[^.]+$/, "");
-  const dst = await T.dialog.save({ title: "Save the reduced archive as", defaultPath: `${base}-8bit.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
+  const dst = await T.dialog.save({ title: t("reduce-save-as"), defaultPath: `${base}-8bit.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
   if (!dst) return;
-  const job = showJob("Reducing images");
-  setStatus(`Reducing images into ${dst} …`);
+  const job = showJob(t("reduce-running"));
+  setStatus(t("reduce-status", { dst }));
   try {
     const r = await invoke("reduce_images", { dst, minPsnr: Number(level.value) });
     job.close();
-    const why = { already_8_bit: "already 8-bit", below_min_psnr: "below the quality", not_smaller: "not smaller stored", noisy_transparency: "noisy around magenta", alpha: "with alpha", unreadable: "unreadable" };
-    const kept = Object.entries(r.kept).map(([k, n]) => `${fmtNum(n)} ${why[k] || k}`).join(", ");
+    const why = (k) => (t(`reduce-why-${k}`) !== `reduce-why-${k}` ? t(`reduce-why-${k}`) : k);
+    const kept = Object.entries(r.kept).map(([k, n]) => `${fmtNum(n)} ${why(k)}`).join(", ");
     const saved = r.stored_before - r.stored_after;
     const lines = [
-      el("p", { text: `${fmtNum(r.reduced)} of ${fmtNum(r.matched)} BMPs reduced (${fmtNum(r.lossless)} lossless${r.worst_psnr != null ? `, worst ${r.worst_psnr.toFixed(1)} dB` : ""}), ${fmtBytes(saved)} smaller.` }),
-      kept ? el("p", { class: "muted", text: `Kept as they are: ${kept}.` }) : null,
+      el("p", { text: t("reduce-summary", { reduced: r.reduced, matched: r.matched, lossless: r.lossless, worst: r.worst_psnr != null ? t("reduce-worst", { db: r.worst_psnr.toFixed(1) }) : "", saved: fmtBytes(saved) }) }),
+      kept ? el("p", { class: "muted", text: t("reduce-kept", { list: kept }) }) : null,
     ];
     if (!r.written) {
-      setStatus("Nothing to reduce");
-      return ask("Nothing to reduce", lines, [{ label: "OK", value: true, primary: true }], "info");
+      setStatus(t("reduce-nothing"));
+      return ask(t("reduce-nothing"), lines, [{ label: "OK", value: true, primary: true }], "info");
     }
-    lines.push(el("p", { text: `${fmtNum(r.files)} files, ${fmtBytes(r.file_bytes)}, ${r.verified ? "verified" : "not verified"}.` }));
-    setStatus(`Reduced into ${dst}: ${fmtBytes(saved)} smaller`);
-    const open = await ask("Images reduced", lines, [{ label: "Open it", value: true, primary: true }, { label: "Close", value: false }]);
+    lines.push(el("p", { text: t("reduce-files", { files: r.files, size: fmtBytes(r.file_bytes), verified: r.verified ? t("verified-yes") : t("verified-no") }) }));
+    setStatus(t("reduce-done-status", { dst, saved: fmtBytes(saved) }));
+    const open = await ask(t("reduce-done-title"), lines, [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }]);
     if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
     const cancelled = /cancel/i.test(errText(e));
-    setStatus(cancelled ? "Reducing cancelled" : "Reducing failed");
-    await note(cancelled ? "Reducing cancelled" : "Could not reduce", cancelled ? "Nothing was written." : errText(e), !cancelled);
+    setStatus(cancelled ? t("reduce-cancelled") : t("reduce-failed"));
+    await note(cancelled ? t("reduce-cancelled") : t("reduce-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
 }
 

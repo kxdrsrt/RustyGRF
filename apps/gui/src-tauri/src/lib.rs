@@ -542,6 +542,17 @@ async fn hex_page(
     with_session(&state, move |s| s.hex_page(index, offset, len)).await
 }
 
+/// The next place a byte pattern occurs in an entry (wrapping round), or none.
+#[tauri::command]
+async fn hex_find(
+    state: State<'_, AppState>,
+    index: usize,
+    pattern: Vec<u8>,
+    from: u64,
+) -> Res<Option<u64>> {
+    with_session(&state, move |s| s.hex_find(index, &pattern, from)).await
+}
+
 /// Overwrites bytes of an entry (staged).
 #[tauri::command]
 async fn stage_hex(
@@ -929,6 +940,7 @@ pub fn run() {
             act_sound,
             open_external,
             hex_page,
+            hex_find,
             stage_hex,
             act_layer_at,
             save_picture,

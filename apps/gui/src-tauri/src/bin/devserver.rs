@@ -229,6 +229,10 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
         "hex_page" => with(state, |s| {
             to_json(s.hex_page(arg(a, "index")?, arg(a, "offset")?, arg(a, "len")?)?)
         }),
+        "hex_find" => with(state, |s| {
+            let pattern: Vec<u8> = arg(a, "pattern")?;
+            to_json(s.hex_find(arg(a, "index")?, &pattern, arg(a, "from")?)?)
+        }),
         "stage_hex" => with(state, |s| {
             s.stage_hex(arg(a, "index")?, &arg::<Vec<(u64, u8)>>(a, "edits")?)?;
             to_json(s.pending())
