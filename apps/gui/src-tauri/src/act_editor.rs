@@ -158,7 +158,7 @@ fn finite(v: f32, what: &str) -> Result<f32, String> {
     if v.is_finite() && v.abs() < 100_000.0 {
         Ok(v)
     } else {
-        Err(format!("{what} must be a reasonable number"))
+        Err(err!("err-number", "what": what))
     }
 }
 
@@ -172,20 +172,20 @@ pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result
             .map_err(|e| e.to_string())?,
         ActEdit::RemoveAction => {
             if n_actions <= 1 {
-                return Err("an animation keeps at least one action".into());
+                return Err(err!("err-act-keep-action"));
             }
             act.remove_action(action).map_err(|e| e.to_string())?;
         }
         ActEdit::MoveAction { to } => {
             if action >= n_actions || *to >= n_actions {
-                return Err("no such action".into());
+                return Err(err!("err-act-no-action"));
             }
             let a = act.actions.remove(action);
             act.actions.insert(*to, a);
         }
         ActEdit::SetInterval { ms } => {
             if !(ms.is_finite() && *ms >= 1.0 && *ms <= 60_000.0) {
-                return Err("the interval must be between 1 and 60000 ms".into());
+                return Err(err!("err-act-interval"));
             }
             act.set_interval(action, ms / 25.0)
                 .map_err(|e| e.to_string())?;
@@ -243,17 +243,17 @@ fn apply_in_action(
         }
         ActEdit::MoveFrame { to } => {
             if frame >= n_frames || *to >= n_frames {
-                return Err("no such frame".into());
+                return Err(err!("err-act-no-frame"));
             }
             let f = a.frames.remove(frame);
             a.frames.insert(*to, f);
         }
         ActEdit::RemoveFrame => {
             if n_frames <= 1 {
-                return Err("an action keeps at least one frame".into());
+                return Err(err!("err-act-keep-frame"));
             }
             if frame >= n_frames {
-                return Err(format!("no frame {frame}"));
+                return Err(err!("err-act-no-frame-n", "n": frame));
             }
             a.frames.remove(frame);
         }
@@ -287,13 +287,13 @@ fn apply_in_action(
                     }
                     if let Some(v) = sprite_index {
                         if *v < -1 {
-                            return Err("the image number is -1 (empty) or more".into());
+                            return Err(err!("err-act-image-number"));
                         }
                         l.sprite_index = *v;
                     }
                     if let Some(v) = sprite_type {
                         if !matches!(v, 0 | 1) {
-                            return Err("the image type is 0 (palette) or 1 (true colour)".into());
+                            return Err(err!("err-act-image-type"));
                         }
                         l.sprite_type = *v;
                     }
@@ -308,7 +308,7 @@ fn apply_in_action(
                     }
                     if let Some(v) = scale_y {
                         if version < V2_4 {
-                            return Err("this ACT version has one scale for both directions".into());
+                            return Err(err!("err-act-one-scale"));
                         }
                         l.scale_y = finite(*v, "scale")?;
                     }
@@ -321,7 +321,7 @@ fn apply_in_action(
                 }
                 ActEdit::AddLayer => {
                     if f.layers.len() >= MAX_ITEMS {
-                        return Err("too many layers".into());
+                        return Err(err!("err-act-too-many-layers"));
                     }
                     f.layers.push(Layer {
                         sprite_index: 0,
@@ -330,13 +330,13 @@ fn apply_in_action(
                 }
                 ActEdit::RemoveLayer { layer } => {
                     if *layer >= f.layers.len() {
-                        return Err(format!("no layer {layer}"));
+                        return Err(err!("err-act-no-layer-n", "n": layer));
                     }
                     f.layers.remove(*layer);
                 }
                 ActEdit::MoveLayer { layer, to } => {
                     if *layer >= f.layers.len() || *to >= f.layers.len() {
-                        return Err("no such layer".into());
+                        return Err(err!("err-act-no-layer"));
                     }
                     let l = f.layers.remove(*layer);
                     f.layers.insert(*to, l);
@@ -355,10 +355,10 @@ fn apply_in_action(
                 }
                 ActEdit::AddAnchor => {
                     if version < V2_3 {
-                        return Err("this ACT version has no anchors".into());
+                        return Err(err!("err-act-no-anchors"));
                     }
                     if f.anchors.len() >= MAX_ITEMS {
-                        return Err("too many anchors".into());
+                        return Err(err!("err-act-too-many-anchors"));
                     }
                     f.anchors.push(Anchor {
                         unknown: [0; 4],
@@ -369,7 +369,7 @@ fn apply_in_action(
                 }
                 ActEdit::RemoveAnchor { anchor } => {
                     if *anchor >= f.anchors.len() {
-                        return Err(format!("no anchor {anchor}"));
+                        return Err(err!("err-act-no-anchor-n", "n": anchor));
                     }
                     f.anchors.remove(*anchor);
                 }
@@ -404,9 +404,12 @@ pub fn view_with(
     let a = act
         .actions
         .get(action)
-        .ok_or("the animation has no actions")?;
+        .ok_or_else(|| err!("pvw-n-act-none"))?;
     let frame = frame.min(a.frames.len().saturating_sub(1));
-    let f = a.frames.get(frame).ok_or("the action has no frames")?;
+    let f = a
+        .frames
+        .get(frame)
+        .ok_or_else(|| err!("err-act-no-frames"))?;
     let spr = spr_data
         .map(|d| Spr::parse(d).map_err(|e| e.to_string()))
         .transpose()?;
@@ -466,7 +469,7 @@ pub fn view_with(
     for r in references {
         let parsed = Act::parse(r.act).map_err(|e| format!("not a readable ACT: {e}"));
         let parsed = parsed.and_then(|ra| {
-            let d = r.spr.ok_or("its .spr is not in this archive")?;
+            let d = r.spr.ok_or_else(|| err!("err-no-spr"))?;
             let rs = Spr::parse(d).map_err(|e| format!("its .spr is not readable: {e}"))?;
             Ok((ra, rs))
         });

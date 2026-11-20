@@ -59,7 +59,11 @@ function fmtBytes(n) {
 
 const fmtNum = (n) => n.toLocaleString("en-US");
 const setStatus = (t) => ($("status").textContent = t);
-const errText = (e) => (typeof e === "string" ? e : e?.message || JSON.stringify(e));
+/** An error from the backend as text; coded ones (a sentinel, then JSON) are translated. */
+const errText = (e) => {
+  const text = typeof e === "string" ? e : e?.message || JSON.stringify(e);
+  return text.startsWith("\u0001") ? noteText(text) : text;
+};
 
 // ---------- dialogs ----------
 
@@ -941,9 +945,31 @@ const dataUrl = (mime, data) => `data:${mime};base64,${data}`;
 const gatTypeName = (k) => t(k < 0 ? "gat-tn-weird" : k <= 6 ? `gat-tn-${k}` : "gat-tn-4");
 
 /** A line from the backend: plain text, or a catalogue key with its values. */
+const NOTE_UNITS = {
+  tiles: "tiles", lightmaps: "lightmaps", textures: "textures", models: "models", lights: "lights", sounds: "sounds", effects: "effects",
+  nodes: "nodes", triangles: "triangles", v: "vertices", f: "faces", pal: "palimg", rgba: "rgbaimg", actions: "actions", layers: "layers",
+};
+/** Values that are counts of things get their unit (with the right plural) from the catalog. */
+const NOTE_UNIT_OVERRIDES = {
+  "pvw-n-textures": { n: "textures" },
+  "pvw-n-instances": { instances: "modelinst", models: "diffmodels" },
+};
+
 function noteText(n) {
-  if (typeof n === "string") return n;
+  if (typeof n === "string") {
+    if (!n.startsWith("\u0001")) return n;
+    try {
+      n = JSON.parse(n.slice(1));
+    } catch {
+      return n;
+    }
+  }
   const args = { ...n.args };
+  const units = { ...NOTE_UNITS, ...NOTE_UNIT_OVERRIDES[n.key] };
+  for (const [name, unit] of Object.entries(units)) {
+    if (name in args) args[name] = t(`un-${unit}`, { n: args[name] });
+  }
+  if ("frames" in args) args.frames = t("pvw-frames", { n: args.frames });
   if (n.key === "pvw-n-gat-type") {
     args.name = gatTypeName(args.k);
     args.cells = t("gat-cells", { n: args.n });

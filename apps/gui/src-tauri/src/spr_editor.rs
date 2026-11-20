@@ -27,7 +27,7 @@ pub fn image(data: &[u8], frame: usize) -> Result<SprImageView, String> {
             format!("the sprite has no image {frame}")
         }
     })?;
-    let pal = spr.palette.as_ref().ok_or("the sprite has no palette")?;
+    let pal = spr.palette.as_ref().ok_or_else(|| err!("err-no-palette"))?;
     Ok(SprImageView {
         width: img.width,
         height: img.height,
@@ -56,12 +56,7 @@ pub fn apply(data: &[u8], frame: usize, pixels_b64: &str) -> Result<Vec<u8>, Str
         .decode(pixels_b64)
         .map_err(|_| "the pixels are not valid base64".to_string())?;
     if pixels.len() != usize::from(old.width) * usize::from(old.height) {
-        return Err(format!(
-            "the image is {} x {} pixels, the data has {} values",
-            old.width,
-            old.height,
-            pixels.len()
-        ));
+        return Err(err!("err-spr-size", "w": old.width, "h": old.height, "n": pixels.len()));
     }
     let img = IndexedImage {
         width: old.width,

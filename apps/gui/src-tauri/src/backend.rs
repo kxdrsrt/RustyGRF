@@ -380,7 +380,7 @@ pub fn reduce_images(
     use rayon::prelude::*;
     use std::sync::atomic::{AtomicU64, Ordering};
     if same_file(&plan.src, dst) {
-        return Err("the target must not be the open archive".into());
+        return Err(err!("err-target-open"));
     }
     let src = plan.open()?;
     let touched: std::collections::HashSet<Vec<u8>> =
@@ -545,14 +545,11 @@ pub struct ReducePreview {
 fn reduce_one(data: &[u8]) -> Result<(Vec<u8>, f64, usize), String> {
     let info = rgrf_formats::bmp::info(data).map_err(|e| e.to_string())?;
     if info.bits <= 8 {
-        return Err(format!(
-            "the picture already has {} bits per pixel",
-            info.bits
-        ));
+        return Err(err!("err-already-bits", "bits": info.bits));
     }
     let img = rgrf_formats::bmp::parse(data).map_err(|e| e.to_string())?;
     if img.pixels.as_chunks::<4>().0.iter().any(|p| p[3] != 255) {
-        return Err("the picture has an alpha channel, which 8-bit BMPs cannot keep".into());
+        return Err(err!("err-alpha"));
     }
     rgrf_formats::bmp::write_reduced(&img, 256).map_err(|e| e.to_string())
 }
@@ -615,13 +612,13 @@ pub fn save_picture(path: &Path, png_base64: &str) -> Result<u64, String> {
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("png"))
     {
-        return Err("the picture is saved as .png".into());
+        return Err(err!("err-saved-png"));
     }
     let data = B64
         .decode(png_base64)
         .map_err(|e| format!("not a picture: {e}"))?;
     if !data.starts_with(b"\x89PNG") {
-        return Err("not a PNG picture".into());
+        return Err(err!("err-not-png"));
     }
     std::fs::write(path, &data).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(data.len() as u64)
@@ -998,7 +995,7 @@ fn png_for(spr: &Spr, png: &[u8], indexed: bool) -> Result<NewImage, String> {
             PngFrame::Indexed { image, palette } => to_rgba(&image, &palette),
         }));
     }
-    let pal = spr.palette.clone().ok_or("the sprite has no palette")?;
+    let pal = spr.palette.clone().ok_or_else(|| err!("err-no-palette"))?;
     Ok(NewImage::Indexed(match new {
         PngFrame::Indexed { image, palette }
             if (0..256).all(|i| palette[4 * i..4 * i + 3] == pal[4 * i..4 * i + 3]) =>
@@ -1072,7 +1069,7 @@ pub fn set_spr_palette(data: &[u8], pal: &[u8]) -> Result<Vec<u8>, String> {
 /// The ACT stores the interval in units of 25 ms.
 pub fn set_act_interval(data: &[u8], action: usize, ms: f32) -> Result<Vec<u8>, String> {
     if !(ms.is_finite() && ms > 0.0) {
-        return Err("the interval must be a positive number of milliseconds".into());
+        return Err(err!("err-interval-positive"));
     }
     let mut act = Act::parse(data).map_err(|e| e.to_string())?;
     act.set_interval(action, ms / 25.0)
@@ -1088,10 +1085,10 @@ fn file_name_of(p: &Path) -> String {
 fn check_file(file: &Path) -> Result<(), String> {
     let meta = std::fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
     if !meta.is_file() {
-        return Err(format!("{} is not a file", file.display()));
+        return Err(err!("err-not-file", "path": file.display().to_string()));
     }
     if meta.len() > u64::from(u32::MAX) {
-        return Err(format!("{} is larger than 4 GiB", file.display()));
+        return Err(err!("err-file-4gib", "path": file.display().to_string()));
     }
     Ok(())
 }
@@ -1154,10 +1151,10 @@ pub struct MergeSummary {
 /// Merges archives into a new one (the inputs are never changed) and verifies the result.
 pub fn merge_archives(req: &MergeRequest, ctl: &Control) -> Result<MergeSummary, String> {
     if req.sources.len() < 2 {
-        return Err("choose at least two archives".into());
+        return Err(err!("err-merge-two"));
     }
     if req.sources.iter().any(|p| same_file(p, &req.dst)) {
-        return Err("the target must not be one of the input archives".into());
+        return Err(err!("err-merge-target"));
     }
     let archives = req
         .sources
@@ -1262,10 +1259,7 @@ fn lua_version(chunk: &rgrf_formats::luac::Chunk) -> &'static str {
 fn encode_legacy(enc: &'static encoding_rs::Encoding, text: &str) -> Result<Vec<u8>, String> {
     let (bytes, _, bad) = enc.encode(text);
     if bad {
-        return Err(format!(
-            "the text has characters that {} cannot hold",
-            enc.name()
-        ));
+        return Err(err!("err-text-chars", "encoding": enc.name()));
     }
     Ok(bytes.into_owned())
 }
@@ -1382,7 +1376,7 @@ impl Session {
     pub fn restore_draft(&mut self) -> Result<DraftRestored, String> {
         let root = self.draft_root.clone().ok_or("drafts are off")?;
         let (changes, skipped) =
-            crate::draft::take(&root, &self.path).ok_or("there is no draft for this archive")?;
+            crate::draft::take(&root, &self.path).ok_or_else(|| err!("err-no-draft"))?;
         self.draft_offered = false;
         let restored = changes.len();
         self.transact(|s| {
@@ -1696,7 +1690,7 @@ impl Session {
             .get(index)
             .ok_or_else(|| format!("no entry {index}"))?;
         if e.is_marker() {
-            return Err("this entry is an empty marker".into());
+            return Err(err!("err-empty-marker"));
         }
         Ok(e.name.clone())
     }
@@ -1716,10 +1710,9 @@ impl Session {
     fn stage_add_impl(&mut self, path: &str, file: &Path) -> Result<(), String> {
         let text = path.trim().replace('/', "\\");
         if text.is_empty() || text.ends_with('\\') {
-            return Err("enter the path inside the archive, e.g. data\\texture\\a.bmp".into());
+            return Err(err!("err-enter-path"));
         }
-        let name = GrfPath::from_display(&text, self.mode)
-            .ok_or("the path has characters that this name mode cannot write")?;
+        let name = GrfPath::from_display(&text, self.mode).ok_or_else(|| err!("err-name-chars"))?;
         check_file(file)?;
         self.stage(Change::Put {
             name,
@@ -1743,7 +1736,7 @@ impl Session {
                 let data = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
                 Ok((name, data, vec![format!("replaced by {}", file.display())]))
             }
-            Some(Change::Remove { .. }) => Err("the entry is marked for removal".into()),
+            Some(Change::Remove { .. }) => Err(err!("err-marked-removal")),
             None => Ok((name, self.read(index)?, Vec::new())),
         }
     }
@@ -1845,7 +1838,7 @@ impl Session {
         let act = self.working_bytes(index)?.1;
         let spr = self
             .sibling(index, "spr")
-            .ok_or("the matching .spr is not in this archive")?;
+            .ok_or_else(|| err!("err-no-spr"))?;
         let spr = self.working_bytes(spr)?.1;
         act_editor::layer_at_point(&act, &spr, action, frame, x, y)
     }
@@ -2076,7 +2069,7 @@ impl Session {
 
     pub fn edit_plan(&self) -> Result<EditPlan, String> {
         if self.pending.is_empty() {
-            return Err("there are no changes to save".into());
+            return Err(err!("err-no-changes"));
         }
         Ok(self.plan())
     }
@@ -2372,14 +2365,11 @@ impl Session {
     fn read(&self, index: usize) -> Result<Vec<u8>, String> {
         let e = self.arc.entry(index).map_err(|e| e.to_string())?;
         if e.size > MAX_PREVIEW_BYTES {
-            return Err(format!(
-                "{} MB is too large to preview",
-                e.size / 1024 / 1024
-            ));
+            return Err(err!("err-preview-large", "mb": e.size / 1024 / 1024));
         }
         let d = self.arc.read(index).map_err(|e| e.to_string())?;
         if d.status == DecodeStatus::Encrypted {
-            return Err("the entry is encrypted (decryption is not supported yet)".into());
+            return Err(err!("err-entry-encrypted"));
         }
         Ok(d.data)
     }
@@ -2525,7 +2515,7 @@ impl Session {
                 for (k, n) in g.type_counts() {
                     info.push(note!("pvw-n-gat-type", "k": k, "n": n));
                 }
-                let img = g.to_image().ok_or("map too large")?;
+                let img = g.to_image().ok_or_else(|| err!("err-map-large"))?;
                 let s = if img.width < 200 {
                     4
                 } else if img.width < 420 {
@@ -2675,7 +2665,7 @@ impl Session {
     /// changes), wrapping round to the start once; `None` when it is nowhere.
     pub fn hex_find(&self, index: usize, pattern: &[u8], from: u64) -> Result<Option<u64>, String> {
         if pattern.is_empty() || pattern.len() > 256 {
-            return Err("the search needs 1 to 256 bytes".into());
+            return Err(err!("err-search-len"));
         }
         let (_, data, _) = self.working_bytes(index)?;
         let from = usize::try_from(from).map_or(data.len(), |f| f.min(data.len()));
@@ -2691,7 +2681,7 @@ impl Session {
         self.transact(|s| {
             let (name, mut data, mut what) = s.working_bytes(index)?;
             if edits.is_empty() {
-                return Err("no byte was changed".into());
+                return Err(err!("err-no-byte"));
             }
             let len = data.len();
             for &(at, byte) in edits {
@@ -3261,7 +3251,7 @@ impl Session {
     ) -> Result<MapExtractSummary, String> {
         for p in skip {
             if !["models", "water", "sounds", "minimap", "effects"].contains(&p.as_str()) {
-                return Err(format!("'{p}' is not a part of a map that can be left out"));
+                return Err(err!("err-map-part", "part": p));
             }
         }
         struct Src<'a>(&'a Session);
@@ -4237,7 +4227,7 @@ mod tests {
         assert!(
             s.reduce_preview(grad)
                 .unwrap_err()
-                .contains("already has 8 bits")
+                .contains("err-already-bits")
         );
         let txt = index(&mut s, "a.txt");
         assert!(s.reduce_preview(txt).is_err());

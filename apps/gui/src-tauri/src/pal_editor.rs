@@ -34,16 +34,16 @@ pub fn apply(data: &[u8], edit: &PalEdit) -> Result<Vec<u8>, String> {
             brightness,
         } => {
             let (Ok(from), Ok(to)) = (u8::try_from(*from), u8::try_from(*to)) else {
-                return Err("the colour numbers are 0 to 255".into());
+                return Err(err!("err-pal-range"));
             };
             if from > to {
-                return Err("the first colour is above the last".into());
+                return Err(err!("err-pal-order"));
             }
             if !(hue.is_finite() && saturation.is_finite() && brightness.is_finite()) {
-                return Err("hue, saturation and brightness must be numbers".into());
+                return Err(err!("err-pal-numbers"));
             }
             if *saturation < 0.0 || *brightness < 0.0 || hue.abs() > 3600.0 {
-                return Err("saturation and brightness are factors of at least 0".into());
+                return Err(err!("err-pal-factors"));
             }
             pal.adjust(from, to, *hue, *saturation, *brightness);
         }

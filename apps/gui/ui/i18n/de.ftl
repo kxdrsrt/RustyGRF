@@ -745,24 +745,27 @@ pvw-n-palette = Palette: 256 Farben
 pvw-n-palette-label = 256 Farben (Index 0 ist transparent)
 pvw-n-gat = GAT { $version } – { $w } x { $h } Zellen, Höhen { $lo } bis { $hi }
 pvw-n-gat-type = Typ { $k } ({ $name }): { $cells }
-pvw-n-gnd = GND { $version } – { $w } x { $h } Zellen, { $tiles } Kacheln, { $lightmaps } Lichtkarten, { $textures } Texturen
-pvw-n-rsw = RSW { $version } – Boden { $ground }, { $models } Modelle, { $lights } Lichter, { $sounds } Klänge, { $effects } Effekte
-pvw-n-instances = { $instances } Modellinstanzen aus { $models } verschiedenen Modellen
+pvw-n-gnd = GND { $version } – { $w } x { $h } Zellen, { $tiles }, { $lightmaps }, { $textures }
+pvw-n-rsw = RSW { $version } – Boden { $ground }, { $models }, { $lights }, { $sounds }, { $effects }
+pvw-n-instances = { $instances } aus { $models }
 pvw-n-models-missing = { $n } nicht gefunden: { $names }
-pvw-n-textures = { $n } Texturen
-pvw-n-textures-missing = { $n } Texturen fehlen
-pvw-n-rsm = RSM { $version } – { $nodes } Knoten, { $triangles } Dreiecke, { $textures } Texturen
+pvw-n-textures = { $n }
+pvw-n-textures-missing = { $n ->
+    [one] { $n } Textur fehlt
+   *[other] { $n } Texturen fehlen
+ }
+pvw-n-rsm = RSM { $version } – { $nodes }, { $triangles }, { $textures }
 pvw-n-rsm-loop = Die Animation wiederholt sich alle { $secs } s
-pvw-n-node = Knoten { $name } ({ $v } Eckpunkte, { $f } Flächen)
-pvw-n-node-moves = Knoten { $name } ({ $v } Eckpunkte, { $f } Flächen), bewegt sich
-pvw-n-str = STR – { $fps } fps, { $frames } Bilder, { $layers } Ebenen, { $textures } Texturen
+pvw-n-node = Knoten { $name } ({ $v }, { $f })
+pvw-n-node-moves = Knoten { $name } ({ $v }, { $f }), bewegt sich
+pvw-n-str = STR – { $fps } fps, { $frames }, { $layers }, { $textures }
 pvw-n-str-step = Es wird nur jedes { $step }. Bild gezeigt
 pvw-n-str-missing = fehlende Texturen ({ $n }):
 pvw-n-str-simple = Vereinfachte Vorschau: Mischmodi und Schlüsselanimation wie im Client, ohne Beleuchtung, auf dunklem Hintergrund.
-pvw-n-spr = SPR { $version } – { $pal } Palettenbilder, { $rgba } Echtfarbbilder
+pvw-n-spr = SPR { $version } – { $pal }, { $rgba }
 pvw-n-warning = Warnung: { $text }
 pvw-n-spr-limit = gezeigt werden die ersten { $shown } von { $total } Bildern
-pvw-n-act = ACT { $version } – { $actions } Aktionen, { $frames } Bilder, { $layers } Ebenen
+pvw-n-act = ACT { $version } – { $actions }, { $frames }, { $layers }
 pvw-n-act-nospr = Die passende .spr-Datei ist nicht in diesem Archiv, daher gibt es nichts zu zeichnen.
 pvw-n-act-none = Die Animation hat keine Aktionen
 pvw-n-act-empty = Aktion { $action } zeichnet nichts
@@ -774,3 +777,125 @@ gat-tn-4 = unbekannt
 gat-tn-5 = nicht begehbar, beschießbar
 gat-tn-6 = begehbar
 gat-tn-weird = ungewöhnlich (höchstes Bit gesetzt)
+
+un-tiles = { $n ->
+    [one] { $n } Kachel
+   *[other] { $n } Kacheln
+ }
+un-lightmaps = { $n ->
+    [one] { $n } Lichtkarte
+   *[other] { $n } Lichtkarten
+ }
+un-textures = { $n ->
+    [one] { $n } Textur
+   *[other] { $n } Texturen
+ }
+un-models = { $n ->
+    [one] { $n } Modell
+   *[other] { $n } Modelle
+ }
+un-lights = { $n ->
+    [one] { $n } Licht
+   *[other] { $n } Lichter
+ }
+un-sounds = { $n ->
+    [one] { $n } Klang
+   *[other] { $n } Klänge
+ }
+un-effects = { $n ->
+    [one] { $n } Effekt
+   *[other] { $n } Effekte
+ }
+un-nodes = { $n ->
+    [one] { $n } Knoten
+   *[other] { $n } Knoten
+ }
+un-triangles = { $n ->
+    [one] { $n } Dreieck
+   *[other] { $n } Dreiecke
+ }
+un-vertices = { $n ->
+    [one] { $n } Eckpunkt
+   *[other] { $n } Eckpunkte
+ }
+un-faces = { $n ->
+    [one] { $n } Fläche
+   *[other] { $n } Flächen
+ }
+un-palimg = { $n ->
+    [one] { $n } Palettenbild
+   *[other] { $n } Palettenbilder
+ }
+un-rgbaimg = { $n ->
+    [one] { $n } Echtfarbbild
+   *[other] { $n } Echtfarbbilder
+ }
+un-actions = { $n ->
+    [one] { $n } Aktion
+   *[other] { $n } Aktionen
+ }
+un-layers = { $n ->
+    [one] { $n } Ebene
+   *[other] { $n } Ebenen
+ }
+un-modelinst = { $n ->
+    [one] { $n } Modellinstanz
+   *[other] { $n } Modellinstanzen
+ }
+un-diffmodels = { $n ->
+    [one] { $n } verschiedenem Modell
+   *[other] { $n } verschiedenen Modellen
+ }
+
+err-target-open = Das Ziel darf nicht das geöffnete Archiv sein
+err-alpha = Das Bild hat einen Alphakanal, den 8-Bit-BMPs nicht speichern können
+err-saved-png = Das Bild wird als .png gespeichert
+err-not-png = Kein PNG-Bild
+err-no-palette = Der Sprite hat keine Palette
+err-interval-positive = Das Intervall muss eine positive Zahl von Millisekunden sein
+err-merge-two = Wähle mindestens zwei Archive
+err-merge-target = Das Ziel darf keines der Eingabearchive sein
+err-empty-marker = Dieser Eintrag ist ein leerer Marker
+err-enter-path = Gib den Pfad im Archiv an, z. B. data\texture\a.bmp
+err-name-chars = Der Pfad enthält Zeichen, die dieser Namensmodus nicht schreiben kann
+err-marked-removal = Der Eintrag ist zum Entfernen vorgemerkt
+err-no-spr = Die passende .spr-Datei ist nicht in diesem Archiv
+err-no-changes = Es gibt keine Änderungen zu speichern
+err-entry-encrypted = Der Eintrag ist verschlüsselt (Entschlüsseln wird noch nicht unterstützt)
+err-map-large = Die Karte ist zu groß
+err-search-len = Die Suche braucht 1 bis 256 Bytes
+err-no-byte = Es wurde kein Byte geändert
+err-no-draft = Für dieses Archiv gibt es keinen Entwurf
+err-already-bits = Das Bild hat schon { $bits } Bit pro Pixel
+err-not-file = { $path } ist keine Datei
+err-file-4gib = { $path } ist größer als 4 GiB
+err-text-chars = Der Text enthält Zeichen, die { $encoding } nicht darstellen kann
+err-preview-large = { $mb } MB sind zu groß für eine Vorschau
+err-map-part = „{ $part }“ ist kein Teil einer Karte, der weggelassen werden kann
+err-number = { $what } muss eine sinnvolle Zahl sein
+err-act-keep-action = Eine Animation behält mindestens eine Aktion
+err-act-no-action = Diese Aktion gibt es nicht
+err-act-interval = Das Intervall muss zwischen 1 und 60000 ms liegen
+err-act-no-frame = Diesen Frame gibt es nicht
+err-act-keep-frame = Eine Aktion behält mindestens einen Frame
+err-act-no-frame-n = Frame { $n } gibt es nicht
+err-act-image-number = Die Bildnummer ist -1 (leer) oder größer
+err-act-image-type = Der Bildtyp ist 0 (Palette) oder 1 (Echtfarbe)
+err-act-one-scale = Diese ACT-Version hat eine Skalierung für beide Richtungen
+err-act-too-many-layers = Zu viele Ebenen
+err-act-no-layer-n = Ebene { $n } gibt es nicht
+err-act-no-layer = Diese Ebene gibt es nicht
+err-act-no-anchors = Diese ACT-Version hat keine Anker
+err-act-too-many-anchors = Zu viele Anker
+err-act-no-anchor-n = Anker { $n } gibt es nicht
+err-act-no-frames = Die Aktion hat keine Frames
+err-gat-need = Wähle einen Typ und/oder eine Höhe zum Setzen
+err-gat-height = Die Höhe muss eine sinnvolle Zahl sein
+err-gat-type = Der Zelltyp ist 0 bis 6
+err-pal-range = Die Farbnummern gehen von 0 bis 255
+err-pal-order = Die erste Farbe liegt hinter der letzten
+err-pal-numbers = Farbton, Sättigung und Helligkeit müssen Zahlen sein
+err-pal-factors = Sättigung und Helligkeit sind Faktoren von mindestens 0
+err-spr-size = Das Bild ist { $w } x { $h } Pixel groß, die Daten haben { $n } Werte
+err-no-archive = Es ist kein Archiv geöffnet
+err-job-running = Es läuft bereits ein anderer Auftrag

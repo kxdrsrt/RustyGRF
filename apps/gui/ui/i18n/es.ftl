@@ -745,24 +745,27 @@ pvw-n-palette = Paleta: 256 colores
 pvw-n-palette-label = 256 colores (el índice 0 es transparente)
 pvw-n-gat = GAT { $version }: { $w } x { $h } celdas, alturas de { $lo } a { $hi }
 pvw-n-gat-type = tipo { $k } ({ $name }): { $cells }
-pvw-n-gnd = GND { $version }: { $w } x { $h } celdas, { $tiles } teselas, { $lightmaps } mapas de luz, { $textures } texturas
-pvw-n-rsw = RSW { $version }: suelo { $ground }, { $models } modelos, { $lights } luces, { $sounds } sonidos, { $effects } efectos
-pvw-n-instances = { $instances } instancias de { $models } modelos distintos
+pvw-n-gnd = GND { $version }: { $w } x { $h } celdas, { $tiles }, { $lightmaps }, { $textures }
+pvw-n-rsw = RSW { $version }: suelo { $ground }, { $models }, { $lights }, { $sounds }, { $effects }
+pvw-n-instances = { $instances } de { $models }
 pvw-n-models-missing = { $n } no encontrados: { $names }
-pvw-n-textures = { $n } texturas
-pvw-n-textures-missing = faltan { $n } texturas
-pvw-n-rsm = RSM { $version }: { $nodes } nodos, { $triangles } triángulos, { $textures } texturas
+pvw-n-textures = { $n }
+pvw-n-textures-missing = { $n ->
+    [one] falta { $n } textura
+   *[other] faltan { $n } texturas
+ }
+pvw-n-rsm = RSM { $version }: { $nodes }, { $triangles }, { $textures }
 pvw-n-rsm-loop = La animación se repite cada { $secs } s
-pvw-n-node = nodo { $name } ({ $v } vértices, { $f } caras)
-pvw-n-node-moves = nodo { $name } ({ $v } vértices, { $f } caras), se mueve
-pvw-n-str = STR: { $fps } fps, { $frames } fotogramas, { $layers } capas, { $textures } texturas
+pvw-n-node = nodo { $name } ({ $v }, { $f })
+pvw-n-node-moves = nodo { $name } ({ $v }, { $f }), se mueve
+pvw-n-str = STR: { $fps } fps, { $frames }, { $layers }, { $textures }
 pvw-n-str-step = Solo se muestra uno de cada { $step } fotogramas
 pvw-n-str-missing = texturas que faltan ({ $n }):
 pvw-n-str-simple = Vista previa simplificada: modos de mezcla y animación de claves como en el cliente, sin iluminación, sobre fondo oscuro.
-pvw-n-spr = SPR { $version }: { $pal } imágenes con paleta, { $rgba } imágenes en color real
+pvw-n-spr = SPR { $version }: { $pal }, { $rgba }
 pvw-n-warning = advertencia: { $text }
 pvw-n-spr-limit = se muestran las primeras { $shown } de { $total } imágenes
-pvw-n-act = ACT { $version }: { $actions } acciones, { $frames } fotogramas, { $layers } capas
+pvw-n-act = ACT { $version }: { $actions }, { $frames }, { $layers }
 pvw-n-act-nospr = El .spr correspondiente no está en este archivo, así que no hay nada que dibujar.
 pvw-n-act-none = La animación no tiene acciones
 pvw-n-act-empty = La acción { $action } no dibuja nada
@@ -774,3 +777,125 @@ gat-tn-4 = desconocido
 gat-tn-5 = no transitable, se puede disparar
 gat-tn-6 = transitable
 gat-tn-weird = extraño (bit alto activado)
+
+un-tiles = { $n ->
+    [one] { $n } tesela
+   *[other] { $n } teselas
+ }
+un-lightmaps = { $n ->
+    [one] { $n } mapa de luz
+   *[other] { $n } mapas de luz
+ }
+un-textures = { $n ->
+    [one] { $n } textura
+   *[other] { $n } texturas
+ }
+un-models = { $n ->
+    [one] { $n } modelo
+   *[other] { $n } modelos
+ }
+un-lights = { $n ->
+    [one] { $n } luz
+   *[other] { $n } luces
+ }
+un-sounds = { $n ->
+    [one] { $n } sonido
+   *[other] { $n } sonidos
+ }
+un-effects = { $n ->
+    [one] { $n } efecto
+   *[other] { $n } efectos
+ }
+un-nodes = { $n ->
+    [one] { $n } nodo
+   *[other] { $n } nodos
+ }
+un-triangles = { $n ->
+    [one] { $n } triángulo
+   *[other] { $n } triángulos
+ }
+un-vertices = { $n ->
+    [one] { $n } vértice
+   *[other] { $n } vértices
+ }
+un-faces = { $n ->
+    [one] { $n } cara
+   *[other] { $n } caras
+ }
+un-palimg = { $n ->
+    [one] { $n } imagen con paleta
+   *[other] { $n } imágenes con paleta
+ }
+un-rgbaimg = { $n ->
+    [one] { $n } imagen en color real
+   *[other] { $n } imágenes en color real
+ }
+un-actions = { $n ->
+    [one] { $n } acción
+   *[other] { $n } acciones
+ }
+un-layers = { $n ->
+    [one] { $n } capa
+   *[other] { $n } capas
+ }
+un-modelinst = { $n ->
+    [one] { $n } instancia
+   *[other] { $n } instancias
+ }
+un-diffmodels = { $n ->
+    [one] { $n } modelo distinto
+   *[other] { $n } modelos distintos
+ }
+
+err-target-open = El destino no puede ser el archivo abierto
+err-alpha = La imagen tiene un canal alfa, que los BMP de 8 bits no pueden conservar
+err-saved-png = La imagen se guarda como .png
+err-not-png = No es una imagen PNG
+err-no-palette = El sprite no tiene paleta
+err-interval-positive = El intervalo debe ser un número positivo de milisegundos
+err-merge-two = Elige al menos dos archivos
+err-merge-target = El destino no puede ser uno de los archivos de entrada
+err-empty-marker = Esta entrada es un marcador vacío
+err-enter-path = Escribe la ruta dentro del archivo, p. ej. data\texture\a.bmp
+err-name-chars = La ruta tiene caracteres que este modo de nombres no puede escribir
+err-marked-removal = La entrada está marcada para eliminarse
+err-no-spr = El .spr correspondiente no está en este archivo
+err-no-changes = No hay cambios que guardar
+err-entry-encrypted = La entrada está cifrada (aún no se admite el descifrado)
+err-map-large = El mapa es demasiado grande
+err-search-len = La búsqueda necesita de 1 a 256 bytes
+err-no-byte = No se cambió ningún byte
+err-no-draft = No hay borrador para este archivo
+err-already-bits = La imagen ya tiene { $bits } bits por píxel
+err-not-file = { $path } no es un archivo
+err-file-4gib = { $path } es mayor de 4 GiB
+err-text-chars = El texto tiene caracteres que { $encoding } no puede contener
+err-preview-large = { $mb } MB es demasiado grande para la vista previa
+err-map-part = «{ $part }» no es una parte del mapa que se pueda omitir
+err-number = { $what } debe ser un número razonable
+err-act-keep-action = Una animación conserva al menos una acción
+err-act-no-action = No existe esa acción
+err-act-interval = El intervalo debe estar entre 1 y 60000 ms
+err-act-no-frame = No existe ese fotograma
+err-act-keep-frame = Una acción conserva al menos un fotograma
+err-act-no-frame-n = No existe el fotograma { $n }
+err-act-image-number = El número de imagen es -1 (vacío) o mayor
+err-act-image-type = El tipo de imagen es 0 (paleta) o 1 (color real)
+err-act-one-scale = Esta versión de ACT tiene una sola escala para ambas direcciones
+err-act-too-many-layers = Demasiadas capas
+err-act-no-layer-n = No existe la capa { $n }
+err-act-no-layer = No existe esa capa
+err-act-no-anchors = Esta versión de ACT no tiene anclajes
+err-act-too-many-anchors = Demasiados anclajes
+err-act-no-anchor-n = No existe el anclaje { $n }
+err-act-no-frames = La acción no tiene fotogramas
+err-gat-need = Elige un tipo y/o una altura que establecer
+err-gat-height = La altura debe ser un número razonable
+err-gat-type = El tipo de celda es de 0 a 6
+err-pal-range = Los números de color van de 0 a 255
+err-pal-order = El primer color está después del último
+err-pal-numbers = El tono, la saturación y el brillo deben ser números
+err-pal-factors = La saturación y el brillo son factores de al menos 0
+err-spr-size = La imagen mide { $w } x { $h } píxeles, los datos tienen { $n } valores
+err-no-archive = No hay ningún archivo abierto
+err-job-running = Ya hay otra tarea en curso

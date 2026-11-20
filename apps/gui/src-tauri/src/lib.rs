@@ -1,5 +1,19 @@
 //! RustyGRF desktop app: thin Tauri commands around [`backend::Session`].
 
+/// An error text the UI translates: a sentinel, then the catalogue key and its values as JSON.
+pub fn coded(key: &str, args: serde_json::Value) -> String {
+    format!("\u{1}{}", serde_json::json!({ "key": key, "args": args }))
+}
+
+macro_rules! err {
+    ($key:literal) => {
+        $crate::coded($key, serde_json::Value::Null)
+    };
+    ($key:literal, $($args:tt)+) => {
+        $crate::coded($key, serde_json::json!({ $($args)+ }))
+    };
+}
+
 pub mod act_editor;
 pub mod backend;
 pub mod draft;
@@ -45,7 +59,7 @@ where
         let mut guard = shared
             .lock()
             .map_err(|_| "internal error: state is locked".to_string())?;
-        let s = guard.as_mut().ok_or("no archive is open")?;
+        let s = guard.as_mut().ok_or_else(|| err!("err-no-archive"))?;
         f(s)
     })
     .await
@@ -244,7 +258,7 @@ where
     {
         let mut slot = state.job.lock().map_err(|_| "internal error")?;
         if slot.is_some() {
-            return Err("another job is already running".into());
+            return Err(err!("err-job-running"));
         }
         *slot = Some(token.clone());
     }
