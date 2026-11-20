@@ -1146,3 +1146,14 @@ dg-missing = アーカイブにないモデル
 dg-failed = マップをダウングレードできませんでした
 err-downgrade-failed = マップをダウングレードできませんでした: { $error }
 err-downgrade-nothing = このマップには変換する RSM2 モデルがありません
+
+# tabs
+tab-strip = タブ
+    .aria-label = タブ
+tab-empty = 新しいタブ
+tab-close = タブを閉じる
+tab-new = 新しいタブでアーカイブを開く
+tab-new-window = 新しいウィンドウに移動
+tab-merge = すべてのウィンドウをこのウィンドウのタブにまとめる
+set-tabs = タブ
+set-tabs-open = アーカイブを (新しいウィンドウではなく) ウィンドウのタブで開く

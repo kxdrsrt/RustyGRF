@@ -1239,3 +1239,14 @@ dg-missing = Modèle absent de l'archive
 dg-failed = La carte n'a pas pu être rétrogradée
 err-downgrade-failed = La carte n'a pas pu être rétrogradée : { $error }
 err-downgrade-nothing = Cette carte n'a pas de modèles RSM2 à convertir
+
+# tabs
+tab-strip = Onglets
+    .aria-label = Onglets
+tab-empty = Nouvel onglet
+tab-close = Fermer l'onglet
+tab-new = Ouvrir une archive dans un nouvel onglet
+tab-new-window = Déplacer dans une nouvelle fenêtre
+tab-merge = Réunir toutes les fenêtres en onglets de celle-ci
+set-tabs = Onglets
+set-tabs-open = Ouvrir les archives dans des onglets de la fenêtre (au lieu de nouvelles fenêtres)

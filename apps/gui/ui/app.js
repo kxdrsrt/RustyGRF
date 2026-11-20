@@ -1544,6 +1544,7 @@ function updateTitle() {
   document.title = title;
   // the native title bar does not follow document.title by itself
   T.window?.getCurrentWindow?.().setTitle(title).catch(() => {});
+  invoke("tab_set_info", { title, dirty: edited }).catch(() => {});
 }
 
 function setPending(rows) {
@@ -3202,7 +3203,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, method: "zlib", format: "0x200", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, method: "zlib", format: "0x200", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -3255,6 +3256,7 @@ function openSettings() {
     SET[key] = value;
     saveSettings();
     applySettings();
+    if (key === "tabs") invoke("set_tabs_enabled", { on: value }).catch(() => {});
   };
   const row = (label, control, hint) => el("div", { class: "srow" }, el("label", { text: label }), control, hint ? el("div", { class: "hint", text: hint }) : null);
   const pick = (key, label, options, hint) => {
@@ -3309,6 +3311,7 @@ function openSettings() {
       row(t("set-startup"), check("reopen", t("set-reopen"))),
       row(t("set-changes"), check("warnDiscard", t("set-warn-discard"))),
       row(t("set-audio"), check("autoplay", t("set-autoplay"))),
+      row(t("set-tabs"), check("tabs", t("set-tabs-open"))),
       el("h3", { text: t("set-building") }),
       L(t("set-compression"), "method", METHODS()),
       L(t("set-format"), "format", FORMATS()),
@@ -3669,6 +3672,106 @@ async function doDowngradeMap(row) {
     await note(t("dg-failed"), errText(e), true);
   }
 }
+
+// ---------- tabs ----------
+
+/**
+ * Tabs are windows of one group (see src-tauri/src/tabs.rs): every window draws the strip of its
+ * group; a click shows that window in the same place. Dragging a tab out of the window moves it
+ * into a window of its own, dropping it on the top of another window joins that window's tabs.
+ */
+const TABS = { list: [], drag: null };
+
+async function refreshTabs() {
+  try {
+    TABS.list = await invoke("tab_list");
+  } catch {
+    TABS.list = [];
+  }
+  renderTabs();
+}
+
+function renderTabs() {
+  const bar = $("tabbar");
+  const show = TABS.list.length > 1;
+  bar.hidden = !show;
+  document.body.classList.toggle("has-tabs", show);
+  if (!show) return bar.replaceChildren();
+  const tabs = TABS.list.map((tab, i) => {
+    const name = tab.title.replace(/^\*/, "").replace(/ - RustyGRF$/, "").replace(/ — Edited$/, "") || t("tab-empty");
+    const x = el("button", { type: "button", class: "x", tabindex: "-1", title: t("tab-close"), "aria-label": t("tab-close"), text: "×", onclick: (ev) => (ev.stopPropagation(), invoke("tab_close", { label: tab.label })) });
+    const b = el("div", { class: "tab", role: "tab", tabindex: tab.active ? "0" : "-1", "aria-selected": String(tab.active), title: name }, el("span", { class: "name" }, tab.dirty ? el("span", { class: "dirty", text: "● " }) : null, name), x);
+    b.addEventListener("click", () => !tab.active && invoke("tab_activate", { label: tab.label }));
+    b.addEventListener("auxclick", (ev) => ev.button === 1 && invoke("tab_close", { label: tab.label }));
+    b.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      showContextMenu(ev.clientX, ev.clientY, tabMenu(tab), b, t("tab-strip"));
+    });
+    b.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") invoke("tab_activate", { label: tab.label });
+    });
+    b.addEventListener("pointerdown", (ev) => tabPointerDown(ev, tab, i));
+    return b;
+  });
+  bar.replaceChildren(...tabs, el("button", { type: "button", class: "newtab", title: t("tab-new"), "aria-label": t("tab-new"), text: "+", onclick: () => chooseArchive() }));
+}
+
+function tabMenu(tab) {
+  const items = [{ label: t("tab-new-window"), icon: "open", run: () => invoke("tab_drop", { label: tab.label, x: window.screenX + 120 + 40, y: window.screenY + 80 + 40 }) }];
+  items.push({ label: t("tab-close"), icon: "remove", run: () => invoke("tab_close", { label: tab.label }) });
+  items.push("-", { label: t("tab-merge"), icon: "merge", run: () => invoke("tab_merge_all") });
+  return items;
+}
+
+/** Drags a tab with the pointer: along the strip it changes places, away from the window it leaves. */
+function tabPointerDown(ev, tab, index) {
+  if (ev.button !== 0 || ev.target.closest(".x")) return;
+  const bar = $("tabbar");
+  const node = ev.currentTarget;
+  let dragging = false;
+  const startX = ev.clientX;
+  let at = index;
+  node.setPointerCapture(ev.pointerId);
+  const move = (e) => {
+    if (!dragging && Math.abs(e.clientX - startX) + Math.abs(e.clientY) < 6) return;
+    dragging = true;
+    node.classList.add("dragging");
+    const tabs = [...bar.querySelectorAll(".tab")];
+    const to = tabs.findIndex((n) => e.clientX < n.getBoundingClientRect().right);
+    const target = to < 0 ? tabs.length - 1 : to;
+    if (e.clientY >= -10 && e.clientY < 60 && target !== at) {
+      at = target;
+      invoke("tab_move", { label: tab.label, to: target });
+    }
+  };
+  const up = (e) => {
+    node.removeEventListener("pointermove", move);
+    node.removeEventListener("pointerup", up);
+    node.removeEventListener("pointercancel", up);
+    node.classList.remove("dragging");
+    // dropped away from the strip: another window's top joins it, anything else is a new window
+    if (dragging && (e.clientY < -24 || e.clientY > 90 || e.clientX < -24 || e.clientX > window.innerWidth + 24)) {
+      invoke("tab_drop", { label: tab.label, x: e.screenX, y: e.screenY }).catch(() => {});
+    }
+  };
+  node.addEventListener("pointermove", move);
+  node.addEventListener("pointerup", up);
+  node.addEventListener("pointercancel", up);
+}
+
+/** Ctrl/Cmd+Tab and Ctrl/Cmd+1..9 switch tabs. */
+document.addEventListener("keydown", (ev) => {
+  if (TABS.list.length < 2) return;
+  const mod = /Mac/.test(navigator.platform) ? ev.metaKey : ev.ctrlKey;
+  let next = null;
+  const at = TABS.list.findIndex((x) => x.active);
+  if (ev.ctrlKey && ev.key === "Tab") next = TABS.list[(at + (ev.shiftKey ? -1 : 1) + TABS.list.length) % TABS.list.length];
+  else if (mod && !ev.shiftKey && !ev.altKey && /^[1-9]$/.test(ev.key)) next = TABS.list[Math.min(+ev.key, TABS.list.length) - 1];
+  if (next && !next.active) {
+    ev.preventDefault();
+    invoke("tab_activate", { label: next.label });
+  }
+});
 
 /** GRF Editor's per-entry encryption exists in GRF 0x200 archives only. */
 function cryptItems(list, row, guard) {
@@ -4070,6 +4173,7 @@ if (T.event?.listen) {
   T.event.listen("open-file", (e) => e.payload && openPath(e.payload));
   T.event.listen("job-progress", (e) => S.onJob?.(e.payload));
   T.event.listen("open-settings", () => openSettings());
+  T.event.listen("tabs-changed", () => refreshTabs());
   T.event.listen("menu-command", (e) => runMenuCommand(e.payload));
   T.event.listen("tauri://drag-drop", (e) => {
     const p = e.payload?.paths?.[0];
@@ -4143,6 +4247,8 @@ syncViewBar();
 buildKindFilter();
 // the window is created hidden in the page's background colour: show it once the page is drawn
 requestAnimationFrame(() => setTimeout(() => invoke("window_ready").catch(() => {}), 0));
+invoke("set_tabs_enabled", { on: SET.tabs !== false }).catch(() => {});
+refreshTabs();
 
 invoke("startup_path")
   .then(async (p) => {

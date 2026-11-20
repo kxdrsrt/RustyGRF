@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use backend::{
     ArchiveInfo, BuildRequest, BuildSummary, Details, EditSummary, ExtractSummary, MergeRequest,
@@ -37,6 +37,8 @@ use backend::{
 use rgrf_core::progress::{CancelToken, Control, Progress};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+
+mod tabs;
 
 type Shared = Arc<Mutex<Option<Session>>>;
 
@@ -55,6 +57,10 @@ struct AppState {
     counter: AtomicU64,
     /// The window that was in front last: menu commands go to it.
     front: Mutex<Option<String>>,
+    /// Which windows are tabs of one another (see [`tabs`]).
+    tabs: Mutex<tabs::Tabs>,
+    /// The setting "open archives in tabs" is off (it is on by default).
+    tabs_off: AtomicBool,
 }
 
 impl AppState {
@@ -192,10 +198,9 @@ fn open_in_window(app: AppHandle, path: Option<String>) -> Res<bool> {
 
 /// The page has drawn itself: show the window (it is created hidden, so no blank page flashes).
 #[tauri::command]
-fn window_ready(window: WebviewWindow) {
+fn window_ready(app: AppHandle, window: WebviewWindow) {
     if !window.is_visible().unwrap_or(true) {
-        let _ = window.show();
-        let _ = window.set_focus();
+        tabs::reveal(&app, window.label(), None);
     }
 }
 
@@ -292,13 +297,9 @@ fn serve_asset(
     backend::asset_response(&kind, data, &name)
 }
 
-/// Brings a window to the front.
+/// Brings a window to the front (a hidden tab takes the place of the visible one).
 fn focus(app: &AppHandle, label: &str) {
-    if let Some(w) = app.get_webview_window(label) {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    tabs::focus(app, label);
 }
 
 /// Makes a window; it opens `startup` once its page is loaded. When the page's colour scheme is
@@ -306,7 +307,11 @@ fn focus(app: &AppHandle, label: &str) {
 /// window shows as soon as the webview starts loading (measured on Windows: a window shown right
 /// away is white for its first frames). On the very first start it stays hidden until the page is
 /// drawn. Either way it shows after two seconds at the latest.
-fn create_window(app: &AppHandle, startup: Option<String>) -> tauri::Result<WebviewWindow> {
+fn create_window(
+    app: &AppHandle,
+    startup: Option<String>,
+    as_tab: bool,
+) -> tauri::Result<WebviewWindow> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     let state = app.state::<AppState>();
     let label = if app.get_webview_window("main").is_none() {
@@ -330,8 +335,21 @@ fn create_window(app: &AppHandle, startup: Option<String>) -> tauri::Result<Webv
     if let Some(dark) = known {
         b = b.background_color(if dark { DARK_BG } else { LIGHT_BG });
     }
-    // a new window sits a little below and right of the one in front
-    if let Some(front) = front_window(app)
+    // a tab opens where the window in front is; a new window sits a little below and right of it
+    let front = front_window(app);
+    let near = front
+        .as_ref()
+        .filter(|_| as_tab && !state.tabs_off.load(Ordering::Relaxed))
+        .map(|f| f.label().to_string());
+    let tab_frame = near
+        .as_deref()
+        .and_then(|n| tabs::frame_for_new_tab(app, n));
+    if let (Some(f), Some(front)) = (tab_frame, front.as_ref()) {
+        let scale = front.scale_factor().unwrap_or(1.0);
+        b = b
+            .inner_size(f64::from(f.w) / scale, f64::from(f.h) / scale)
+            .position(f64::from(f.x) / scale, f64::from(f.y) / scale);
+    } else if let Some(front) = &front
         && let (Ok(pos), Ok(scale)) = (front.outer_position(), front.scale_factor())
     {
         let p = pos.to_logical::<f64>(scale);
@@ -340,18 +358,24 @@ fn create_window(app: &AppHandle, startup: Option<String>) -> tauri::Result<Webv
         b = b.center();
     }
     let w = b.build()?;
+    tabs::register(app, &label, near.as_deref());
+    if let (Some(f), true) = (tab_frame, near.is_some())
+        && f.maximized
+    {
+        let _ = w.maximize();
+    }
     if known.is_none() {
         let _ = w.set_background_color(Some(background_for(app, &w)));
     } else {
         // shown only now that window and webview exist in the background colour
-        let _ = w.show();
-        let _ = w.set_focus();
+        tabs::reveal(app, &label, None);
     }
     let late = w.clone();
+    let late_app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(2));
         if !late.is_visible().unwrap_or(true) {
-            let _ = late.show();
+            tabs::reveal(&late_app, late.label(), None);
         }
     });
     Ok(w)
@@ -363,7 +387,7 @@ fn open_somewhere(app: &AppHandle, path: Option<String>, new: bool) -> tauri::Re
     let state = app.state::<AppState>();
     let Some(path) = path else {
         if new || app.webview_windows().is_empty() {
-            create_window(app, None)?;
+            create_window(app, None, false)?;
         } else if let Some(l) = app.webview_windows().keys().next().cloned() {
             focus(app, &l);
         }
@@ -398,7 +422,7 @@ fn open_somewhere(app: &AppHandle, path: Option<String>, new: bool) -> tauri::Re
             return Ok(());
         }
     }
-    create_window(app, Some(path))?;
+    create_window(app, Some(path), true)?;
     Ok(())
 }
 
@@ -1743,14 +1767,20 @@ pub fn run() {
             // macOS may deliver a file from Finder (`RunEvent::Opened`) before this runs; its
             // window is then the first one, and an extra empty one would be left over
             if app.webview_windows().is_empty() {
-                create_window(app.handle(), None)?;
+                create_window(app.handle(), None, false)?;
             }
             Ok(())
         })
         .on_window_event(|window, event| {
             let state = window.app_handle().state::<AppState>();
             match event {
-                tauri::WindowEvent::Destroyed => state.forget(window.label()),
+                tauri::WindowEvent::Destroyed => {
+                    state.forget(window.label());
+                    tabs::gone(window.app_handle(), window.label());
+                }
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                    tabs::moved(window.app_handle(), window);
+                }
                 tauri::WindowEvent::Focused(true) => {
                     if let Ok(mut f) = state.front.lock() {
                         *f = Some(window.label().to_string());
@@ -1764,7 +1794,7 @@ pub fn run() {
             // the menu bar belongs to the app (macOS) or to each window; it acts on the window in front
             let target = front_window(app).map(|w| w.label().to_string());
             if id == "cmd:new-window" || target.is_none() {
-                let _ = create_window(app, None);
+                let _ = create_window(app, None, false);
                 return;
             }
             let Some(target) = target else { return };
@@ -1810,6 +1840,14 @@ pub fn run() {
             stage_rename,
             stage_crypt,
             stage_map_downgrade,
+            tabs::tab_set_info,
+            tabs::tab_list,
+            tabs::tab_activate,
+            tabs::tab_close,
+            tabs::tab_move,
+            tabs::tab_drop,
+            tabs::tab_merge_all,
+            tabs::set_tabs_enabled,
             audio_render,
             stage_audio,
             export_selection,

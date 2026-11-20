@@ -1146,3 +1146,14 @@ dg-missing = 아카이브에 없는 모델
 dg-failed = 맵을 다운그레이드할 수 없습니다
 err-downgrade-failed = 맵을 다운그레이드할 수 없습니다: { $error }
 err-downgrade-nothing = 이 맵에는 변환할 RSM2 모델이 없습니다
+
+# tabs
+tab-strip = 탭
+    .aria-label = 탭
+tab-empty = 새 탭
+tab-close = 탭 닫기
+tab-new = 새 탭에서 아카이브 열기
+tab-new-window = 새 창으로 이동
+tab-merge = 모든 창을 이 창의 탭으로 합치기
+set-tabs = 탭
+set-tabs-open = 아카이브를 (새 창 대신) 창의 탭으로 열기

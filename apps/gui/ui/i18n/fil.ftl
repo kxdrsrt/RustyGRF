@@ -1177,3 +1177,14 @@ dg-missing = Wala sa archive ang model
 dg-failed = Hindi na-downgrade ang mapa
 err-downgrade-failed = Hindi na-downgrade ang mapa: { $error }
 err-downgrade-nothing = Walang RSM2 model sa mapang ito na ico-convert
+
+# tabs
+tab-strip = Mga tab
+    .aria-label = Mga tab
+tab-empty = Bagong tab
+tab-close = Isara ang tab
+tab-new = Magbukas ng archive sa bagong tab
+tab-new-window = Ilipat sa bagong window
+tab-merge = Ilagay ang lahat ng window bilang tab dito
+set-tabs = Mga tab
+set-tabs-open = Buksan ang mga archive sa mga tab ng window (sa halip na bagong window)

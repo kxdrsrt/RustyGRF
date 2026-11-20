@@ -1249,3 +1249,14 @@ dg-missing = Model not in the archive
 dg-failed = The map could not be downgraded
 err-downgrade-failed = The map could not be downgraded: { $error }
 err-downgrade-nothing = This map has no RSM2 models to convert
+
+# tabs
+tab-strip = Tabs
+    .aria-label = Tabs
+tab-empty = New tab
+tab-close = Close tab
+tab-new = Open an archive in a new tab
+tab-new-window = Move to a new window
+tab-merge = Put all windows into tabs of this one
+set-tabs = Tabs
+set-tabs-open = Open archives in tabs of the window (instead of new windows)

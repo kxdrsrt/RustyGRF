@@ -1239,3 +1239,14 @@ dg-missing = Modelo que no está en el archivo
 dg-failed = No se pudo degradar el mapa
 err-downgrade-failed = No se pudo degradar el mapa: { $error }
 err-downgrade-nothing = Este mapa no tiene modelos RSM2 que convertir
+
+# tabs
+tab-strip = Pestañas
+    .aria-label = Pestañas
+tab-empty = Pestaña nueva
+tab-close = Cerrar pestaña
+tab-new = Abrir un archivo en una pestaña nueva
+tab-new-window = Mover a una ventana nueva
+tab-merge = Reunir todas las ventanas en pestañas de esta
+set-tabs = Pestañas
+set-tabs-open = Abrir los archivos en pestañas de la ventana (en vez de ventanas nuevas)

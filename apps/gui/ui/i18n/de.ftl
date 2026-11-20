@@ -1239,3 +1239,14 @@ dg-missing = Modell nicht im Archiv
 dg-failed = Die Karte ließ sich nicht herabstufen
 err-downgrade-failed = Die Karte ließ sich nicht herabstufen: { $error }
 err-downgrade-nothing = Diese Karte hat keine RSM2-Modelle zum Umwandeln
+
+# tabs
+tab-strip = Tabs
+    .aria-label = Tabs
+tab-empty = Neuer Tab
+tab-close = Tab schließen
+tab-new = Archiv in einem neuen Tab öffnen
+tab-new-window = In ein neues Fenster verschieben
+tab-merge = Alle Fenster als Tabs in dieses legen
+set-tabs = Tabs
+set-tabs-open = Archive in Tabs des Fensters öffnen (statt in neuen Fenstern)

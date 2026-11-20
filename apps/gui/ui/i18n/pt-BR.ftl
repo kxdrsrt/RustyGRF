@@ -1239,3 +1239,14 @@ dg-missing = Modelo que não está no arquivo
 dg-failed = Não foi possível rebaixar o mapa
 err-downgrade-failed = Não foi possível rebaixar o mapa: { $error }
 err-downgrade-nothing = Este mapa não tem modelos RSM2 para converter
+
+# tabs
+tab-strip = Abas
+    .aria-label = Abas
+tab-empty = Nova aba
+tab-close = Fechar aba
+tab-new = Abrir um arquivo em uma nova aba
+tab-new-window = Mover para uma nova janela
+tab-merge = Reunir todas as janelas em abas desta
+set-tabs = Abas
+set-tabs-open = Abrir os arquivos em abas da janela (em vez de novas janelas)

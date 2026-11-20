@@ -1146,3 +1146,14 @@ dg-missing = Model tidak ada di arsip
 dg-failed = Peta tidak dapat diturunkan versinya
 err-downgrade-failed = Peta tidak dapat diturunkan versinya: { $error }
 err-downgrade-nothing = Peta ini tidak punya model RSM2 untuk dikonversi
+
+# tabs
+tab-strip = Tab
+    .aria-label = Tab
+tab-empty = Tab baru
+tab-close = Tutup tab
+tab-new = Buka arsip di tab baru
+tab-new-window = Pindahkan ke jendela baru
+tab-merge = Jadikan semua jendela tab di jendela ini
+set-tabs = Tab
+set-tabs-open = Buka arsip di tab jendela (bukan jendela baru)
