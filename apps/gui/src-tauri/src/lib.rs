@@ -1184,6 +1184,23 @@ async fn make_patch(
     .await
 }
 
+/// Tools › Search in Files: the lines of the archive's files that match.
+#[tauri::command]
+async fn search_contents(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query: backend::ContentQuery,
+) -> Res<backend::ContentSearch> {
+    let shared = state.slot(window.label());
+    run_job(app, &state, &window, move |ctl| {
+        let guard = shared.lock().map_err(|_| "internal error")?;
+        let s = guard.as_ref().ok_or_else(|| err!("err-no-archive"))?;
+        s.search_contents(&query, ctl)
+    })
+    .await
+}
+
 /// Opens the folder with the app's settings, drafts and new archives.
 #[tauri::command]
 fn open_data_folder(app: AppHandle) -> Res<String> {
@@ -1416,6 +1433,11 @@ fn build_menu(
         item("verify", "Verify Archive", None)?,
         item("hash", "Hashes...", None)?,
         item("compare", "Compare with Archive...", None)?,
+        item(
+            "search-contents",
+            "Search in Files...",
+            Some("CmdOrCtrl+Shift+F"),
+        )?,
         sep()?,
         item("reduce-images", "Reduce Images...", None)?,
         sep()?,
@@ -1578,6 +1600,7 @@ pub fn run() {
             compare_with,
             make_patch,
             open_data_folder,
+            search_contents,
             cancel_job,
             startup_path,
             startup_select

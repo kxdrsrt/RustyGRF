@@ -335,6 +335,9 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?)
         }
         "open_data_folder" => Ok(Value::Null),
+        "search_contents" => with(state, |s| {
+            to_json(s.search_contents(&arg(a, "query")?, &none)?)
+        }),
         "save_edited" => {
             let plan = with(state, |s| s.edit_plan())?;
             to_json(backend::save_edited(

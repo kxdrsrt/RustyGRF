@@ -3130,6 +3130,7 @@ dependencies = [
  "base64 0.23.1",
  "encoding_rs",
  "rayon",
+ "regex",
  "rgrf-core",
  "rgrf-formats",
  "serde",

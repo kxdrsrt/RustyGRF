@@ -505,3 +505,11 @@ input.hexb[aria-invalid="true"] { border-color: #d33; }
 .credits { margin: 0; padding-left: 18px; }
 .credits li { margin: 3px 0; }
 #dlg-body a { color: var(--accent); cursor: pointer; }
+/* Search in files */
+.sc-opts { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0; }
+.sc-results { max-height: 46vh; overflow: auto; border-top: 1px solid var(--line); margin-top: 6px; }
+.sc-file { font-weight: 600; padding: 8px 2px 2px; overflow-wrap: anywhere; }
+.sc-hit { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; width: 100%; border: none; background: none; text-align: left; padding: 2px; border-radius: 4px; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.sc-hit:hover, .sc-hit:focus-visible { background: var(--hover); }
+.sc-line { color: var(--muted); text-align: right; }
+.sc-text { white-space: pre; overflow: hidden; text-overflow: ellipsis; }

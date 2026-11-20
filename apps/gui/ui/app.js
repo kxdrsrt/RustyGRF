@@ -2505,6 +2505,73 @@ async function doCompare() {
   }
 }
 
+/** Shows an entry in the main list (clearing search and filters when they hide it) and previews it. */
+async function revealEntry(index) {
+  let at = await invoke("locate", { view: 0, entry: index, folder: null });
+  if (at.line == null) {
+    $("search").value = "";
+    V.kinds = [];
+    V.size = "";
+    syncViewBar();
+    await runSearch("");
+    at = await invoke("locate", { view: 0, entry: index, folder: null });
+  }
+  if (at.line == null) return;
+  await mainList.reset(at.rows, true);
+  await select(at.line);
+}
+
+/** Tools › Search in Files (GRF Editor's "Advanced search"): text in the files, then jump to a hit. */
+async function doSearchContents() {
+  if (!S.info) return;
+  const prev = SET.contentSearch || { query: "", files: "*.lua;*.txt;*.xml", regex: false, case: false, word: false, inList: false };
+  const query = el("input", { type: "search", class: "field", value: prev.query, placeholder: t("sc-query-ph"), "aria-label": t("sc-query"), spellcheck: "false", autocomplete: "off" });
+  const files = el("input", { type: "text", class: "field", value: prev.files, placeholder: t("sc-files-ph"), "aria-label": t("sc-files"), spellcheck: "false" });
+  const box = (key, label) => {
+    const c = el("input", { type: "checkbox" });
+    c.checked = !!prev[key];
+    return [c, el("label", { class: "check" }, c, ` ${label}`)];
+  };
+  const [regex, regexL] = box("regex", t("sc-regex"));
+  const [cased, caseL] = box("case", t("sc-case"));
+  const [word, wordL] = box("word", t("sc-word"));
+  const [inList, inListL] = box("inList", t("sc-in-list"));
+  const results = el("div", { class: "sc-results" });
+  const status = el("p", { class: "muted", role: "status" });
+  const run = async () => {
+    if (!query.value) return query.focus();
+    SET.contentSearch = { query: query.value, files: files.value, regex: regex.checked, case: cased.checked, word: word.checked, inList: inList.checked };
+    saveSettings();
+    status.textContent = t("sc-running");
+    results.replaceChildren();
+    try {
+      const r = await invoke("search_contents", { query: { query: query.value, regex: regex.checked, case: cased.checked, whole_word: word.checked, files: files.value, in_list: inList.checked } });
+      status.textContent = r.hits.length ? t("sc-result", { lines: r.hits.length, files: t("pvw-files", { n: r.files_with_hits }), searched: t("pvw-files", { n: r.files_searched }) }) + (r.truncated ? ` ${t("sc-more")}` : "") : t("sc-none", { searched: t("pvw-files", { n: r.files_searched }) });
+      let last = null;
+      for (const h of r.hits) {
+        if (h.name !== last) {
+          results.append(el("div", { class: "sc-file", text: h.name }));
+          last = h.name;
+        }
+        results.append(el("button", { type: "button", class: "sc-hit", title: t("sc-show"), onclick: async () => { $("dlg").close(); await revealEntry(h.index); } }, el("span", { class: "sc-line", text: String(h.line) }), el("span", { class: "sc-text", text: h.text })));
+      }
+    } catch (e) {
+      status.textContent = errText(e);
+    }
+  };
+  query.addEventListener("keydown", (e) => e.key === "Enter" && (e.preventDefault(), run()));
+  files.addEventListener("keydown", (e) => e.key === "Enter" && (e.preventDefault(), run()));
+  const body = [
+    el("div", { class: "form" }, el("label", {}, el("span", { class: "fl", text: t("sc-query") }), query), el("label", {}, el("span", { class: "fl", text: t("sc-files") }), files)),
+    el("div", { class: "sc-opts" }, regexL, caseL, wordL, inListL),
+    el("div", { class: "controls" }, el("button", { type: "button", class: "primary", icon: "verify", text: t("sc-search"), onclick: run })),
+    status,
+    results,
+  ];
+  setTimeout(() => query.focus(), 0);
+  await ask(t("sc-title"), body, [{ label: "Close", value: null }], "info");
+}
+
 /** Help › About: version, who made it, and whose work it stands on. */
 async function openAbout() {
   let version = "";
@@ -3183,6 +3250,11 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     chooseArchive();
   }
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f" && S.info && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    doSearchContents();
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f" && !$("search").disabled) {
     e.preventDefault();
     $("search").focus();
@@ -3203,7 +3275,7 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
-const NEEDS_ARCHIVE = new Set(["close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images"]);
+const NEEDS_ARCHIVE = new Set(["search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images"]);
 const MENU_ACTIONS = {
   "new-window": () => invoke("open_in_window", { path: null }),
   "new-grf": () => newArchive("grf"),
@@ -3221,6 +3293,7 @@ const MENU_ACTIONS = {
   about: openAbout,
   hash: doHashes,
   compare: doCompare,
+  "search-contents": doSearchContents,
   "data-folder": () => invoke("open_data_folder"),
   "recent-clear": clearRecent,
   "reduce-images": () => doReduceImages(),

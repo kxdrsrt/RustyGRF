@@ -688,6 +688,61 @@ mod tests {
     }
 
     #[test]
+    fn the_text_of_files_is_searched() {
+        use crate::backend::ContentQuery;
+        let d = dir("search");
+        let grf = d.join("s.grf");
+        create_empty(&grf).unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let files = [
+            (r"data\a.lua", "local Prontera = 1\nprint(prontera)\n"),
+            (r"data\b.txt", "nothing here\nPRONTERA_FIELD\n"),
+            (r"data\c.bin", "pron\0\0\0\0tera prontera"),
+        ];
+        for (name, text) in files {
+            let f = d.join(name.rsplit('\\').next().unwrap());
+            std::fs::write(&f, text).unwrap();
+            s.stage_add(name, &f).unwrap();
+        }
+        let q = |query: &str, case, word, files: &str| ContentQuery {
+            query: query.into(),
+            case,
+            whole_word: word,
+            files: files.into(),
+            ..ContentQuery::default()
+        };
+        let ctl = Control::default();
+        let slot = std::sync::Mutex::new(Some(s));
+        save_in_place(&slot, SaveRequest::default(), &ctl).unwrap();
+        let s = slot.into_inner().unwrap().unwrap();
+        // the binary file is skipped
+        let r = s
+            .search_contents(&q("prontera", false, false, ""), &ctl)
+            .unwrap();
+        assert_eq!(
+            (r.files_searched, r.files_with_hits, r.hits.len()),
+            (3, 2, 3)
+        );
+        assert_eq!((r.hits[0].line, r.hits[1].line), (1, 2));
+        let r = s
+            .search_contents(&q("prontera", true, true, "*.lua"), &ctl)
+            .unwrap();
+        assert_eq!(r.hits.len(), 1);
+        assert_eq!(r.hits[0].text, "print(prontera)");
+        let regex = ContentQuery {
+            regex: true,
+            ..q(r"^PRONTERA_\w+$", true, false, "*.txt")
+        };
+        assert_eq!(s.search_contents(&regex, &ctl).unwrap().hits.len(), 1);
+        let bad = ContentQuery {
+            regex: true,
+            ..q("(", false, false, "")
+        };
+        assert!(s.search_contents(&bad, &ctl).is_err());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
     fn hashes_of_known_bytes() {
         let h = hashes(b"abc");
         assert_eq!(h.crc32, "352441c2");

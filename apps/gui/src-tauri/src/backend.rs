@@ -1282,6 +1282,87 @@ fn encode_legacy(enc: &'static encoding_rs::Encoding, text: &str) -> Result<Vec<
     Ok(bytes.into_owned())
 }
 
+/// Files larger than this are not searched for text.
+const CONTENT_SEARCH_MAX_BYTES: u32 = 32 << 20;
+/// Lines reported per file and in all.
+const CONTENT_HITS_PER_FILE: usize = 50;
+const CONTENT_HITS_MAX: usize = 5000;
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ContentQuery {
+    pub query: String,
+    #[serde(default)]
+    pub regex: bool,
+    /// Match case.
+    #[serde(default)]
+    pub case: bool,
+    #[serde(default)]
+    pub whole_word: bool,
+    /// Name patterns like `*.lua;*.txt`; empty: every file.
+    #[serde(default)]
+    pub files: String,
+    /// Only the files of the list as it is filtered now.
+    #[serde(default)]
+    pub in_list: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ContentHit {
+    pub index: usize,
+    pub name: String,
+    /// 1-based.
+    pub line: usize,
+    pub text: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ContentSearch {
+    pub hits: Vec<ContentHit>,
+    pub files_searched: usize,
+    pub files_with_hits: usize,
+    /// More lines matched than are listed.
+    pub truncated: bool,
+}
+
+/// `*` and `?` over a lower-case name.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let (p, n): (Vec<char>, Vec<char>) = (pattern.chars().collect(), name.chars().collect());
+    let (mut pi, mut ni, mut star, mut mark) = (0, 0, None, 0);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == '*')
+}
+
+/// The line around the first match, at most about 160 characters.
+fn snippet(line: &str, re: &regex::Regex) -> String {
+    let line = line.trim_end_matches('\r');
+    if line.chars().count() <= 160 {
+        return line.trim().to_string();
+    }
+    let at = re.find(line).map_or(0, |m| m.start());
+    let start = line[..at]
+        .char_indices()
+        .rev()
+        .nth(60)
+        .map_or(0, |(i, _)| i);
+    let text: String = line[start..].chars().take(160).collect();
+    format!("{}{}…", if start > 0 { "…" } else { "" }, text.trim())
+}
+
 fn decode_text(bytes: &[u8]) -> (String, &'static str) {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return (s.to_owned(), "UTF-8");
@@ -2083,6 +2164,121 @@ impl Session {
                 },
             })
             .collect()
+    }
+
+    /// Searches the text of files (GRF Editor's "Advanced search"): every file whose name matches
+    /// one of the `files` patterns (`*.lua;*.txt`, on the name without folder), or the files of the
+    /// list with `in_list`. Replaced entries are searched with their new content; added files only
+    /// once saved. Text is read as UTF-8, else Korean, else Windows-1252; files that look binary
+    /// are skipped. Runs on every core, reports progress and stops on cancel.
+    pub fn search_contents(
+        &self,
+        q: &ContentQuery,
+        ctl: &Control,
+    ) -> Result<ContentSearch, String> {
+        use rayon::prelude::*;
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        if q.query.is_empty() {
+            return Err(err!("err-search-empty"));
+        }
+        let pattern = if q.regex {
+            q.query.clone()
+        } else {
+            regex::escape(&q.query)
+        };
+        let pattern = if q.whole_word {
+            format!(r"\b(?:{pattern})\b")
+        } else {
+            pattern
+        };
+        let re = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!q.case)
+            .size_limit(1 << 22)
+            .build()
+            .map_err(|e| err!("err-bad-pattern", "error": e.to_string()))?;
+        let globs: Vec<String> = q
+            .files
+            .split([';', ',', ' '])
+            .map(|p| p.trim().to_lowercase())
+            .filter(|p| !p.is_empty())
+            .collect();
+        let base: Vec<usize> = if q.in_list {
+            self.filtered.clone()
+        } else {
+            (0..self.names.len()).collect()
+        };
+        let candidates: Vec<usize> = base
+            .into_iter()
+            .filter(|&i| {
+                let e = &self.arc.entries()[i];
+                if e.is_marker() || e.size > CONTENT_SEARCH_MAX_BYTES {
+                    return false;
+                }
+                let name = self.names[i]
+                    .rsplit('\\')
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                globs.is_empty() || globs.iter().any(|g| glob_match(g, &name))
+            })
+            .collect();
+        let total = candidates.len() as u64;
+        let done = AtomicU64::new(0);
+        let stop = AtomicBool::new(false);
+        let mut per_file: Vec<(usize, Vec<(usize, String)>)> = candidates
+            .par_iter()
+            .filter_map(|&i| {
+                if stop.load(Ordering::Relaxed) || ctl.check().is_err() {
+                    stop.store(true, Ordering::Relaxed);
+                    return None;
+                }
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                if n.is_multiple_of(256) || n == total {
+                    ctl.report(n, total);
+                }
+                let data = self.read_working(i).ok()?;
+                // binary content (images, compiled Lua) has NUL bytes early on
+                if data.iter().take(4096).filter(|&&b| b == 0).count() > 2 {
+                    return None;
+                }
+                let (text, _) = decode_text(&data);
+                let lines: Vec<(usize, String)> = text
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, l)| re.is_match(l))
+                    .take(CONTENT_HITS_PER_FILE)
+                    .map(|(n, l)| (n + 1, snippet(l, &re)))
+                    .collect();
+                (!lines.is_empty()).then_some((i, lines))
+            })
+            .collect();
+        if stop.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        per_file.sort_by(|a, b| self.names[a.0].cmp(&self.names[b.0]));
+        let files_with_hits = per_file.len();
+        let mut hits = Vec::new();
+        let mut truncated = false;
+        for (i, lines) in per_file {
+            for (line, text) in lines {
+                if hits.len() == CONTENT_HITS_MAX {
+                    truncated = true;
+                    break;
+                }
+                hits.push(ContentHit {
+                    index: i,
+                    name: self.names[i].clone(),
+                    line,
+                    text,
+                });
+            }
+        }
+        Ok(ContentSearch {
+            hits,
+            files_searched: total as usize,
+            files_with_hits,
+            truncated,
+        })
     }
 
     /// Hashes of an entry as it will be saved (pending changes included).
@@ -3381,6 +3577,15 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_patterns() {
+        assert!(glob_match("*.lua", "a.lua"));
+        assert!(glob_match("*.lu?", "a.lub"));
+        assert!(glob_match("item*.txt", "itemdesc.txt"));
+        assert!(!glob_match("*.lua", "a.lub"));
+        assert!(glob_match("*", "x"));
+    }
 
     /// The number of cells of a type in a GAT preview, from its info lines.
     fn gat_cells(info: &[Note], kind: i64) -> Option<u64> {
