@@ -156,19 +156,44 @@ async function openWithKey(path) {
   }
 }
 
+/** The backend refused because another window shows the archive (and brought that window forward). */
+const isOpenElsewhere = (e) => typeof e === "string" && e.includes('"err-open-elsewhere"');
+/** A new archive made by File › New: an empty GRF in the app's folder, named for its type. */
+const untitledKind = (path) => /untitled-\d+\.(grf|gpf|rgz|thor)$/i.exec(path || "")?.[1].toLowerCase() || null;
+
 async function openPath(path, force = false) {
+  // a window shows one archive: another one opens in a new window (or comes forward in its own)
+  if (S.info && !force && path !== S.info.path) {
+    try {
+      if (await invoke("open_in_window", { path })) return;
+    } catch {}
+  }
   if (!force && S.changes.length && SET.warnDiscard) {
     const go = await ask(t("open-another-title"), el("p", { text: t("open-another-body", { n: S.changes.length }) }), [{ label: t("pvw-open"), value: true }, { label: "Cancel", value: null, primary: true }]);
     if (!go) return;
   }
   setStatus(t("open-running", { path }));
+  let info;
   try {
-    S.info = await openWithKey(path);
+    info = await openWithKey(path);
   } catch (e) {
+    if (isOpenElsewhere(e)) {
+      setStatus(S.info ? "" : t("open-elsewhere"));
+      return;
+    }
     setStatus(t("open-failed-status"));
     await note(t("open-failed"), errText(e), true);
     return;
   }
+  await showOpened(info);
+}
+
+/** Puts a freshly opened (or saved and reopened) archive on the window. */
+async function showOpened(info) {
+  const path = info.path;
+  S.info = info;
+  S.untitled = untitledKind(path);
+  if (S.untitled) S.info.file_name = `${t("untitled")}.${S.untitled}`;
   $("empty").hidden = true;
   $("lists").hidden = false;
   for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes", "sort", "sort-dir", "size-filter"]) $(id).disabled = false;
@@ -184,14 +209,76 @@ async function openPath(path, force = false) {
   $("names").value = SET.names;
   S.query = "";
   if (SET.names !== "cp949") await invoke("set_names", { mode: SET.names });
-  SET.lastArchive = path;
-  saveSettings();
+  if (!S.untitled) {
+    SET.lastArchive = path;
+    addRecent(path);
+  }
   await runSearch("");
   setStatus(
     t("open-status", { name: S.info.file_name, format: S.info.format, files: t("pvw-files", { n: S.info.files }), size: fmtBytes(S.info.file_size) }),
   );
   if (S.info.draft) await offerDraft(S.info.draft);
   $("viewport").focus();
+}
+
+/** Closes the archive of this window; the window stays and shows the start page. */
+async function closeArchive() {
+  if (!S.info) return;
+  if (S.changes.length && SET.warnDiscard) {
+    const go = await ask(t("close-title"), el("p", { text: t("close-body", { n: S.changes.length }) }), [{ label: t("close-anyway"), value: true }, { label: "Cancel", value: null, primary: true }], "warning");
+    if (!go) return;
+  }
+  await invoke("close_archive").catch(() => {});
+  S.viewer?.destroy();
+  S.viewer = null;
+  Object.assign(S, { info: null, untitled: null, total: 0, matches: 0, offset: 0, rows: [], selected: null, query: "", changes: [], changed: new Map() });
+  THUMB.reset();
+  $("empty").hidden = false;
+  $("lists").hidden = true;
+  for (const id of ["search", "btn-extract", "btn-verify", "names", "btn-add", "btn-changes", "btn-replace", "sort", "sort-dir", "size-filter"]) $(id).disabled = true;
+  $("search").value = "";
+  $("count").textContent = "";
+  clearPreview();
+  updateEditBar();
+  updateTitle();
+  setStatus("");
+}
+
+// ---------- recent archives, menu ----------
+
+/** The recent archives, read fresh: another window may have opened one meanwhile. */
+function recentList() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}").recent;
+    return Array.isArray(stored) ? stored : SET.recent || [];
+  } catch {
+    return SET.recent || [];
+  }
+}
+
+function addRecent(path) {
+  SET.recent = [path, ...recentList().filter((p) => p !== path)].slice(0, 10);
+  saveSettings();
+  syncMenu();
+}
+
+function clearRecent() {
+  SET.recent = [];
+  saveSettings();
+  syncMenu();
+}
+
+/** The native menu in the page's language, with the recent archives. */
+function syncMenu() {
+  invoke("set_menu_labels", { labels: I18N.menuLabels(), recent: recentList() }).catch(() => {});
+}
+
+async function newArchive(kind) {
+  try {
+    await openPath(await invoke("new_archive", { kind }));
+  } catch (e) {
+    await note(t("new-failed"), errText(e), true);
+  }
 }
 
 /** Unsaved changes of an earlier session were found for this archive: restore or discard them. */
@@ -225,6 +312,8 @@ async function offerDraft(d) {
 
 const KINDS = ["image", "sprite", "animation", "palette", "map", "model", "audio", "text", "effect", "file"];
 const kindName = (k) => (KINDS.includes(k) ? t(`kind-${k}`) : k);
+/** The list layouts in the order of the view bar and of Cmd/Ctrl+1–4. */
+const LAYOUTS = ["tree", "details", "folders", "gallery"];
 const SIZE_UNITS = { k: 1024, m: 1024 * 1024 };
 const PREFS_KEY = "rustygrf-view";
 
@@ -239,6 +328,7 @@ const V = Object.assign(
   })(),
 );
 V.folder = null; // the chosen folder is per archive
+if (!LAYOUTS.includes(V.layout)) V.layout = V.layout === "list" ? "details" : "tree"; // "list" was merged into "details"
 const savePrefs = () => {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({ ...V, folder: null }));
@@ -381,35 +471,28 @@ function mainRow(r, pos) {
   if (r.folder) {
     return el(
       "div",
-      { class: `row tree folder${sel}`, style: `top:${pos * ROW_H}px;${indent}`, title: r.name, "data-pos": pos },
+      { class: `row tree details folder${sel}`, style: `top:${pos * ROW_H}px;${indent}`, title: r.name, "data-pos": pos },
       el("span", { class: `icon twisty${r.expanded ? " open" : ""}`, "data-twist": "1" }, svgIcon("chevron")),
       el("span", { class: "name" }, svgIcon(r.expanded ? "folder-open" : "folder", "folder-ic"), baseOf(r.name), el("span", { class: "count", text: fmtNum(r.count) })),
+      el("span", { class: "ext" }),
       el("span", { class: "size", text: fmtBytes(r.bytes) }),
+      el("span", { class: "stored" }),
     );
   }
   const key = changeKey(r.name);
   const state = S.changed.has(key) ? ` changed ${S.changed.get(key)}` : "";
   const base = baseOf(r.name);
   const dir = dirOf(r.name);
-  const cls = `row${sel}${state}${V.layout === "details" || V.layout === "folders" ? " details" : ""}${tree ? " tree" : ""}`;
+  const cls = `row details${sel}${state}${tree ? " tree" : ""}`;
   const icon = kindIcon(r.kind);
-  if (V.layout === "details" || V.layout === "folders") {
-    return el(
-      "div",
-      { class: cls, style: `top:${pos * ROW_H}px`, title: r.name, "data-pos": pos },
-      icon,
-      el("span", { class: "name" }, base, V.layout === "details" && dir ? el("span", { class: "muted", text: `  ${dir}` }) : null),
-      el("span", { class: "ext", text: extOf(r.name) }),
-      el("span", { class: "size", text: fmtBytes(r.size) }),
-      el("span", { class: "stored", text: fmtBytes(r.stored) }),
-    );
-  }
   return el(
     "div",
     { class: cls, style: `top:${pos * ROW_H}px;${indent}`, title: r.name, "data-pos": pos },
     icon,
-    el("span", { class: "name" }, base, !tree && dir ? el("span", { class: "muted", text: `  ${dir}` }) : null),
+    el("span", { class: "name" }, base, V.layout === "details" && dir ? el("span", { class: "muted", text: `  ${dir}` }) : null),
+    el("span", { class: "ext", text: extOf(r.name) }),
     el("span", { class: "size", text: fmtBytes(r.size) }),
+    el("span", { class: "stored", text: fmtBytes(r.stored) }),
   );
 }
 
@@ -666,7 +749,7 @@ function syncViewBar() {
   $("lists").classList.toggle("with-folders", folders);
   $("folder-pane").hidden = !folders;
   $("split-folders").hidden = !folders;
-  $("colhead").hidden = !(V.layout === "details" || folders);
+  $("colhead").hidden = V.layout === "gallery";
   $("recursive-wrap").hidden = !folders;
   $("recursive").checked = V.recursive;
   $("btn-expand").hidden = !(V.layout === "tree" || folders);
@@ -2220,20 +2303,235 @@ async function doRemove() {
 
 async function doChanges() {
   if (!S.changes.length) {
+    if (S.info) return saveDialog("as");
     await note(t("changes-title"), t("changes-none"));
     return;
   }
   const list = el("ul", { class: "pending" }, ...S.changes.slice(0, 500).map((p) => el("li", {}, el("span", { class: "kind", text: p.kind }), el("span", { text: p.name }), p.file ? el("span", { class: "file", text: p.file }) : null)));
   const more = S.changes.length > 500 ? el("p", { class: "muted", text: t("changes-more", { n: S.changes.length - 500 }) }) : null;
-  const act = await ask(t("changes-heading", { n: S.changes.length }), [list, more], [{ label: t("changes-save"), value: "save", primary: true }, { label: t("changes-discard"), value: "discard" }, { label: "Close", value: null }]);
+  const buttons = S.untitled ? [] : [{ label: t("save-here"), value: "here", primary: true }];
+  buttons.push({ label: t("save-as-button"), value: "save", primary: !!S.untitled }, { label: t("changes-discard"), value: "discard" }, { label: "Close", value: null });
+  const act = await ask(t("changes-heading", { n: S.changes.length }), [list, more], buttons);
+  if (act === "here") return doSave();
   if (act === "discard") {
     await invoke("discard_pending");
     setPending([]);
     setStatus(t("changes-discarded"));
     refreshPreview();
   } else if (act === "save") {
-    await saveEdited();
+    await saveDialog("as");
   }
+}
+
+/** Cmd/Ctrl+S: writes the changes into the archive itself (a new archive asks where first). */
+async function doSave() {
+  if (!S.info) return;
+  if (S.untitled) return saveDialog("as");
+  if (!S.changes.length) {
+    setStatus(t("save-nothing"));
+    return;
+  }
+  await saveInPlace(null);
+}
+
+/** Writes the archive over itself: next to it first, checked, then swapped in and opened again. */
+async function saveInPlace(req) {
+  const job = showJob(t("save-running"));
+  setStatus(t("save-status", { dst: S.info.path }));
+  try {
+    const r = await invoke("save_archive", { req });
+    job.close();
+    await showOpened(r.info);
+    setStatus(t("save-here-done", { name: r.info.file_name, files: t("pvw-files", { n: r.summary.files }), size: fmtBytes(r.summary.file_bytes) }));
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? t("save-cancelled") : t("save-failed"));
+    await note(cancelled ? t("save-cancelled") : t("save-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
+  }
+}
+
+const SAVE_TYPES = { grf: "GRF", gpf: "GPF", thor: "Thor", rgz: "RGZ" };
+const extOfPath = (p) => (/\.([a-z0-9]+)$/i.exec(p || "")?.[1] || "grf").toLowerCase();
+
+/**
+ * Save as, Save advanced and Archive settings in one dialog (GRF Editor has them in three
+ * places): how the files are stored (copied or compressed again), the GRF version and the
+ * encryption. `preset` picks the starting choice: as, repack, compact, encrypt, decrypt, settings.
+ */
+async function saveDialog(preset = "as") {
+  if (!S.info) return;
+  const info = S.info;
+  const kind = S.untitled || extOfPath(info.path);
+  const encrypted = !!info.encryption;
+  const method = el("select", {}, ["zlib", "zopfli", "lzma"].map((k) => el("option", { value: k, text: t(`method-${k}`) })));
+  method.value = SET.method;
+  const store = el("select", {}, el("option", { value: "copy", text: t("sa-store-copy") }), el("option", { value: "recompress", text: t("sa-store-recompress") }));
+  store.value = preset === "repack" ? "recompress" : "copy";
+  const format = el("select", {}, el("option", { value: "keep", text: t("sa-format-keep", { format: info.format }) }), ...["0x200", "0x300", "0x103", "0x102"].map((k) => el("option", { value: k, text: t(`format-${k}`) })));
+  const enc = el("select", {}, encrypted ? el("option", { value: "keep", text: t("sa-enc-keep") }) : null, el("option", { value: "none", text: encrypted ? t("sa-enc-none") : t("sa-enc-plain") }), el("option", { value: "password", text: t("sa-enc-password") }));
+  enc.value = preset === "encrypt" ? "password" : preset === "decrypt" ? "none" : encrypted ? "keep" : "none";
+  const pass = el("input", { type: "password", class: "field", autocomplete: "new-password", placeholder: t("sa-password"), "aria-label": t("sa-password") });
+  const pass2 = el("input", { type: "password", class: "field", autocomplete: "new-password", placeholder: t("sa-password-again"), "aria-label": t("sa-password-again") });
+  const passRow = el("div", { class: "form" }, pass, pass2);
+  // format and encryption are GRF things; a Thor or RGZ has neither
+  const grfTarget = kind !== "thor" && kind !== "rgz";
+  const sync = () => {
+    method.disabled = store.value !== "recompress";
+    passRow.hidden = !grfTarget || enc.value !== "password";
+  };
+  for (const c of [store, enc]) c.addEventListener("change", sync);
+  sync();
+  const facts = el("dl", { class: "facts" },
+    el("dt", { text: t("as-path") }), el("dd", { text: S.untitled ? t("as-unsaved") : info.path }),
+    el("dt", { text: t("as-type") }), el("dd", { text: info.format }),
+    el("dt", { text: t("as-content") }), el("dd", { text: `${t("pvw-files", { n: info.files })} · ${fmtBytes(info.file_size)}` }),
+    el("dt", { text: t("as-encryption") }), el("dd", { text: encrypted ? t("as-encrypted") : t("as-plain") }),
+    el("dt", { text: t("as-names") }), el("dd", { text: $("names").selectedOptions[0]?.textContent || "" }),
+  );
+  const fmtLabel = el("label", {}, el("span", { class: "fl", text: t("set-format") }), format);
+  const encLabel = el("label", {}, el("span", { class: "fl", text: t("sa-encryption") }), enc);
+  for (const n of [fmtLabel, encLabel, passRow]) if (!grfTarget) n.hidden = true;
+  const body = [
+    preset === "settings" ? facts : null,
+    el("div", { class: "form buildform" },
+      el("label", {}, el("span", { class: "fl", text: t("sa-store") }), store),
+      el("label", {}, el("span", { class: "fl", text: t("set-compression") }), method),
+      fmtLabel,
+      encLabel,
+    ),
+    passRow,
+    el("p", { class: "hint", text: t("sa-hint") }),
+  ];
+  const titles = { as: "sa-title", repack: "sa-title-repack", compact: "sa-title-compact", encrypt: "sa-title-encrypt", decrypt: "sa-title-decrypt", settings: "as-title" };
+  const buttons = [];
+  if (!S.untitled) buttons.push({ label: t("save-here"), value: "here", primary: preset !== "as" });
+  buttons.push({ label: t("save-as-button"), value: "as", primary: preset === "as" || !!S.untitled }, { label: "Cancel", value: null });
+  for (;;) {
+    const act = await ask(t(titles[preset] || "sa-title"), body, buttons, preset === "settings" ? "info" : undefined);
+    if (!act) return;
+    if (enc.value === "password" && (!pass.value || pass.value !== pass2.value)) {
+      await note(t("sa-title-encrypt"), pass.value ? t("sa-password-mismatch") : t("err-password-empty"), true);
+      continue;
+    }
+    const req = {
+      dst: "",
+      recompress: store.value === "recompress",
+      method: method.value,
+      format: format.value === "keep" ? null : format.value,
+      encryption: enc.value,
+      password: enc.value === "password" ? pass.value : null,
+    };
+    if (act === "here") return saveInPlace(req);
+    const base = S.untitled ? t("untitled") : info.file_name.replace(/\.[^.]+$/, "");
+    const types = Object.keys(SAVE_TYPES).sort((a, b) => (a === kind ? -1 : b === kind ? 1 : 0));
+    const dst = await T.dialog.save({ title: t("save-pick"), defaultPath: `${base}${S.untitled ? "" : "-new"}.${kind}`, filters: types.map((k) => ({ name: t("sa-filter", { type: SAVE_TYPES[k] }), extensions: [k] })) });
+    if (!dst) continue;
+    return saveAs({ ...req, dst });
+  }
+}
+
+async function saveAs(req) {
+  const job = showJob(t("save-running"));
+  setStatus(t("save-status", { dst: req.dst }));
+  try {
+    const r = await invoke("save_as", { req });
+    job.close();
+    if (!r.verified) return note(t("save-could-not"), t("save-unverified", { dst: req.dst }), true);
+    // like every "Save as": the changes are in the new file now, and this window shows it
+    await invoke("discard_pending").catch(() => {});
+    S.changes = [];
+    await openPath(req.dst, true);
+    setStatus(t("save-as-done", { dst: req.dst }));
+  } catch (e) {
+    job.close();
+    const cancelled = /cancel/i.test(errText(e));
+    setStatus(cancelled ? t("save-cancelled") : t("save-failed"));
+    await note(cancelled ? t("save-cancelled") : t("save-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
+  }
+}
+
+/** Tools › Hashes: CRC32, MD5 and SHA-256 of the chosen file (as it will be saved). */
+async function doHashes() {
+  const row = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  if (!row || row.folder) return note(t("hash-title"), t("hash-pick"));
+  try {
+    const h = await invoke("entry_hashes", { index: row.index });
+    const line = (k, v) => [el("dt", { text: k }), el("dd", {}, el("code", { text: v }))];
+    await ask(t("hash-title"), [el("p", { text: row.name }), el("dl", { class: "facts selectable" }, ...line(t("hash-size"), `${fmtNum(h.size)} B`), ...line("CRC32", h.crc32), ...line("MD5", h.md5), ...line("SHA-256", h.sha256))], [{ label: "OK", value: true, primary: true }]);
+  } catch (e) {
+    await note(t("hash-title"), errText(e), true);
+  }
+}
+
+/** Tools › Compare: what differs from another archive, and those differences as a patch. */
+async function doCompare() {
+  if (!S.info) return;
+  const other = await T.dialog.open({ multiple: false, directory: false, title: t("cmp-pick"), filters: [{ name: "GRF, GPF, Thor, RGZ", extensions: ["grf", "gpf", "thor", "rgz"] }] });
+  if (!other) return;
+  const job = showJob(t("cmp-running"));
+  let r;
+  try {
+    r = await invoke("compare_with", { other });
+    job.close();
+  } catch (e) {
+    job.close();
+    return note(t("cmp-failed"), errText(e), true);
+  }
+  const list = (title, names, total) =>
+    total ? el("details", {}, el("summary", { text: `${title} (${fmtNum(total)})` }), el("ul", { class: "pending" }, ...names.slice(0, 300).map((n) => el("li", { text: n }))), total > 300 ? el("p", { class: "muted", text: t("changes-more", { n: total - 300 }) }) : null) : null;
+  const same = !r.only_here_total && !r.only_there_total && !r.changed_total;
+  const body = [
+    el("p", { text: t("cmp-summary", { other: baseOf(r.other.replace(/\//g, "\\")), here: t("pvw-files", { n: r.only_here_total }), changed: t("pvw-files", { n: r.changed_total }), there: t("pvw-files", { n: r.only_there_total }), same: fmtNum(r.same) }) }),
+    list(t("cmp-only-here"), r.only_here, r.only_here_total),
+    list(t("cmp-changed"), r.changed, r.changed_total),
+    list(t("cmp-only-there"), r.only_there, r.only_there_total),
+    same ? null : el("p", { class: "hint", text: t("cmp-patch-hint") }),
+  ];
+  const act = await ask(same ? t("cmp-same") : t("cmp-title"), body, same ? [{ label: "OK", value: null, primary: true }] : [{ label: t("cmp-make-patch"), value: "patch", primary: true }, { label: "Close", value: null }], same ? "success" : undefined);
+  if (act !== "patch") return;
+  const base = S.info.file_name.replace(/\.[^.]+$/, "");
+  const dst = await T.dialog.save({ title: t("cmp-patch-pick"), defaultPath: `${base}-patch.thor`, filters: [{ name: t("sa-filter", { type: "Thor" }), extensions: ["thor"] }, { name: t("sa-filter", { type: "GRF" }), extensions: ["grf"] }] });
+  if (!dst) return;
+  const job2 = showJob(t("cmp-patch-running"));
+  try {
+    const p = await invoke("make_patch", { old: other, dst, method: SET.method });
+    job2.close();
+    const go = await ask(t("cmp-patch-done"), el("p", { text: t("cmp-patch-result", { added: p.added, changed: p.changed, removed: p.removed, size: fmtBytes(p.file_bytes), dst }) }), [{ label: t("dlg-open-it"), value: true, primary: true }, { label: "Close", value: false }], "success");
+    if (go) await openPath(dst);
+  } catch (e) {
+    job2.close();
+    await note(t("cmp-failed"), errText(e), true);
+  }
+}
+
+/** Help › About: version, who made it, and whose work it stands on. */
+async function openAbout() {
+  let version = "";
+  try {
+    version = (await T.app?.getVersion?.()) || "";
+  } catch {}
+  const link = (text, url) => el("a", { href: url, text, onclick: (e) => { e.preventDefault(); invoke("open_link", { url }).catch(() => {}); } });
+  const body = [
+    el("div", { class: "about" },
+      el("img", { src: "icon.png", alt: "", width: 72, height: 72 }),
+      el("div", {},
+        el("h3", { text: "RustyGRF" }),
+        el("p", { class: "muted", text: version ? t("about-version", { version }) : "" }),
+        el("p", { text: t("about-tagline") }),
+      ),
+    ),
+    el("h4", { text: t("about-made-by") }),
+    el("p", {}, "Kadir Sert · ", link("github.com/kxdrsrt", "https://github.com/kxdrsrt"), " · ", link("bento.me/kadir-sert", "https://bento.me/kadir-sert")),
+    el("h4", { text: t("about-thanks") }),
+    el("ul", { class: "credits" },
+      el("li", {}, link("Tokeiburu", "https://github.com/Tokeiburu"), ` — ${t("about-tokeiburu")}`),
+      el("li", {}, link("Lua", "https://www.lua.org/"), ` — ${t("about-lua")}`),
+      el("li", {}, link("Tauri", "https://github.com/tauri-apps/tauri"), ` — ${t("about-tauri")}`),
+    ),
+    el("p", { class: "muted", text: t("about-license") }),
+  ];
+  await ask(t("about-title"), body, [{ label: "OK", value: true, primary: true }]);
 }
 
 async function saveEdited() {
@@ -2514,7 +2812,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, method: "zlib", format: "0x200", lastArchive: "" };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, method: "zlib", format: "0x200", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -2532,6 +2830,10 @@ const DENSITY = { compact: 22, normal: 24, comfortable: 30 };
 /** Puts the settings on the page; called at start and after each change. */
 function applySettings() {
   const root = document.documentElement;
+  if (SET.theme !== applySettings.theme) {
+    applySettings.theme = SET.theme;
+    invoke("remember_theme", { theme: SET.theme }).catch(() => {});
+  }
   const flag = (name, on, value = "") => (on ? root.setAttribute(name, value) : root.removeAttribute(name));
   flag("data-theme", SET.theme !== "system", SET.theme);
   flag("data-accent", SET.accent !== "orange", SET.accent);
@@ -2585,7 +2887,7 @@ function openSettings() {
     setLanguage();
     openSettings();
   });
-  const layouts = [["last", t("set-as-last")], ["tree", t("view-tree")], ["folders", t("view-folders")], ["list", t("view-list")], ["details", t("view-details")], ["gallery", t("view-gallery")]];
+  const layouts = [["last", t("set-as-last")], ...LAYOUTS.map((k) => [k, t(`view-${k}`)])];
   const L = (label, key, table) => {
     const e = explained(table, SET[key], (v) => change(key, v));
     e.sel.setAttribute("aria-label", label);
@@ -2642,7 +2944,7 @@ function setLanguage() {
   if (typeof updateEditBar === "function") updateEditBar();
   if (S.info) $("count").textContent = filtersActive() ? t("count-filtered", { n: S.matches, total: S.info.entries }) : t("count-entries", { n: S.matches });
   mainList.draw();
-  invoke("set_menu_labels", { labels: I18N.menuLabels() }).catch(() => {});
+  syncMenu();
 }
 
 // ---------- wiring ----------
@@ -2850,17 +3152,21 @@ window.addEventListener("resize", () => {
   folderList.scrolled();
 });
 window.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "s") {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
-    if (S.info && !document.querySelector("dialog[open]")) doChanges();
+    if (S.info && !document.querySelector("dialog[open]")) e.shiftKey ? saveDialog("as") : doSave();
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n" && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    e.shiftKey ? invoke("open_in_window", { path: null }).catch(() => {}) : newArchive("grf");
   }
   if ((e.metaKey || e.ctrlKey) && e.key === ",") {
     e.preventDefault();
     openSettings();
   }
-  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && "12345".includes(e.key) && e.key.length === 1 && S.info) {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && "1234".includes(e.key) && e.key.length === 1 && S.info) {
     e.preventDefault();
-    setLayout(["tree", "folders", "list", "details", "gallery"][Number(e.key) - 1]);
+    setLayout(LAYOUTS[Number(e.key) - 1]);
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
     e.preventDefault();
@@ -2890,11 +3196,41 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
+const NEEDS_ARCHIVE = new Set(["close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images"]);
+const MENU_ACTIONS = {
+  "new-window": () => invoke("open_in_window", { path: null }),
+  "new-grf": () => newArchive("grf"),
+  "new-gpf": () => newArchive("gpf"),
+  "new-rgz": () => newArchive("rgz"),
+  "new-thor": () => newArchive("thor"),
+  "close-archive": closeArchive,
+  save: doSave,
+  "save-as": () => saveDialog("as"),
+  "save-repack": () => saveDialog("repack"),
+  "save-compact": () => saveDialog("compact"),
+  "save-encrypt": () => saveDialog("encrypt"),
+  "save-decrypt": () => saveDialog("decrypt"),
+  "archive-settings": () => saveDialog("settings"),
+  about: openAbout,
+  hash: doHashes,
+  compare: doCompare,
+  "data-folder": () => invoke("open_data_folder"),
+  "recent-clear": clearRecent,
+  "reduce-images": () => doReduceImages(),
+};
 function runMenuCommand(id) {
   if (document.querySelector("dialog[open]")) return;
   if (id.startsWith("layout-")) return S.info && setLayout(id.slice(7));
   if (id.startsWith("preview-")) return setPreviewMode(id.slice(8));
-  if (id === "reduce-images") return doReduceImages();
+  const recent = /^recent-(\d+)$/.exec(id);
+  if (recent) {
+    const path = recentList()[Number(recent[1])];
+    return path && openPath(path);
+  }
+  if (MENU_ACTIONS[id]) {
+    if (NEEDS_ARCHIVE.has(id) && !S.info) return;
+    return Promise.resolve(MENU_ACTIONS[id]()).catch((e) => note(t("open-failed"), errText(e), true));
+  }
   const b = MENU_BUTTONS[id] && $(MENU_BUTTONS[id]);
   if (b && !b.disabled) b.click();
 }
@@ -2907,13 +3243,16 @@ for (const b of document.querySelectorAll("button")) {
 }
 I18N.load(I18N.resolve(SET.language));
 I18N.apply();
-invoke("set_menu_labels", { labels: I18N.menuLabels() }).catch(() => {});
+syncMenu();
+if (SET.layout === "list") SET.layout = "details";
 if (SET.layout !== "last") V.layout = SET.layout;
 if (SET.preview !== "last") V.preview = SET.preview;
 applySettings();
 clearPreview();
 syncViewBar();
 buildKindFilter();
+// the window is created hidden in the page's background colour: show it once the page is drawn
+requestAnimationFrame(() => setTimeout(() => invoke("window_ready").catch(() => {}), 0));
 
 invoke("startup_path")
   .then(async (p) => {

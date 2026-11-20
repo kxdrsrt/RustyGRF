@@ -314,14 +314,14 @@ pub struct PendingRow {
 
 /// What a save needs, without holding the open session.
 pub struct EditPlan {
-    src: PathBuf,
+    pub(crate) src: PathBuf,
     changes: Vec<Change>,
     /// The key of an encrypted source; the result is encrypted again with it.
-    key: Option<rgrf_core::grfcrypt::Key>,
+    pub(crate) key: Option<rgrf_core::grfcrypt::Key>,
 }
 
 impl EditPlan {
-    fn open(&self) -> Result<Archive, String> {
+    pub(crate) fn open(&self) -> Result<Archive, String> {
         match &self.key {
             Some(k) => Archive::open_with_key(&self.src, k),
             None => Archive::open(&self.src),
@@ -329,7 +329,7 @@ impl EditPlan {
         .map_err(|e| format!("{}: {e}", self.src.display()))
     }
 
-    fn edits(&self) -> Result<Vec<Edit>, String> {
+    pub(crate) fn edits(&self) -> Result<Vec<Edit>, String> {
         self.changes
             .iter()
             .map(|c| {
@@ -2067,6 +2067,21 @@ impl Session {
             .collect()
     }
 
+    /// Hashes of an entry as it will be saved (pending changes included).
+    pub fn hashes(&self, index: usize) -> Result<crate::saving::Hashes, String> {
+        Ok(crate::saving::hashes(&self.read_working(index)?))
+    }
+
+    /// The name mode the list shows (for lists of paths made elsewhere).
+    pub fn name_mode(&self) -> NameMode {
+        self.mode
+    }
+
+    /// The draft folder (to reopen the archive after saving it in place).
+    pub fn draft_root(&self) -> Option<PathBuf> {
+        self.draft_root.clone()
+    }
+
     pub fn edit_plan(&self) -> Result<EditPlan, String> {
         if self.pending.is_empty() {
             return Err(err!("err-no-changes"));
@@ -2167,9 +2182,11 @@ impl Session {
         let matches = idx.len();
         let tree_layout = matches!(spec.layout.as_str(), "tree" | "folders");
         let (tree, lines, flat) = if tree_layout {
-            let folders_desc = spec.desc && matches!(spec.sort.as_str(), "name" | "path");
+            // folders follow a sort by name or size; other keys (type, offset) keep them by name
+            let by_size = matches!(spec.sort.as_str(), "size" | "stored");
+            let desc = spec.desc && (by_size || matches!(spec.sort.as_str(), "name" | "path"));
             (
-                Some(Tree::build(&self.names, &idx, &meta, folders_desc)),
+                Some(Tree::build(&self.names, &idx, &meta, by_size, desc)),
                 Vec::new(),
                 Vec::new(),
             )

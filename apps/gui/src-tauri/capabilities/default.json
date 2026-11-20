@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permissions of the main window: open files and folders through the system dialog, and name the window after the archive",
-  "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-title", "dialog:allow-open", "dialog:allow-save"]
+  "description": "Permissions of every window: open files and folders through the system dialog, and name the window after the archive",
+  "windows": [
+    "*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
 }

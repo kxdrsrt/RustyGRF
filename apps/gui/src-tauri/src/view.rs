@@ -128,12 +128,14 @@ pub struct Tree {
 }
 
 impl Tree {
-    /// A tree over `idx` (files stay in the order of `idx`); folders are ordered by name.
+    /// A tree over `idx` (files stay in the order of `idx`); folders are ordered by name, or by
+    /// the bytes below them with `by_size`, and reversed with `desc`.
     pub fn build(
         names: &[String],
         idx: &[usize],
         meta: &dyn Fn(usize) -> Meta,
-        folders_desc: bool,
+        by_size: bool,
+        desc: bool,
     ) -> Self {
         let mut t = Tree {
             nodes: vec![Node {
@@ -170,8 +172,12 @@ impl Tree {
         }
         for n in 0..t.nodes.len() {
             let mut kids = std::mem::take(&mut t.nodes[n].folders);
-            kids.sort_by_cached_key(|&c| t.nodes[c].name.to_lowercase());
-            if folders_desc {
+            if by_size {
+                kids.sort_by_key(|&c| t.nodes[c].total_bytes);
+            } else {
+                kids.sort_by_cached_key(|&c| t.nodes[c].name.to_lowercase());
+            }
+            if desc {
                 kids.reverse();
             }
             t.nodes[n].folders = kids;
@@ -353,19 +359,36 @@ mod tests {
         let n: Vec<String> = [r"data\sprite\a\x.spr", r"data\sprite\b\z.spr"]
             .map(String::from)
             .to_vec();
-        let t = Tree::build(&n, &[0, 1], &meta, false);
+        let t = Tree::build(&n, &[0, 1], &meta, false, false);
         // data holds only sprite, sprite holds two folders: both open, a and b stay closed
         let keys = t.opening_keys();
         assert_eq!(keys, HashSet::from([r"data".into(), r"data\sprite".into()]));
         // two top folders (data and Data are one, root.txt is a file at the top): data opens
-        let t = Tree::build(&names(), &all(), &meta, false);
+        let t = Tree::build(&names(), &all(), &meta, false, false);
         assert!(t.opening_keys().contains("data"));
         let two: Vec<String> = [r"data\a.txt", r"other\b.txt"].map(String::from).to_vec();
         assert!(
-            Tree::build(&two, &[0, 1], &meta, false)
+            Tree::build(&two, &[0, 1], &meta, false, false)
                 .opening_keys()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn folders_follow_a_sort_by_size() {
+        // below data: sprite (10 + 500 + 30 bytes) and texture (4000 + 20)
+        let kids = |by_size, desc| {
+            let t = Tree::build(&names(), &all(), &meta, by_size, desc);
+            let data = t.find("data").unwrap();
+            t.nodes[data]
+                .folders
+                .iter()
+                .map(|&c| t.nodes[c].name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kids(false, false), ["sprite", "texture"]);
+        assert_eq!(kids(true, true), ["texture", "sprite"]);
+        assert_eq!(kids(true, false), ["sprite", "texture"]);
     }
 
     #[test]
@@ -428,7 +451,7 @@ mod tests {
     #[test]
     fn the_tree_merges_cases_counts_and_opens_folders() {
         let n = names();
-        let t = Tree::build(&n, &all(), &meta, false);
+        let t = Tree::build(&n, &all(), &meta, false, false);
         // data (sprite (a, b), texture) -> folders; Data\Texture is the same folder as data\texture
         let data = t.find("data").unwrap();
         assert_eq!(t.nodes[data].total_files, 5);

@@ -38,7 +38,7 @@ btn-undo = Undo
 btn-redo = Redo
     .title = Redo (Shift+Cmd/Ctrl+Z)
 btn-save = Save…
-    .title = Review and save the pending changes as a new archive (Cmd/Ctrl+S)
+    .title = Review and save the pending changes (Cmd/Ctrl+S saves at once)
 
 search = Search
     .placeholder = Search: a name, or a pattern like *.spr
@@ -155,13 +155,13 @@ names-korean = Korean
 
 ## Pending changes
 save-n = { $n ->
-    [one] Save the { $n } pending change as a new archive
-   *[other] Save the { $n } pending changes as a new archive
+    [one] Review and save the { $n } pending change
+   *[other] Review and save the { $n } pending changes
  }
-save-none = Save the pending changes as a new archive
+save-none = Save a copy with other settings
 save-aria-n = { $n ->
-    [one] Save { $n } pending change as a new archive
-   *[other] Save { $n } pending changes as a new archive
+    [one] Save { $n } pending change
+   *[other] Save { $n } pending changes
  }
 save-aria-none = Save changes
 
@@ -259,19 +259,16 @@ menu-window = Window
 menu-help = Help
 menu-settings = Settings...
 menu-open = Open...
-menu-build = Build...
+menu-build = Build from Folder...
 menu-merge = Merge...
 menu-extract = Extract...
-menu-verify = Verify
-menu-changes-save = Save Changes as New Archive...
+menu-verify = Verify Archive
 menu-reduce-images = Reduce Images...
 menu-add = Add File...
 menu-replace = Replace...
 menu-remove = Remove
-menu-changes-review = Review Changes...
 menu-layout-tree = As Tree
 menu-layout-folders = As Folders
-menu-layout-list = As List
 menu-layout-details = As Details
 menu-layout-gallery = As Gallery
 menu-preview-right = Preview on the Right
@@ -909,3 +906,102 @@ err-pal-factors = Saturation and brightness are factors of at least 0
 err-spr-size = The image is { $w } x { $h } pixels, the data has { $n } values
 err-no-archive = No archive is open
 err-job-running = Another job is already running
+
+menu-new = New
+menu-new-grf = GRF Archive...
+menu-new-gpf = GPF Patch...
+menu-new-rgz = RGZ Patch...
+menu-new-thor = Thor Patch...
+menu-new-window = New Window
+menu-recent = Open Recent
+menu-recent-none = No Recent Archives
+menu-recent-clear = Clear Menu
+menu-close-archive = Close Archive
+menu-save = Save
+menu-save-as = Save As...
+menu-save-advanced = Save Advanced
+menu-save-repack = Repack (Recompress)...
+menu-save-compact = Compact (Copy Streams)...
+menu-save-encrypt = Encrypt...
+menu-save-decrypt = Save Decrypted...
+menu-archive-settings = Archive Settings...
+menu-changes = Review Changes...
+menu-tools = Tools
+menu-hash = Hashes...
+menu-compare = Compare with Archive...
+menu-data-folder = Open App Data Folder
+menu-about = About RustyGRF...
+open-elsewhere = This archive is open in another window.
+err-open-elsewhere = The archive is open in another window
+untitled = Untitled
+new-failed = Could not make a new archive
+close-title = Close the archive?
+close-body = { $n } unsaved changes are kept as a draft and offered when you open the archive again.
+close-anyway = Close
+save-here = Save
+save-as-button = Save As…
+save-nothing = Nothing to save: there are no changes.
+save-here-done = { $name } saved: { $files }, { $size }, checked.
+sa-title = Save As
+sa-title-repack = Repack (compress again)
+sa-title-compact = Compact
+sa-title-encrypt = Encrypt
+sa-title-decrypt = Save decrypted
+as-title = Archive settings
+sa-store = Files
+sa-store-copy = Copy as stored (fast, compacts the archive)
+sa-store-recompress = Compress every file again
+sa-format-keep = Keep ({ $format })
+sa-encryption = Encryption
+sa-enc-keep = Keep the password
+sa-enc-none = Remove the encryption
+sa-enc-plain = None
+sa-enc-password = Encrypt with a password
+sa-password = Password
+sa-password-again = Password again
+sa-password-mismatch = The two passwords differ.
+err-password-empty = Enter a password
+sa-hint = “Save” writes the archive next to itself, checks it and then replaces it. Encryption works with GRF 0x200 only; GRF Editor and clients with its DLL read it. Thor and RGZ are written from the file name you choose.
+sa-filter = { $type } files
+as-path = File
+as-unsaved = not saved yet
+as-type = Type
+as-content = Content
+as-encryption = Encryption
+as-encrypted = GRF Editor password
+as-plain = none
+as-names = Names shown as
+err-save-same = Choose another file: “Save” writes into the open archive
+err-save-unverified = The written archive did not match the check; the original is unchanged
+err-save-replace = { $path } could not be replaced ({ $error }). The saved archive is { $tmp }.
+err-encrypt-format = Encryption is possible for GRF 0x200 only
+err-patch-empty = A patch needs at least one file
+hash-title = Hashes
+hash-pick = Select a file first.
+hash-size = Size
+cmp-pick = Compare with which archive?
+cmp-running = Comparing …
+cmp-failed = Could not compare
+cmp-title = Differences
+cmp-same = Same content
+cmp-summary = Compared with { $other }: { $here } only here, { $changed } changed, { $there } only there, { $same } the same.
+cmp-only-here = Only in this archive
+cmp-changed = Changed
+cmp-only-there = Only in the other archive
+cmp-patch-hint = A patch holds what is new or changed here; a Thor patch also deletes what is only in the other archive.
+cmp-make-patch = Save as Patch…
+cmp-patch-pick = Save the patch as
+cmp-patch-running = Writing the patch …
+cmp-patch-done = Patch written
+cmp-patch-result = { $added } new, { $changed } changed, { $removed } removed; { $size }, written to { $dst }.
+about-title = About RustyGRF
+about-version = Version { $version }
+about-tagline = One tool for Ragnarok Online archives, sprites, animations, palettes and maps, on macOS, Windows and Linux.
+about-made-by = Made by
+about-thanks = Thanks
+about-tokeiburu = GRF Editor and ACT Editor, the inspiration; formats ported with his permission
+about-lua = Lua 5.0 and 5.1 (MIT), for checking and compiling Lua files
+about-tauri = the window around the app
+about-license = Licensed under MIT or Apache-2.0. Not affiliated with Gravity.
+save-as-done = Saved as { $dst }; this window shows it now.
+save-unverified = The saved archive did not pass the check: { $dst }

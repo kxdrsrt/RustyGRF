@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use rgrf_core::progress::Control;
 use rustygrf_gui_lib::backend::{self, BuildRequest, MergeRequest, Session};
+use rustygrf_gui_lib::saving;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -286,6 +287,54 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.discard_pending();
             Ok(Value::Null)
         }),
+        "save_as" => {
+            let plan = with(state, |s| Ok(s.plan()))?;
+            let req: saving::SaveRequest = arg(a, "req")?;
+            to_json(saving::save_as(&plan, &req, true, &none)?)
+        }
+        "save_archive" => {
+            let req: Option<saving::SaveRequest> = arg(a, "req")?;
+            to_json(saving::save_in_place(
+                state,
+                req.unwrap_or_default(),
+                &none,
+            )?)
+        }
+        "new_archive" => {
+            let dir = std::env::temp_dir().join("rustygrf-new");
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let path = dir.join(saving::untitled_name(&arg::<String>(a, "kind")?, stamp)?);
+            saving::create_empty(&path)?;
+            to_json(path.display().to_string())
+        }
+        "entry_hashes" => with(state, |s| to_json(s.hashes(arg(a, "index")?)?)),
+        "compare_with" => {
+            let (plan, mode) = with(state, |s| Ok((s.plan(), s.name_mode())))?;
+            let other: String = arg(a, "other")?;
+            to_json(saving::compare_plan(
+                &plan,
+                &PathBuf::from(other),
+                mode,
+                &none,
+            )?)
+        }
+        "make_patch" => {
+            let plan = with(state, |s| Ok(s.plan()))?;
+            let (old, dst): (String, String) = (arg(a, "old")?, arg(a, "dst")?);
+            let method: Option<String> = arg(a, "method")?;
+            to_json(saving::patch_plan(
+                &plan,
+                &PathBuf::from(old),
+                &PathBuf::from(dst),
+                method.as_deref(),
+                &none,
+            )?)
+        }
+        "open_data_folder" => Ok(Value::Null),
         "save_edited" => {
             let plan = with(state, |s| s.edit_plan())?;
             to_json(backend::save_edited(
@@ -303,7 +352,14 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             &arg::<MergeRequest>(a, "req")?,
             &none,
         )?),
-        "cancel_job" | "startup_path" | "startup_select" => Ok(Value::Null),
+        "cancel_job" | "startup_path" | "startup_select" | "window_ready" | "remember_theme"
+        | "open_link" => Ok(Value::Null),
+        // one browser tab is one window: the page opens the archive in itself
+        "open_in_window" => Ok(Value::Bool(false)),
+        "close_archive" => {
+            *state.lock().map_err(|_| "state is locked")? = None;
+            Ok(Value::Null)
+        }
         other => Err(format!("unknown command {other}")),
     }
 }
