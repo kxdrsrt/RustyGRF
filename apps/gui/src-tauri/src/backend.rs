@@ -28,7 +28,7 @@ use rgrf_formats::gat::{self, Gat};
 use rgrf_formats::gif_io::{delay_cs, encode_gif, upscale};
 use rgrf_formats::gnd_map;
 use rgrf_formats::pal::Pal;
-use rgrf_formats::png_io::{Frame as PngFrame, frame_from_png, rgba_to_png};
+use rgrf_formats::png_io::{Frame as PngFrame, frame_from_png, rgba_to_png, rgba_to_png_fast};
 use rgrf_formats::render::{bounds_of, render_frame};
 use rgrf_formats::rsm_model;
 use rgrf_formats::rsw::{self, Rsw};
@@ -56,10 +56,14 @@ fn sample_count(duration_ms: f32) -> usize {
     }
 }
 
+/// The textures of a scene: [`TexturePool::get`] only numbers them; [`TexturePool::finish`] then
+/// decodes and encodes all pictures at once on every core (a big map has 200 and more).
 #[derive(Default)]
 struct TexturePool {
     out: Vec<TextureOut>,
     by_key: HashMap<Vec<u8>, usize>,
+    /// The archive entry of each texture, if it exists.
+    entries: Vec<Option<usize>>,
 }
 
 /// The texture-coordinate transforms over the loop for the part of `node` that uses `texture`,
@@ -186,17 +190,31 @@ impl TexturePool {
         if let Some(&i) = self.by_key.get(&key) {
             return i;
         }
-        let png = keys
-            .get(&key)
-            .and_then(|&ti| s.texture_image(ti))
-            .and_then(|img| rgba_to_png(&img).ok())
-            .map(|b| b64(&b));
+        self.entries.push(keys.get(&key).copied());
         self.out.push(TextureOut {
             name: s.shown_bytes(name),
-            png,
+            png: None,
         });
         self.by_key.insert(key, self.out.len() - 1);
         self.out.len() - 1
+    }
+
+    /// Makes the pictures of all textures (in parallel) and returns them.
+    fn finish(mut self, s: &Session) -> Vec<TextureOut> {
+        use rayon::prelude::*;
+        let pngs: Vec<Option<String>> = self
+            .entries
+            .par_iter()
+            .map(|e| {
+                e.and_then(|ti| s.texture_image(ti))
+                    .and_then(|img| rgba_to_png_fast(&img).ok())
+                    .map(|b| b64(&b))
+            })
+            .collect();
+        for (t, png) in self.out.iter_mut().zip(pngs) {
+            t.png = png;
+        }
+        self.out
     }
 }
 
@@ -2979,13 +2997,14 @@ impl Session {
                 ));
             }
         }
-        let missing_tex = pool.out.iter().filter(|t| t.png.is_none()).count();
-        info.push(note!("pvw-n-textures", "n": pool.out.len()));
+        let textures = pool.finish(self);
+        let missing_tex = textures.iter().filter(|t| t.png.is_none()).count();
+        info.push(note!("pvw-n-textures", "n": textures.len()));
         if missing_tex > 0 {
             info.push(note!("pvw-n-textures-missing", "n": missing_tex));
         }
         Ok(Preview::Scene {
-            textures: pool.out,
+            textures,
             ground: Some(ground),
             models,
             instances,
@@ -3030,15 +3049,15 @@ impl Session {
                 matrices: f32s(&matrices),
             });
         }
-        let missing = pool
-            .out
+        let textures = pool.finish(self);
+        let missing = textures
             .iter()
             .filter(|t| t.png.is_none() && !t.name.is_empty())
             .count();
         let mut info = vec![note!(
             "pvw-n-rsm",
             "version": model.version.to_string(), "nodes": model.nodes.len(),
-            "triangles": posed.triangles, "textures": pool.out.len()
+            "triangles": posed.triangles, "textures": textures.len()
         )];
         if missing > 0 {
             info.push(note!("pvw-n-textures-missing", "n": missing));
@@ -3056,7 +3075,7 @@ impl Session {
         }
         Ok(Preview::Model {
             nodes,
-            textures: pool.out,
+            textures,
             duration_ms: duration,
             samples,
             min: posed.min,

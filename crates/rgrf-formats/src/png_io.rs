@@ -54,6 +54,17 @@ pub fn indexed_to_png(
 }
 
 pub fn rgba_to_png(img: &RgbaImage) -> Result<Vec<u8>, PngError> {
+    encode_rgba(img, png::Compression::Balanced)
+}
+
+/// Like [`rgba_to_png`], with the fastest compression that still shrinks pictures well: for
+/// pictures that are only shown (previews, map textures), where encoding time matters more than
+/// a few percent of size.
+pub fn rgba_to_png_fast(img: &RgbaImage) -> Result<Vec<u8>, PngError> {
+    encode_rgba(img, png::Compression::Fast)
+}
+
+fn encode_rgba(img: &RgbaImage, level: png::Compression) -> Result<Vec<u8>, PngError> {
     if img.pixels.len() != usize::from(img.width) * usize::from(img.height) * 4 {
         return Err(PngError::BadSize);
     }
@@ -61,6 +72,7 @@ pub fn rgba_to_png(img: &RgbaImage) -> Result<Vec<u8>, PngError> {
     let mut enc = png::Encoder::new(&mut out, u32::from(img.width), u32::from(img.height));
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
+    enc.set_compression(level);
     let mut w = enc.write_header()?;
     w.write_image_data(&img.pixels)?;
     w.finish()?;
