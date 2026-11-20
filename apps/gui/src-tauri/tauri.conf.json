@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost rgrf: http://rgrf.localhost; img-src 'self' data: blob: rgrf: http://rgrf.localhost; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {

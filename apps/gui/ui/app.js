@@ -191,6 +191,7 @@ async function openPath(path, force = false) {
 /** Puts a freshly opened (or saved and reopened) archive on the window. */
 async function showOpened(info) {
   const path = info.path;
+  renewAssets();
   S.info = info;
   S.untitled = untitledKind(path);
   if (S.untitled) S.info.file_name = `${t("untitled")}.${S.untitled}`;
@@ -1060,6 +1061,22 @@ function noteText(n) {
   return t(n.key, args);
 }
 
+/**
+ * Pictures of 3D previews come through the app's `rgrf` scheme, one request each, so the map is
+ * drawn before its textures arrive. The tag changes with every opened archive and every change,
+ * so the browser cache (shared by all windows) never gives an old picture.
+ */
+let ASSET_TAG = Date.now().toString(36);
+const renewAssets = () => (ASSET_TAG = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
+function assetUrl(kind, entry) {
+  const name = `${kind}-${entry}-${ASSET_TAG}`;
+  return T.core.convertFileSrc ? T.core.convertFileSrc(name, "rgrf") : `/rgrf/${name}`;
+}
+function withAssetUrls(p) {
+  for (const tx of p.textures || []) tx.url = tx.entry != null ? assetUrl("tex", tx.entry) : null;
+  if (p.water) p.water.frames = p.water.frames.map((e) => assetUrl("raw", e));
+}
+
 const infoBlock = (lines) => (lines?.length ? el("div", { class: "info" }, el("pre", { text: lines.map(noteText).join("\n") })) : null);
 
 function renderPreview(p, row, meta) {
@@ -1145,6 +1162,7 @@ function renderPreview(p, row, meta) {
       return [controls, el("div", { class: "checker" }, el("img", { src: dataUrl("image/gif", p.gif), width: p.width, height: p.height, alt: "animation" })), infoBlock(p.info), p.note ? el("div", { class: "info", text: t("pvw-warning", { note: p.note }) }) : null];
     }
     case "model": {
+      withAssetUrls(p);
       const host = el("div", { class: "glhost" });
       const handle = { v: null };
       // the canvas needs to be in the page before WebGL measures it
@@ -1159,6 +1177,7 @@ function renderPreview(p, row, meta) {
       ];
     }
     case "scene": {
+      withAssetUrls(p);
       const host = el("div", { class: "glhost tall" });
       const handle = { v: null };
       queueMicrotask(() => (S.viewer = handle.v = Viewer3D.showScene(host, p)));
@@ -1371,6 +1390,7 @@ function updateTitle() {
 
 function setPending(rows) {
   THUMB.reset();
+  renewAssets();
   S.changes = rows;
   S.changed = new Map(rows.map((r) => [changeKey(r.name), r.kind]));
   updateTitle();

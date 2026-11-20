@@ -31,7 +31,7 @@ const call = async (cmd, args) => {
   return j.ok;
 };
 const next = () => (window.__dialogs.length ? window.__dialogs.shift() : null);
-window.__TAURI__ = { core: { invoke: call }, dialog: { open: async () => next(), save: async () => next() }, event: { listen: () => {} } };
+window.__TAURI__ = { core: { invoke: call, convertFileSrc: (p, scheme) => `/${scheme}/${encodeURIComponent(p)}` }, dialog: { open: async () => next(), save: async () => next() }, event: { listen: () => {} } };
 "#;
 
 type State = Arc<Mutex<Option<Session>>>;
@@ -470,6 +470,19 @@ fn handle(stream: TcpStream, ui: &Path, state: &State, port: u16) {
         );
     }
     let rel = req.path.split('?').next().unwrap_or("/");
+    // the app's `rgrf` scheme: pictures of map and model previews
+    if let Some(name) = rel.strip_prefix("/rgrf/") {
+        let asset = rustygrf_gui_lib::parse_asset_path(name)
+            .ok_or_else(|| "bad asset path".to_string())
+            .and_then(|(kind, entry)| {
+                let (data, n) = with(state, |s| s.asset_source(entry))?;
+                backend::asset_response(&kind, data, &n)
+            });
+        return match asset {
+            Ok((body, mime)) => respond(&stream, "200 OK", mime, &body),
+            Err(e) => respond(&stream, "404 Not Found", "text/plain", e.as_bytes()),
+        };
+    }
     let rel = if rel == "/" { "/index.html" } else { rel };
     if rel == "/mock.js" {
         return respond(

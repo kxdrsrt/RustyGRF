@@ -108,22 +108,30 @@ void main() {
     return [cam.target[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw), cam.target[1] + cam.dist * Math.sin(cam.pitch), cam.target[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw)];
   }
 
-  function makeTexture(gl, png, onLoad, mime = "image/png") {
-    if (!png) return null;
+  /**
+   * A texture that is grey until its picture has loaded from `url` (the app's `rgrf` scheme);
+   * the picture is decoded off the main thread and never counts as foreign to WebGL.
+   */
+  function makeTexture(gl, url, onLoad) {
+    if (!url) return null;
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
-    const img = new Image();
-    img.onload = () => {
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-      gl.generateMipmap(gl.TEXTURE_2D);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-      onLoad();
-    };
-    img.src = `data:${mime};base64,${png}`;
+    fetch(url)
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(r.status))))
+      .then((b) => createImageBitmap(b, { premultiplyAlpha: "none", colorSpaceConversion: "none" }))
+      .then((bmp) => {
+        if (gl.isContextLost()) return;
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
+        bmp.close();
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        onLoad();
+      })
+      .catch(() => {});
     return tex;
   }
 
@@ -154,24 +162,7 @@ void main() {
     const loc = (n) => gl.getUniformLocation(prog, n);
     const U = { mvp: loc("uMvp"), model: loc("uModel"), nm: loc("uNormalMat"), tex: loc("uTex"), has: loc("uHasTex"), lit: loc("uLit"), light: loc("uLight"), alpha: loc("uAlpha"), flat: loc("uFlat"), uvA: loc("uUvA"), uvT: loc("uUvT") };
 
-    const textures = model.textures.map((t) => {
-      if (!t.png) return null;
-      const tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
-      const img = new Image();
-      img.onload = () => {
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        gl.generateMipmap(gl.TEXTURE_2D);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-        draw();
-      };
-      img.src = `data:image/png;base64,${t.png}`;
-      return tex;
-    });
+    const textures = model.textures.map((t) => makeTexture(gl, t.url, draw));
 
     const nodes = model.nodes.map((node) => ({ matrices: f32(node.matrices), parts: node.parts.map(makePart) }));
     function makePart(p) {
@@ -462,7 +453,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     }
     let dirty = false;
     const draw = () => { if (!dirty) { dirty = true; requestAnimationFrame(render); } };
-    const textures = sc.textures.map((t) => makeTexture(gl, t.png, draw));
+    const textures = sc.textures.map((t) => makeTexture(gl, t.url, draw));
     const gp = program(gl, GROUND_VS, GROUND_FS), mp = program(gl, MODEL_VS, MODEL_FS), wp = program(gl, WATER_VS, WATER_FS);
     const u = (p, n) => gl.getUniformLocation(p, n);
 
@@ -593,7 +584,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
         gl.enableVertexAttribArray(l);
         gl.vertexAttribPointer(l, size, gl.FLOAT, false, 20, off * 4);
       });
-      water = { vao, count: verts.length / 5, tile, wave: [sc.water.wave_height || 0, sc.water.wave_speed || 0, sc.water.wave_pitch || 0], frameMs: sc.water.frame_ms || 50, frames: sc.water.frames.map((f) => makeTexture(gl, f, draw, "image/jpeg")) };
+      water = { vao, count: verts.length / 5, tile, wave: [sc.water.wave_height || 0, sc.water.wave_speed || 0, sc.water.wave_pitch || 0], frameMs: sc.water.frame_ms || 50, frames: sc.water.frames.map((f) => makeTexture(gl, f, draw)) };
     }
 
     const lon = (sc.light.longitude * Math.PI) / 180, lat = (sc.light.latitude * Math.PI) / 180;

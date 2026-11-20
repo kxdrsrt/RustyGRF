@@ -56,14 +56,11 @@ fn sample_count(duration_ms: f32) -> usize {
     }
 }
 
-/// The textures of a scene: [`TexturePool::get`] only numbers them; [`TexturePool::finish`] then
-/// decodes and encodes all pictures at once on every core (a big map has 200 and more).
+/// The textures of a scene, each once, with the archive entry the page loads it from.
 #[derive(Default)]
 struct TexturePool {
     out: Vec<TextureOut>,
     by_key: HashMap<Vec<u8>, usize>,
-    /// The archive entry of each texture, if it exists.
-    entries: Vec<Option<usize>>,
 }
 
 /// The texture-coordinate transforms over the loop for the part of `node` that uses `texture`,
@@ -190,30 +187,16 @@ impl TexturePool {
         if let Some(&i) = self.by_key.get(&key) {
             return i;
         }
-        self.entries.push(keys.get(&key).copied());
+        let entry = keys.get(&key).copied();
         self.out.push(TextureOut {
             name: s.shown_bytes(name),
-            png: None,
+            entry,
         });
         self.by_key.insert(key, self.out.len() - 1);
         self.out.len() - 1
     }
 
-    /// Makes the pictures of all textures (in parallel) and returns them.
-    fn finish(mut self, s: &Session) -> Vec<TextureOut> {
-        use rayon::prelude::*;
-        let pngs: Vec<Option<String>> = self
-            .entries
-            .par_iter()
-            .map(|e| {
-                e.and_then(|ti| s.texture_image(ti))
-                    .and_then(|img| rgba_to_png_fast(&img).ok())
-                    .map(|b| b64(&b))
-            })
-            .collect();
-        for (t, png) in self.out.iter_mut().zip(pngs) {
-            t.png = png;
-        }
+    fn finish(self) -> Vec<TextureOut> {
         self.out
     }
 }
@@ -786,8 +769,9 @@ pub struct LightOut {
 #[derive(Serialize, Debug)]
 pub struct WaterOut {
     pub level: f32,
-    /// The pictures of the water cycle (JPEG, base64), in order; empty when the archive has none.
-    pub frames: Vec<String>,
+    /// The archive entries of the pictures of the water cycle (JPEG), in order; empty when the
+    /// archive has none. The page loads them through the `rgrf` scheme.
+    pub frames: Vec<usize>,
     /// Time one picture stays, in milliseconds.
     pub frame_ms: f32,
     /// The waves of the surface: height (in ground units), speed (degrees per 1/60 s) and
@@ -816,8 +800,10 @@ pub struct ModelPartOut {
 #[derive(Serialize, Debug)]
 pub struct TextureOut {
     pub name: String,
-    /// `None` when the archive has no such texture.
-    pub png: Option<String>,
+    /// The archive entry of the texture, `None` when the archive has no such texture. The page
+    /// loads the picture itself through the `rgrf` scheme ([`Session::asset_source`]), so the
+    /// pictures do not travel inside the preview (they were ~30 of 35 MB for Prontera).
+    pub entry: Option<usize>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1280,6 +1266,49 @@ fn encode_legacy(enc: &'static encoding_rs::Encoding, text: &str) -> Result<Vec<
         return Err(err!("err-text-chars", "encoding": enc.name()));
     }
     Ok(bytes.into_owned())
+}
+
+/// A texture as pixels: BMP (pure magenta transparent, as in the client) or TGA.
+fn texture_from(data: &[u8], tga: bool) -> Option<RgbaImage> {
+    if tga {
+        return rgrf_formats::tga::parse(data).ok();
+    }
+    let mut img = rgrf_formats::bmp::parse(data).ok()?;
+    for p in img.pixels.as_chunks_mut::<4>().0 {
+        if p[..3] == [255, 0, 255] {
+            p[3] = 0;
+        }
+    }
+    Some(img)
+}
+
+/// What the `rgrf` scheme answers for `kind` (`tex`: a texture as PNG with transparency; `raw`:
+/// the file as it is, typed by its extension) from the bytes of [`Session::asset_source`].
+pub fn asset_response(
+    kind: &str,
+    data: Vec<u8>,
+    name: &str,
+) -> Result<(Vec<u8>, &'static str), String> {
+    match kind {
+        "tex" => {
+            let img = texture_from(&data, name.ends_with(".tga")).ok_or("not a picture")?;
+            Ok((
+                rgba_to_png_fast(&img).map_err(|e| e.to_string())?,
+                "image/png",
+            ))
+        }
+        "raw" => {
+            let mime = match name.rsplit('.').next().unwrap_or("") {
+                "jpg" | "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "bmp" => "image/bmp",
+                "gif" => "image/gif",
+                _ => "application/octet-stream",
+            };
+            Ok((data, mime))
+        }
+        other => Err(format!("unknown asset kind '{other}'")),
+    }
 }
 
 /// Files larger than this are not searched for text.
@@ -2951,21 +2980,22 @@ impl Session {
             return None;
         }
         let data = self.arc.read(entry).ok()?.data;
-        let lower = self.arc.entries()[entry]
+        let tga = self.arc.entries()[entry]
             .name
             .as_bytes()
-            .to_ascii_lowercase();
-        if lower.ends_with(b".tga") {
-            rgrf_formats::tga::parse(&data).ok()
-        } else {
-            let mut img = rgrf_formats::bmp::parse(&data).ok()?;
-            for p in img.pixels.as_chunks_mut::<4>().0 {
-                if p[..3] == [255, 0, 255] {
-                    p[3] = 0;
-                }
-            }
-            Some(img)
+            .to_ascii_lowercase()
+            .ends_with(b".tga");
+        texture_from(&data, tga)
+    }
+
+    /// The bytes of an entry (with its pending change) for the `rgrf` scheme, and whether it is a
+    /// TGA. Only this part needs the session; [`asset_response`] does the rest without it.
+    pub fn asset_source(&self, entry: usize) -> Result<(Vec<u8>, String), String> {
+        let e = self.arc.entry(entry).map_err(|e| e.to_string())?;
+        if e.size > MAX_PREVIEW_BYTES {
+            return Err("too large".into());
         }
+        Ok((self.read_working(entry)?, self.names[entry].to_lowercase()))
     }
 
     /// A map in 3D: the ground of a GND, and for an RSW also its models, water and light.
@@ -3069,13 +3099,10 @@ impl Session {
                 for n in 0..32 {
                     let path =
                         [dir.clone(), format!("water{kind}{n:02}.jpg").into_bytes()].concat();
-                    let Some(d) = keys
-                        .get(&GrfPath::new(path).key())
-                        .and_then(|&i| self.arc.read(i).ok())
-                    else {
+                    let Some(&i) = keys.get(&GrfPath::new(path).key()) else {
                         break;
                     };
-                    frames.push(b64(&d.data));
+                    frames.push(i);
                 }
                 // assumption: a cycle step is `texture_cycling` ticks of 1/60 s (default 3), not measured
                 let ticks = if w.texture_cycling > 0 {
@@ -3193,8 +3220,8 @@ impl Session {
                 ));
             }
         }
-        let textures = pool.finish(self);
-        let missing_tex = textures.iter().filter(|t| t.png.is_none()).count();
+        let textures = pool.finish();
+        let missing_tex = textures.iter().filter(|t| t.entry.is_none()).count();
         info.push(note!("pvw-n-textures", "n": textures.len()));
         if missing_tex > 0 {
             info.push(note!("pvw-n-textures-missing", "n": missing_tex));
@@ -3245,10 +3272,10 @@ impl Session {
                 matrices: f32s(&matrices),
             });
         }
-        let textures = pool.finish(self);
+        let textures = pool.finish();
         let missing = textures
             .iter()
-            .filter(|t| t.png.is_none() && !t.name.is_empty())
+            .filter(|t| t.entry.is_none() && !t.name.is_empty())
             .count();
         let mut info = vec![note!(
             "pvw-n-rsm",

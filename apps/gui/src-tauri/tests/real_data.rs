@@ -130,7 +130,13 @@ fn previews_of_real_files() {
             let g = ground.unwrap();
             assert_eq!((g.width, g.height), (156, 196));
             assert_eq!((models.len(), instances.len()), (63, 1304));
-            assert!(textures.iter().filter(|t| t.png.is_some()).count() > 150);
+            assert!(textures.iter().filter(|t| t.entry.is_some()).count() > 150);
+            // the textures come as pictures through the scheme
+            let tex = textures.iter().find_map(|t| t.entry).unwrap();
+            let (data, name) = s.asset_source(tex).unwrap();
+            let (png, mime) =
+                rustygrf_gui_lib::backend::asset_response("tex", data, &name).unwrap();
+            assert_eq!((&png[1..4], mime), (b"PNG".as_slice(), "image/png"));
             let water = water.unwrap();
             assert_eq!(water.frames.len(), 32, "the whole water cycle is found");
             assert!(water.frame_ms > 0.0);
@@ -215,7 +221,7 @@ fn previews_of_real_files() {
             assert!(
                 textures
                     .iter()
-                    .any(|t| t.name.contains("ad_j_01.bmp") && t.png.is_some()),
+                    .any(|t| t.name.contains("ad_j_01.bmp") && t.entry.is_some()),
                 "the texture is found and decoded"
             );
         }

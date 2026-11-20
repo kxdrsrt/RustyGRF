@@ -262,6 +262,36 @@ fn front_window(app: &AppHandle) -> Option<WebviewWindow> {
         .or_else(|| windows.values().next().cloned())
 }
 
+/// The `rgrf` scheme: `<kind>-<entry>[-<anything>]` (the page adds a number that changes with the
+/// archive and its changes, so the browser cache never serves an old picture). The kinds are
+/// those of [`backend::asset_response`].
+pub fn parse_asset_path(path: &str) -> Option<(String, usize)> {
+    let name = path.trim_start_matches('/');
+    let mut parts = name.split('-');
+    let kind = parts.next()?.to_string();
+    let entry = parts.next()?.parse().ok()?;
+    Some((kind, entry))
+}
+
+/// Answers a request of the `rgrf` scheme from the session of the window that asks.
+fn serve_asset(
+    app: &AppHandle,
+    label: &str,
+    path: &str,
+) -> Result<(Vec<u8>, &'static str), String> {
+    let (kind, entry) = parse_asset_path(path).ok_or("bad asset path")?;
+    let shared = app.state::<AppState>().slot(label);
+    // the session is only needed to read the bytes; decoding runs without holding it
+    let (data, name) = {
+        let guard = shared.lock().map_err(|_| "internal error")?;
+        guard
+            .as_ref()
+            .ok_or_else(|| err!("err-no-archive"))?
+            .asset_source(entry)?
+    };
+    backend::asset_response(&kind, data, &name)
+}
+
 /// Brings a window to the front.
 fn focus(app: &AppHandle, label: &str) {
     if let Some(w) = app.get_webview_window(label) {
@@ -1497,6 +1527,30 @@ pub fn run() {
             let _ = open_somewhere(app, archive_in_args(args.into_iter().skip(1)), false);
         }))
         .plugin(tauri_plugin_dialog::init())
+        // pictures of map and model previews come one by one through `rgrf`, not inside the
+        // preview: the map can be drawn before its textures are there
+        .register_asynchronous_uri_scheme_protocol("rgrf", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let label = ctx.webview_label().to_string();
+            let path = request.uri().path().to_string();
+            tauri::async_runtime::spawn(async move {
+                let result =
+                    tauri::async_runtime::spawn_blocking(move || serve_asset(&app, &label, &path))
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r);
+                let builder = tauri::http::Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Cache-Control", "max-age=3600");
+                let response = match result {
+                    Ok((body, mime)) => builder.header("Content-Type", mime).status(200).body(body),
+                    Err(e) => builder.status(404).body(e.into_bytes()),
+                };
+                if let Ok(r) = response {
+                    responder.respond(r);
+                }
+            });
+        })
         .manage(AppState::default())
         .setup(|app| {
             build_menu(app.handle(), &HashMap::new(), &[])?;
@@ -1623,6 +1677,14 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::archive_in_args;
+
+    #[test]
+    fn asset_paths() {
+        use super::parse_asset_path;
+        assert_eq!(parse_asset_path("/tex-12-g3"), Some(("tex".into(), 12)));
+        assert_eq!(parse_asset_path("raw-7"), Some(("raw".into(), 7)));
+        assert_eq!(parse_asset_path("/tex-x"), None);
+    }
 
     #[test]
     fn finds_the_archive_argument() {
