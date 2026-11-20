@@ -91,6 +91,12 @@ for (const m of js.matchAll(/t\(`([\w.-]+)\$\{/g)) {
 }
 for (const k of used) if (!(k in en) && !(`${k}.title` in en) && !(`${k}.aria-label` in en) && !(`${k}.placeholder` in en)) fail(`used but not in en.ftl: ${k}`);
 
+// the app's CSP must let the page load its catalogs (connect-src replaces default-src for them)
+const conf = JSON.parse(fs.readFileSync(path.join(ui, "..", "src-tauri", "tauri.conf.json"), "utf8"));
+const csp = conf.app?.security?.csp || "";
+const connect = /(?:^|;)\s*connect-src([^;]*)/.exec(csp);
+if (connect && !connect[1].split(/\s+/).includes("'self'")) fail(`the CSP's connect-src lacks 'self': the catalogs cannot be loaded (${csp})`);
+
 console.log(`${Object.keys(en).length} keys, ${codes.length} languages checked, ${used.size} keys used by the page and script`);
 if (failures) { console.error(`${failures} problem(s)`); process.exit(1); }
 console.log("i18n OK");
