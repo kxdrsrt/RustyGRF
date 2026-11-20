@@ -48,7 +48,7 @@ Aus `EditorMainWindow.xaml` und `EMenuInteraction.cs` gelesen, in der Windows-VM
 | Navigate backward/forward (Auswahlverlauf) | Ansicht › Zurück/Vor, Alt+←/→, Cmd+[ / ], Maustasten 4/5 | ✅ (2026-11-20) |
 | Merge, Subtract | Zusammenführen; Werkzeuge › Mit Archiv vergleichen (Unterschiede, als Thor- oder GRF-Patch speichern) | ✅ Subtrahieren über Vergleich |
 | Extract Rgz | RGZ öffnen, Extrahieren | ✅ |
-| Edit Grf/Thor settings (Format, Anzeigekodierung, Magic header) | Bearbeiten › Archiv-Einstellungen (Version, Kompression, Verschlüsselung; Namensanzeige in der Statusleiste) | ✅; Magic header ✅ (2026-11-20, auch CLI `--magic`); Thor-Ziel-GRF in der App ❌ (CLI `thor create` kann es) |
+| Edit Grf/Thor settings (Format, Anzeigekodierung, Magic header) | Bearbeiten › Archiv-Einstellungen (Version, Kompression, Verschlüsselung; Namensanzeige in der Statusleiste) | ✅; Magic header ✅ (2026-11-20, auch CLI `--magic`); Thor-Ziel-GRF ✅ (2026-11-21: „In eine GRF einfügen“ und Ziel-GRF im Speichern-Dialog, wird beim Öffnen gelesen und beim Speichern beibehalten) |
 | Tools › Grf validation | Werkzeuge › Archiv prüfen | ✅ |
 | Open roaming data | App-Datenordner öffnen | ✅ |
 | Import sprite…, Sprite editor | Sprite-Vorschau: Bilder hinzufügen, ersetzen, entfernen, Pixel-Editor | ✅ |
@@ -80,7 +80,7 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 | Downgrade / Downgrade to… (Kartenversion) | – | ❌ |
 | Delete | Entfernen (vormerken, rückgängig) | ✅ |
 | Rename… | Umbenennen… (Datei und Ordner, ein Rückgängig-Schritt; prüft Namenskonflikte, Grenze 512 MB je Eintrag) | ✅ |
-| Find usages… | Name in Dateien suchen… (Textsuche; kompilierte Lua-Dateien sind binär und werden übersprungen) | ◐ |
+| Find usages… | Name in Dateien suchen… (Text und **kompilierte Lua-Dateien als dekompilierter Text**; kRO-`data.grf`: 517 `.lub` in 0,5 s) | ✅ (2026-11-21) |
 | Copy NPC name | Name kopieren, Pfad kopieren | ◐ |
 | Encryption ▸ (je Eintrag) | – (Verschlüsseln nur für das ganze Archiv) | ❌ |
 | Properties | Eigenschaften… (Größen, Kodierung, Versatz, Flags, CRC32, MD5, SHA-256) | ✅ |

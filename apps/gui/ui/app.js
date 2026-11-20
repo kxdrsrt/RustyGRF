@@ -2636,6 +2636,16 @@ async function saveDialog(preset = "as") {
   const magicLabel = el("label", {}, el("span", { class: "fl", text: t("as-magic") }), el("span", { class: "inline" }, magic, magicReset));
   const encLabel = el("label", {}, el("span", { class: "fl", text: t("sa-encryption") }), enc);
   for (const n of [fmtLabel, encLabel, passRow, magicLabel]) if (!grfTarget) n.hidden = true;
+  // a Thor patch applies either to the client folder or inside a GRF
+  const thorMerge = el("input", { type: "checkbox", checked: !!info.thor?.merge });
+  const thorTarget = el("input", { type: "text", class: "field", value: info.thor?.target || "", placeholder: t("sa-thor-target-ph"), spellcheck: "false", "aria-label": t("sa-thor-target") });
+  thorMerge.addEventListener("change", () => (thorTarget.disabled = !thorMerge.checked));
+  thorTarget.disabled = !thorMerge.checked;
+  const thorRow = el("div", { class: "form" },
+    el("label", { class: "check" }, thorMerge, ` ${t("sa-thor-merge")}`),
+    el("label", {}, el("span", { class: "fl", text: t("sa-thor-target") }), thorTarget),
+    el("p", { class: "hint", text: t("sa-thor-hint") }));
+  thorRow.hidden = kind !== "thor";
   const body = [
     preset === "settings" ? facts : null,
     el("div", { class: "form buildform" },
@@ -2646,6 +2656,7 @@ async function saveDialog(preset = "as") {
       preset === "settings" || preset === "as" ? magicLabel : null,
     ),
     passRow,
+    thorRow,
     el("p", { class: "hint", text: t("sa-hint") }),
   ];
   const titles = { as: "sa-title", repack: "sa-title-repack", compact: "sa-title-compact", encrypt: "sa-title-encrypt", decrypt: "sa-title-decrypt", settings: "as-title" };
@@ -2667,6 +2678,8 @@ async function saveDialog(preset = "as") {
       encryption: enc.value,
       password: enc.value === "password" ? pass.value : null,
       magic: magic.value && magic.value !== info.magic ? magic.value : null,
+      thor_merge: kind === "thor" ? thorMerge.checked : null,
+      thor_target: kind === "thor" ? thorTarget.value : null,
     };
     if (act === "here") return saveInPlace(req);
     const base = S.untitled ? t("untitled") : info.file_name.replace(/\.[^.]+$/, "");
@@ -2770,7 +2783,7 @@ async function revealEntry(index) {
 /** Tools › Search in Files (GRF Editor's "Advanced search"): text in the files, then jump to a hit. */
 async function doSearchContents() {
   if (!S.info) return;
-  const prev = SET.contentSearch || { query: "", files: "*.lua;*.txt;*.xml", regex: false, case: false, word: false, inList: false };
+  const prev = SET.contentSearch || { query: "", files: "*.lua;*.lub;*.txt;*.xml", regex: false, case: false, word: false, inList: false };
   const query = el("input", { type: "search", class: "field", value: prev.query, placeholder: t("sc-query-ph"), "aria-label": t("sc-query"), spellcheck: "false", autocomplete: "off" });
   const files = el("input", { type: "text", class: "field", value: prev.files, placeholder: t("sc-files-ph"), "aria-label": t("sc-files"), spellcheck: "false" });
   const box = (key, label) => {
@@ -3470,7 +3483,7 @@ async function deleteRow(list, row) {
 
 /** The search dialog with the file's name (without extension) filled in. */
 function findUsages(row) {
-  SET.contentSearch = { ...(SET.contentSearch || { files: "*.lua;*.txt;*.xml" }), query: baseOf(row.name).replace(/\.[^.]+$/, ""), regex: false, word: false, inList: false };
+  SET.contentSearch = { ...(SET.contentSearch || {}), files: "*.lua;*.lub;*.txt;*.xml", query: baseOf(row.name).replace(/\.[^.]+$/, ""), regex: false, word: false, inList: false };
   return doSearchContents();
 }
 

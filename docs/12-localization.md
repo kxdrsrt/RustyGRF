@@ -9,7 +9,7 @@
 - HTML: `data-i18n="schlüssel"` (Text) und `data-i18n-attrs="schlüssel"` (Tooltip, Namen für Screenreader, Platzhalter); Skript: `t("schlüssel", { n })`.
 - **Einstellungen → Sprache** (Standard: Systemsprache; Wechsel ohne Neustart, gespeichert); Beta-Sprachen tragen „(Beta)“, dazu ein Hinweis.
 - **Native Menüleiste:** `set_menu_labels` baut sie beim Start und beim Sprachwechsel aus den `menu-*`-Schlüsseln neu auf. Die vom System gelieferten Einträge (Rückgängig, Kopieren, Beenden …) übersetzt das Betriebssystem selbst.
-- **Prüfskript** `node tools/check-i18n.mjs` (im Ordner `apps/gui`): Leser-Tests (Mehrzahl, Attribute), **gleiche Schlüssel und Platzhalter in allen Katalogen**, keine Klammern nach dem Formatieren, jeder von Seite und Skript benutzte Schlüssel steht in `en.ftl`. Stand 2026-11-20: 1,031 Schlüssel, 8 Sprachen, alles grün.
+- **Prüfskript** `node tools/check-i18n.mjs` (im Ordner `apps/gui`): Leser-Tests (Mehrzahl, Attribute), **gleiche Schlüssel und Platzhalter in allen Katalogen**, keine Klammern nach dem Formatieren, jeder von Seite und Skript benutzte Schlüssel steht in `en.ftl`. Stand 2026-11-20: 1,036 Schlüssel, 8 Sprachen, alles grün.
 
 **Abgedeckt (L0 teilweise):** Haupt- und Ansichtsleiste (alle Tooltips und Namen für Screenreader), Sortierung, Typ- und Größenfilter, Typnamen, leerer Zustand, Spaltenköpfe, Statuszeile (Zählung mit Mehrzahl), Speichern-Zähler, gemeinsame Knöpfe (OK, Abbrechen, Schließen, Fertig, Schnell, Vollständig), **Dialoge Prüfen, Erstellen, Zusammenführen, Extrahieren, Hinzufügen, Ersetzen, Entfernen, Änderungen, Speichern und der Fortschrittsdialog** (jeweils mit Status- und Fehlertiteln), **ganze Einstellungsseite mit den Erklärtexten zu Kompression und Format** (auch im Build-Dialog), Menüleiste.
 

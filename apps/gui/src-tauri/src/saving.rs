@@ -12,7 +12,7 @@ use rgrf_core::progress::Control;
 use rgrf_core::repack::RepackOptions;
 use rgrf_core::thor::{self, ThorFile, ThorOptions};
 use rgrf_core::writer::{Format, Writer};
-use rgrf_core::{Archive, DecodeStatus, GrfPath, rgz};
+use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode, rgz};
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{ArchiveInfo, EditPlan, EditSummary, Session};
@@ -40,6 +40,34 @@ pub struct SaveRequest {
     /// when it is not the usual one, else the format's.
     #[serde(default)]
     pub magic: Option<String>,
+    /// Thor only: merge into a GRF (`true`) or write the files into the client folder; none keeps
+    /// what the source Thor has.
+    #[serde(default)]
+    pub thor_merge: Option<bool>,
+    /// Thor only: name of the target GRF (empty: the client's default); none keeps the source's.
+    #[serde(default)]
+    pub thor_target: Option<String>,
+}
+
+/// How a Thor written from `src` applies: the request's choice, else the source Thor's own.
+fn thor_apply(src: &Archive, req: &SaveRequest) -> Result<(bool, Vec<u8>), String> {
+    let own = src.header().patch.as_ref();
+    let merge = req
+        .thor_merge
+        .unwrap_or_else(|| own.is_some_and(|p| p.merge_into_grf));
+    let target = match req.thor_target.as_deref() {
+        Some(t) => {
+            let t = t.trim();
+            if t.chars().any(|c| matches!(c, '\\' | '/' | ':')) || t.len() > 255 {
+                return Err(err!("err-thor-target"));
+            }
+            GrfPath::from_display(t, NameMode::Cp949)
+                .map(|p| p.as_bytes().to_vec())
+                .ok_or_else(|| err!("err-thor-target"))?
+        }
+        None => own.map(|p| p.target_grf.clone()).unwrap_or_default(),
+    };
+    Ok((merge, if merge { target } else { Vec::new() }))
 }
 
 /// The magic to write: the one asked for, else the source's own unusual one (GRF Editor keeps it
@@ -161,7 +189,10 @@ pub fn save_as(
                         data: Some(d.clone()),
                     })
                     .collect();
+                let (merge_into_grf, target_grf) = thor_apply(&src, req)?;
                 let opts = ThorOptions {
+                    merge_into_grf,
+                    target_grf,
                     method,
                     overwrite,
                     ..ThorOptions::default()
@@ -610,6 +641,43 @@ mod tests {
             assert_eq!(a.read(i).unwrap().data, b"hello", "{ext}");
         }
         assert_eq!(container_of(Path::new("x.THOR")), Container::Thor);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_thor_keeps_or_sets_where_it_applies() {
+        let d = dir("thortarget");
+        let empty = d.join("n.grf");
+        create_empty(&empty).unwrap();
+        let mut s = Session::open(&empty).unwrap();
+        let f = d.join("a.txt");
+        std::fs::write(&f, b"hello").unwrap();
+        s.stage_add(r"data\a.txt", &f).unwrap();
+        let plan = s.edit_plan().unwrap();
+        let save = |name: &str, merge: Option<bool>, target: Option<&str>| {
+            let req = SaveRequest {
+                dst: d.join(name),
+                thor_merge: merge,
+                thor_target: target.map(String::from),
+                ..SaveRequest::default()
+            };
+            save_as(&plan, &req, false, &Control::default()).map(|_| {
+                let a = Archive::open(&req.dst).unwrap();
+                let p = a.header().patch.clone().unwrap();
+                (p.merge_into_grf, p.target_grf)
+            })
+        };
+        assert_eq!(save("c.thor", None, None), Ok((false, vec![])));
+        assert_eq!(
+            save("m.thor", Some(true), Some("data.grf")),
+            Ok((true, b"data.grf".to_vec()))
+        );
+        // a target means nothing without merging
+        assert_eq!(
+            save("x.thor", Some(false), Some("data.grf")),
+            Ok((false, vec![]))
+        );
+        assert!(save("bad.thor", Some(true), Some(r"sub\data.grf")).is_err());
         let _ = std::fs::remove_dir_all(d);
     }
 

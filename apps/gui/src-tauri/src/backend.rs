@@ -621,8 +621,18 @@ pub struct ArchiveInfo {
     pub encryption: Option<EncryptionOut>,
     /// The magic at the start of a GRF header ("Master of Magic", "Event Horizon" or another).
     pub magic: String,
+    /// Set for a Thor patch: how it applies.
+    pub thor: Option<ThorOut>,
     /// Unsaved changes of an earlier session, kept as a draft, waiting to be restored or discarded.
     pub draft: Option<crate::draft::DraftInfo>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ThorOut {
+    /// Merges into a GRF instead of writing files into the client folder.
+    pub merge: bool,
+    /// Name of the target GRF (empty: the client's default).
+    pub target: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -1565,6 +1575,17 @@ fn png_frame(img: &RgbaImage, label: Note) -> Option<Frame> {
 
 /// Text of a file whose encoding is unknown: UTF-8 if it is, else Korean (CP949) if that decodes
 /// without errors, else Windows-1252.
+/// The decompiled text of a compiled Lua file (`None` when it cannot be read).
+fn decompiled_text(data: &[u8]) -> Option<String> {
+    std::panic::catch_unwind(|| {
+        let chunk = rgrf_formats::luac::parse_any(data).ok()?;
+        let names = |b: &[u8]| GrfPath::new(b.to_vec()).display(NameMode::Cp949);
+        Some(rgrf_formats::luadec::decompile(&chunk, &names))
+    })
+    .ok()
+    .flatten()
+}
+
 fn lua_version(chunk: &rgrf_formats::luac::Chunk) -> &'static str {
     if chunk.main.orig_code.is_some() {
         "5.0"
@@ -2819,11 +2840,16 @@ impl Session {
                     ctl.report(n, total);
                 }
                 let data = self.read_working(i).ok()?;
-                // binary content (images, compiled Lua) has NUL bytes early on
-                if data.iter().take(4096).filter(|&&b| b == 0).count() > 2 {
-                    return None;
-                }
-                let (text, _) = decode_text(&data);
+                let text = if data.starts_with(b"\x1bLua") {
+                    // compiled Lua is searched as its decompiled text (line numbers refer to that)
+                    decompiled_text(&data)?
+                } else {
+                    // other binary content (images) has NUL bytes early on
+                    if data.iter().take(4096).filter(|&&b| b == 0).count() > 2 {
+                        return None;
+                    }
+                    decode_text(&data).0
+                };
                 let lines: Vec<(usize, String)> = text
                     .lines()
                     .enumerate()
@@ -2930,6 +2956,10 @@ impl Session {
             } else {
                 String::new()
             },
+            thor: self.arc.header().patch.as_ref().map(|p| ThorOut {
+                merge: p.merge_into_grf,
+                target: GrfPath::new(p.target_grf.clone()).display(self.mode),
+            }),
             draft: self
                 .draft_root
                 .as_deref()
@@ -4881,6 +4911,41 @@ mod tests {
         let o = Archive::open_with_key(&out, &key).unwrap();
         let ia = o.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap();
         assert_eq!(o.read(ia).unwrap().data, b"changed\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn content_search_reads_compiled_lua_as_its_decompiled_text() {
+        use rgrf_formats::{luac, luacomp};
+        let dir = tmp("luasearch");
+        let src = dir.join("src/data");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.txt"), "no hit here\n").unwrap();
+        fs::write(src.join("plain.lua"), "quest = \"Hello_Quest\"\n").unwrap();
+        let cp949 =
+            |run: &str| GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec());
+        let lua = "function f(a)\n  return \"Hello_Quest\" .. a\nend\n";
+        let chunk =
+            luacomp::compile_text(lua, b"@t.lua", luacomp::TextEncoding::Auto, &cp949).unwrap();
+        fs::write(src.join("t.lub"), luac::dump32(&chunk)).unwrap();
+        fs::write(src.join("junk.lub"), b"\x1bLua\x51garbage").unwrap();
+        let out = dir.join("t.grf");
+        build(
+            &dir.join("src"),
+            &out,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let s = Session::open(&out).unwrap();
+        let q: ContentQuery = serde_json::from_value(
+            serde_json::json!({"query": "hello_quest", "files": "*.lua;*.lub"}),
+        )
+        .unwrap();
+        let r = s.search_contents(&q, &Control::default()).unwrap();
+        let names: Vec<&str> = r.hits.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, [r"data\plain.lua", r"data\t.lub"]);
+        assert_eq!(r.files_searched, 3);
         let _ = fs::remove_dir_all(dir);
     }
 

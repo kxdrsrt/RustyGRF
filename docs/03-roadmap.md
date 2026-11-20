@@ -238,4 +238,6 @@ Im Repo liegen nur Hashlisten (Golden Files), keine Archive.
 
 ## Stand 2026-11-21: Kontextmenü
 
-Kontextmenü der Eintragsliste neu (Umbenennen, Export in Archiv, Eigenschaften, Im Finder zeigen u. a.), Schmalfenster-Layout behoben. Offen gegenüber GRF Editor: Kartenversion herabstufen (Downgrade), Verschlüsselung je Eintrag, „Find usages“ in binären Lua-Dateien. Nächste Stufe für `data.grf` (≈2,55 GB, davon BMP 1,1 GB): PNG/TGA/JPG-Neukodierung, WAV, ungenutzte Dateien; immer aus `grf/` nach `grf-opt/`.
+Kontextmenü der Eintragsliste neu (Umbenennen, Export in Archiv, Eigenschaften, Im Finder zeigen u. a.), Schmalfenster-Layout behoben. Offen gegenüber GRF Editor: Kartenversion herabstufen (Downgrade), Verschlüsselung je Eintrag, „Find usages“ in binären Lua-Dateien (inzwischen erledigt: kompilierte Lua-Dateien werden dekompiliert durchsucht). Nächste Stufe für `data.grf` (≈2,55 GB, davon BMP 1,1 GB): PNG/TGA/JPG-Neukodierung, WAV, ungenutzte Dateien; immer aus `grf/` nach `grf-opt/`.
+
+**2026-11-21 (später):** Thor-Ziel-GRF im Speichern-Dialog; die Suche in Dateien liest kompiliertes Lua (`*.lub`) als dekompilierten Text. Bewusst nicht gebaut (Aufwand hoch, Nutzen für den Client gering): Kartenversion herabstufen (braucht einen RSM2-Schreiber und die RSM2→RSM1-Umrechnung, nur für alte Clients) und Verschlüsselung einzelner Einträge (die Pipeline verschlüsselt immer das ganze Archiv).
