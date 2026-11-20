@@ -2635,3 +2635,85 @@ fn grf_editor_encryption_end_to_end() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn image_reduce_dir_writes_an_optimised_copy_and_leaves_the_source_alone() {
+    use rgrf_formats::spr::RgbaImage;
+    let dir = tmpdir("reduce-dir");
+    let src = dir.join("grf/data/texture");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(dir.join("grf/data/empty")).unwrap();
+    // 200 colours at random: lossless as 8 bits and smaller
+    let mut pixels = Vec::new();
+    for i in 0..128u64 * 128 {
+        let mut r = i + 1;
+        for _ in 0..3 {
+            r ^= r << 13;
+            r ^= r >> 7;
+            r ^= r << 17;
+        }
+        let r = (r % 200) as u8;
+        pixels.extend([r, r / 2, 255 - r, 255]);
+    }
+    let bmp = rgrf_formats::bmp::write_rgb(&RgbaImage {
+        width: 128,
+        height: 128,
+        pixels,
+    });
+    std::fs::write(src.join("a.BMP"), &bmp).unwrap();
+    std::fs::write(src.join("note.txt"), b"text").unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+
+    let o = rgrf(&[
+        "--json",
+        "image",
+        "reduce-dir",
+        &p("grf"),
+        "-o",
+        &p("grf-opt"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(
+        (v["files"].clone(), v["reduced"].clone()),
+        (2.into(), 1.into())
+    );
+    assert!(v["compressed_bytes_after"].as_u64() < v["compressed_bytes_before"].as_u64());
+    let out = std::fs::read(dir.join("grf-opt/data/texture/a.BMP")).unwrap();
+    assert!(out.len() < bmp.len());
+    assert_eq!(rgrf_formats::bmp::info(&out).unwrap().bits, 8);
+    assert_eq!(
+        std::fs::read(dir.join("grf-opt/data/texture/note.txt")).unwrap(),
+        b"text"
+    );
+    assert!(dir.join("grf-opt/data/empty").is_dir());
+    // the source is untouched
+    assert_eq!(std::fs::read(src.join("a.BMP")).unwrap(), bmp);
+
+    // an output that has files needs --overwrite; one inside the source is refused
+    assert_eq!(
+        rgrf(&["image", "reduce-dir", &p("grf"), "-o", &p("grf-opt")])
+            .status
+            .code(),
+        Some(1)
+    );
+    assert_eq!(
+        rgrf(&["image", "reduce-dir", &p("grf"), "-o", &p("grf/inner")])
+            .status
+            .code(),
+        Some(1)
+    );
+    assert!(
+        rgrf(&[
+            "image",
+            "reduce-dir",
+            &p("grf"),
+            "-o",
+            &p("grf-opt"),
+            "--overwrite"
+        ])
+        .status
+        .success()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

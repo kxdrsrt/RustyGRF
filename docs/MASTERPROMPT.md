@@ -24,7 +24,6 @@ Danach fasse in 10 Zeilen zusammen, was du verstanden hast, und nenne offene Pun
 - **Bauverzeichnis außerhalb des Projekts, lokal:** macOS `CARGO_TARGET_DIR=~/build/rustygrf`, Windows `C:\build\rustygrf` (nicht auf dem Share `Z:`).
 - Voraussetzungen auf macOS: Xcode Command Line Tools, `rustup`, später Node für die GUI. Auf der Windows-VM fehlen Rust, Git, Node und die C++-Build-Tools mit Windows SDK (siehe `docs/06-tooling-and-workflow.md`). **Frag vor jeder Installation.**
 - Referenzwerkzeuge laufen nur unter Windows (`RO/1 CLIENT-SIDE/1 CLIENT TOOLS/5 GRF Editor/`, `GrfCL\GrfCL.exe` mit `-compressionMethod zlib|lzma`). Auf dem Mac stattdessen **Golden Files** unter `tests/golden/` verwenden (Eintragslisten und Hashes, in der VM erzeugt).
-- Testdaten (nicht im Repo), siehe `docs/03-roadmap.md#testdaten`: `client-dev/full/*.grf`, `client-dev/grf/*` (entpackt), `client-kro/{data,rdata}.grf`.
 - Die Windows-Skripte in `RO/docs/grf-research/tools/` sind nur Beispiele (Windows-Pfade).
 
 ## Regeln (verbindlich)

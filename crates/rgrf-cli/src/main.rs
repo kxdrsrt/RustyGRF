@@ -938,6 +938,34 @@ enum ImageCmd {
         #[command(flatten)]
         write: WriteArgs,
     },
+    /// `reduce` for a folder: writes a complete copy of the folder (the original stays untouched)
+    /// in which true-colour BMPs are 8-bit where that keeps the quality and the compressed file
+    /// gets smaller. The optimised base to build archives from (`grf/` -> `grf-opt/`)
+    ReduceDir {
+        /// The folder to read (e.g. client-dev/grf/core)
+        src: PathBuf,
+        /// The folder to write (must not exist yet or be empty, unless --overwrite)
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Which files (glob on the path below the folder, default every BMP)
+        #[arg(long, default_value = "*.bmp")]
+        only: String,
+        /// Lowest picture quality to accept, in dB (see `reduce`)
+        #[arg(long, default_value_t = 40.0)]
+        min_psnr: f64,
+        /// The compression the size decision is made with: the one the archive will use
+        #[arg(long, value_enum, default_value = "lzma")]
+        method: MethodArg,
+        /// Preset or level for that comparison (default 6; the archive itself may use another)
+        #[arg(long)]
+        level: Option<u32>,
+        /// Write a CSV list of every reduced picture to this file
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Replace files of an existing output folder
+        #[arg(long)]
+        overwrite: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1914,6 +1942,27 @@ fn run(cli: &Cli) -> Result<i32> {
                 meter.done();
                 r
             }
+            ImageCmd::ReduceDir {
+                src,
+                output,
+                only,
+                min_psnr,
+                method,
+                level,
+                report,
+                overwrite,
+            } => image_cmd::reduce_dir(
+                src,
+                output,
+                &image_cmd::ReduceDirArgs {
+                    only,
+                    min_psnr: *min_psnr,
+                    method: method_from(*method, Some(level.unwrap_or(6)))?,
+                    report: report.as_deref(),
+                    overwrite: *overwrite,
+                },
+                cli.json,
+            ),
         },
         Cmd::Spr { action } => match action {
             SprCmd::Info { input, entry } => {

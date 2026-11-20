@@ -9,7 +9,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
 use rgrf_core::edit::{Edit, apply};
-use rgrf_core::encode::encode;
+use rgrf_core::encode::{Method, encode};
 use rgrf_core::progress::Control;
 use rgrf_core::repack::RepackOptions;
 use rgrf_core::{GrfPath, NameMode};
@@ -185,6 +185,210 @@ fn fmt_psnr(p: f64) -> String {
     } else {
         "lossless".into()
     }
+}
+
+pub struct ReduceDirArgs<'a> {
+    pub only: &'a str,
+    pub min_psnr: f64,
+    /// Compression the size decision is made with (the one the archive will use).
+    pub method: Method,
+    pub report: Option<&'a Path>,
+    pub overwrite: bool,
+}
+
+/// What became of one file of the source folder.
+enum Dealt {
+    Reduced {
+        rel: String,
+        psnr: f64,
+        before: u64,
+        after: u64,
+    },
+    Kept(&'static str),
+    Copied,
+}
+
+fn walk_files(
+    dir: &Path,
+    rel: &Path,
+    files: &mut Vec<std::path::PathBuf>,
+    dirs: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    for e in fs::read_dir(dir).with_context(|| format!("cannot read {}", dir.display()))? {
+        let e = e?;
+        let t = e.file_type()?;
+        let r = rel.join(e.file_name());
+        if t.is_dir() {
+            dirs.push(r.clone());
+            walk_files(&e.path(), &r, files, dirs)?;
+        } else if t.is_file() {
+            files.push(r);
+        }
+    }
+    Ok(())
+}
+
+/// Writes `dst` as a complete copy of the folder `src` in which every matching true-colour BMP is
+/// an 8-bit one where that keeps `min_psnr` dB and the file, compressed with `method`, gets
+/// smaller (`reduce` for folders: the optimised base to build archives from). `src` is only read.
+pub fn reduce_dir(src: &Path, dst: &Path, args: &ReduceDirArgs, json: bool) -> Result<i32> {
+    let started = Instant::now();
+    if !src.is_dir() {
+        bail!("{} is not a folder", src.display());
+    }
+    let src_abs = src.canonicalize()?;
+    // the output may not exist yet, nor its parents: resolve the nearest folder that does
+    let mut tail = Vec::new();
+    let mut base = dst.to_path_buf();
+    let mut dst_abs = loop {
+        match base.canonicalize() {
+            Ok(p) => break p,
+            Err(_) => {
+                let name = base
+                    .file_name()
+                    .context("not a usable output path")?
+                    .to_owned();
+                tail.push(name);
+                base = match base.parent() {
+                    Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                    _ => std::env::current_dir()?,
+                };
+            }
+        }
+    };
+    dst_abs.extend(tail.iter().rev());
+    if dst_abs.starts_with(&src_abs) || src_abs.starts_with(&dst_abs) {
+        bail!("the output and the source folder must not contain each other");
+    }
+    if dst.exists() && !args.overwrite && fs::read_dir(dst)?.next().is_some() {
+        bail!("{} is not empty (use --overwrite)", dst.display());
+    }
+    let (mut files, mut dirs) = (Vec::new(), Vec::new());
+    walk_files(src, Path::new(""), &mut files, &mut dirs)?;
+    fs::create_dir_all(dst)?;
+    for d in &dirs {
+        fs::create_dir_all(dst.join(d))?;
+    }
+    let method = args.method;
+    let results: Vec<Result<Dealt>> = files
+        .par_iter()
+        .map(|rel| {
+            let from = src.join(rel);
+            let to = dst.join(rel);
+            let shown = rel.to_string_lossy().into_owned();
+            let copy = |kept: Option<&'static str>| -> Result<Dealt> {
+                fs::copy(&from, &to).with_context(|| format!("cannot copy {shown}"))?;
+                Ok(kept.map_or(Dealt::Copied, Dealt::Kept))
+            };
+            if !rgrf_core::name::glob_match(args.only, &shown) {
+                return copy(None);
+            }
+            let data = fs::read(&from).with_context(|| format!("cannot read {shown}"))?;
+            match bmp::reduce(&data, args.min_psnr) {
+                bmp::Reduced::Kept(k) => copy(Some(k.reason())),
+                bmp::Reduced::Done { bytes, psnr, .. } => {
+                    let before = encode(method, &data).len() as u64;
+                    let after = encode(method, &bytes).len() as u64;
+                    if after >= before {
+                        return copy(Some(bmp::Keep::NotSmaller.reason()));
+                    }
+                    fs::write(&to, &bytes).with_context(|| format!("cannot write {shown}"))?;
+                    Ok(Dealt::Reduced {
+                        rel: shown,
+                        psnr,
+                        before,
+                        after,
+                    })
+                }
+            }
+        })
+        .collect();
+    let mut kept: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut rows = Vec::new();
+    let (mut before, mut after, mut worst, mut lossless, mut copied) =
+        (0u64, 0u64, f64::INFINITY, 0usize, 0usize);
+    for r in results {
+        match r? {
+            Dealt::Reduced {
+                rel,
+                psnr,
+                before: b,
+                after: a,
+            } => {
+                before += b;
+                after += a;
+                worst = worst.min(psnr);
+                lossless += usize::from(psnr.is_infinite());
+                rows.push((rel, psnr, b, a));
+            }
+            Dealt::Kept(why) => *kept.entry(why).or_default() += 1,
+            Dealt::Copied => copied += 1,
+        }
+    }
+    if let Some(path) = args.report {
+        rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut csv = String::from("path,psnr_db,compressed_before,compressed_after\n");
+        for (name, psnr, b, a) in &rows {
+            let psnr = if psnr.is_finite() {
+                format!("{psnr:.2}")
+            } else {
+                "lossless".into()
+            };
+            csv.push_str(&format!(
+                "\"{}\",{psnr},{b},{a}\n",
+                name.replace('"', "\"\"")
+            ));
+        }
+        fs::write(path, csv).with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    let secs = started.elapsed().as_secs_f64();
+    let reduced = rows.len();
+    if json {
+        crate::print_json(&json!({
+            "schema_version": crate::SCHEMA_VERSION,
+            "files": files.len(),
+            "reduced": reduced,
+            "lossless": lossless,
+            "kept": kept,
+            "copied": copied + kept.values().sum::<usize>(),
+            "compressed_bytes_before": before,
+            "compressed_bytes_after": after,
+            "worst_psnr_db": (reduced > 0 && worst.is_finite()).then_some(worst),
+            "min_psnr_db": args.min_psnr,
+            "seconds": secs,
+        }))?;
+    } else {
+        let mib = |b: u64| b as f64 / f64::from(1u32 << 20);
+        println!(
+            "{} files, {} folders -> {}",
+            files.len(),
+            dirs.len(),
+            dst.display()
+        );
+        println!(
+            "Reduced:  {reduced} to 8 bits ({lossless} lossless), worst {}",
+            if reduced > 0 {
+                fmt_psnr(worst)
+            } else {
+                "-".into()
+            }
+        );
+        println!(
+            "Compressed: {:.1} -> {:.1} MiB (saves {:.1} MiB)",
+            mib(before),
+            mib(after),
+            mib(before - after)
+        );
+        let kept: Vec<String> = kept
+            .iter()
+            .map(|(k, n)| format!("{n} {}", k.replace('_', " ")))
+            .collect();
+        if !kept.is_empty() {
+            println!("Kept:     {}", kept.join(", "));
+        }
+        println!("Took {secs:.1} s");
+    }
+    Ok(0)
 }
 
 pub struct ReduceArgs<'a> {
