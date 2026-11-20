@@ -151,6 +151,13 @@ Ergebnis der Vorabstimmung 2026-11-18: Bundle-ID `dev.rustygrf.app` bestätigt, 
 - **Verpackung:** macOS `.app`/`.dmg`, Windows `.msi` oder `.exe`-Installer, Linux AppImage/`.deb`. Signierung und Notarisierung (Apple Developer Account, Windows-Zertifikat) brauchen Konten und Geld; ohne sie warnen die Systeme beim ersten Start.
 - **Abnahme:** App startet auf macOS und Windows, öffnet `data.grf` in unter 2 s, Bauen/Merge liefern dieselben Ergebnisse wie die CLI (gleiche Hashes), App-Icon und Name erscheinen in Dock/Taskleiste/Installer.
 
+## Fenster, Datei-Menü und Tempo (2026-11-20)
+- **Mehrere Fenster ✅:** eine Sitzung je Fenster, gleiches Archiv holt sein Fenster nach vorn (Windows-VM: `rdata` → 1, `data` → 2, wieder `rdata` → 2 Fenster, rdata vorn).
+- **Kein weißes Startfenster ✅:** Fenster und Webview entstehen in der gemerkten Hintergrundfarbe; Windows-VM: fertige dunkle Oberfläche nach ~0,45 s, kein weißes Bild (vorher bis 1,8 s weiß/leer).
+- **Datei-Menü wie GRF Editor ✅:** Neu (GRF/GPF/RGZ/Thor), Zuletzt geöffnet, Schließen, Speichern an Ort und Stelle, Speichern unter, Erweitert speichern, Archiv-Einstellungen; Werkzeuge: In Dateien suchen, Prüfsummen, Vergleichen und Patch erzeugen; Über mit Credits. Abgleich aller Menüpunkte in [10-feature-matrix.md](10-feature-matrix.md).
+- **Kartenvorschau schneller ✅:** Texturen parallel mit schneller PNG-Stufe (Backend Prontera 0,9 → 0,07 s) und Tauris IPC-Protokoll, das unsere CSP blockiert hatte (`connect-src` fehlte; Windows-VM Prontera 3,1 → 1,1–1,2 s). Weiter möglich: Kartendaten binär statt als JSON mit Base64 (~35 MB bei Prontera).
+- **Offen aus dem Vergleich:** Karten flach machen (Flat maps maker), Auswahlverlauf vor/zurück, Magic header, Textkodierung umrechnen, GSF.
+
 ## Galerie und Zwischenbilder (2026-11-19)
 - **Galerie ✅:** fünfte Ansicht in der GUI (Vorschaubilder im Raster, siehe [apps/gui/README.md](../apps/gui/README.md)); Vorschaubilder erzeugt das Backend parallel (`thumb.rs`, Mittelwert-Verkleinerung, Magenta durchsichtig). **Gemessen:** 120 Bilder in 12 ms. Cache nur im Speicher.
 - **ACT-Zwischenbilder ✅:** `rgrf act interpolate` und „In-betweens…“ im ACT-Editor, Einzelheiten in der [Funktionsmatrix](10-feature-matrix.md). Keine Skriptsprache.

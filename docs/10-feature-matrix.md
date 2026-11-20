@@ -29,6 +29,42 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 | Hex-Ansicht (Be.HexBox), `MagicEdit` | GUI: „Hex…“ bei jeder Datei, 16 Byte je Zeile, Blättern, Springen zu einem Offset, einzelne Bytes ändern | ✅ (2026-11-19) Ansicht der ganzen Datei und Überschreiben einzelner Bytes (die Größe bleibt, Änderungen sind vorgemerkt und rückgängig zu machen); **Suchen ✅ (2026-11-20):** Hex-Bytes oder Text (UTF-8), „Weitersuchen“ springt zur Fundstelle (mit Umbruch an den Anfang) und markiert sie; Test im Backend, im Browser mit der echten `goldporing.act` bedient; Text nur UTF-8 (nicht CP949). Einfügen/Löschen von Bytes ❌ |
 | GrfCL (Kommandozeile) | `rgrf` | ✅ (Vergleich in `BENCHMARKS.md`) |
 
+## GRF Editor: jeder Menüpunkt im Vergleich (2026-11-20)
+
+Aus `EditorMainWindow.xaml` und `EMenuInteraction.cs` gelesen, in der Windows-VM gegen GRF Editor angesehen.
+
+| GRF Editor | RustyGRF | Stand |
+|---|---|---|
+| File › New › Grf, Gpf, Rgz, Thor | Datei › Neu › GRF, GPF, RGZ, Thor (Cmd/Ctrl+N) | ✅ leeres Archiv, Typ beim Speichern |
+| File › New › Gsf („Gravity Secure Patch“) | – | ❌ Format unbekannt, keine Beispieldatei |
+| Open…, Open recent, Close Grf | Öffnen, Zuletzt geöffnet (10, für alle Fenster), Archiv schließen | ✅ |
+| (ein Fenster je Programm) | **mehrere Fenster** in einer App, gleiches Archiv holt sein Fenster nach vorn | ✅ besser (in der Windows-VM gemessen) |
+| Save, Save as… | Speichern (an Ort und Stelle: daneben schreiben, prüfen, tauschen), Speichern unter (Container nach Endung) | ✅ |
+| Save advanced › Defragment (quick), Compact (redirect indexes) | Erweitert speichern › Verdichten: schreibt das Archiv lückenlos neu, Daten werden kopiert | ✅ anderer Weg (immer vollständig neu geschrieben, geprüft) |
+| Save advanced › Repack (recompress) | Erweitert speichern › Neu packen (zlib, zopfli, LZMA; Version wählbar) | ✅ |
+| Save advanced › Encrypt File Table | Verschlüsseln (alle Einträge, GRF Editors Verfahren) | ✅ Einträge; nur die Tabelle allein ❌ |
+| About…, Quit | Hilfe › Über (Credits), Beenden | ✅ |
+| Undo, Redo | Rückgängig, Wiederholen | ✅ |
+| Navigate backward/forward (Auswahlverlauf) | – | ❌ |
+| Merge, Subtract | Zusammenführen; Werkzeuge › Mit Archiv vergleichen (Unterschiede, als Thor- oder GRF-Patch speichern) | ✅ Subtrahieren über Vergleich |
+| Extract Rgz | RGZ öffnen, Extrahieren | ✅ |
+| Edit Grf/Thor settings (Format, Anzeigekodierung, Magic header) | Bearbeiten › Archiv-Einstellungen (Version, Kompression, Verschlüsselung; Namensanzeige in der Statusleiste) | ✅; Magic header ändern ❌, Thor-Ziel-GRF in der App ❌ (CLI `thor create` kann es) |
+| Tools › Grf validation | Werkzeuge › Archiv prüfen | ✅ |
+| Open roaming data | App-Datenordner öffnen | ✅ |
+| Import sprite…, Sprite editor | Sprite-Vorschau: Bilder hinzufügen, ersetzen, entfernen, Pixel-Editor | ✅ |
+| Flat maps maker (Boden flach, Lightmap/Schatten/Farbe, Wasser, Objekte entfernen, Licht zurücksetzen) | Karte extrahieren mit Teilen abwählen | 🔨 Karten flach machen fehlt (GND/RSW schreiben nötig) |
+| Patch maker | Mit Archiv vergleichen › Als Patch speichern (Thor mit Löschanweisungen) | ✅ |
+| Hash viewer | Werkzeuge › Prüfsummen (CRC32, MD5, SHA-256) | ✅ |
+| Text encoding (Text zwischen Kodierungen umrechnen) | Namensanzeige Koreanisch/Latin-1/UTF-8; Texte werden beim Öffnen erkannt | ❓ eigenes Werkzeug fehlt |
+| Advanced search (Text in Dateien, Regex, ganze Wörter, Groß/klein, Dateifilter) | Werkzeuge › In Dateien suchen (Cmd/Ctrl+Shift+F) | ✅ (kRO: 133 Textdateien in 0,56 s) |
+| Image converter | „8-bit…“, Bilder verkleinern, CLI `image convert` | ✅ |
+| GRF Command Line | `rgrf` (CLI) und MCP-Server | ✅ |
+| OpenGL Logger | – | nicht nötig (WebGL im Webview) |
+| Image finder | – | im Quelltext auskommentiert, auch bei GRF Editor ohne Funktion |
+| GRF Encryption, Gravity Encryption, Set kRO/jRO/cnRO keys | Passwort-Verschlüsselung; Gravitys Schutz mit eingebauten kRO-Schlüsseln | ✅ kRO; jRO/cnRO ❌ (keine Beispieldateien) |
+| Grf patcher | Zusammenführen (Patch über das Archiv legen) | ✅ |
+| Settings | Einstellungen | ✅ |
+
 ## ACT Editor (Tokeiburu)
 
 | Funktion (laut README, Changelog, Ordner) | RustyGRF | Stand |
