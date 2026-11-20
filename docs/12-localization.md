@@ -15,7 +15,7 @@
 
 **Auch Hex-Editor, beide Dialoge „Bilder verkleinern“, die Vorschau (Kopfzeile, Ordner, Animation, 3D-Modell und Karte mit allen Schaltern, Effekt, Video, Hex), „Bild speichern“, „Karte extrahieren“ und die Statuszeile beim Öffnen sind umgestellt (478 Schlüssel).**
 
-**Noch nicht umgestellt (erscheint auf Englisch):** ACT-/SPR-/Paletten-/Karten-Editor-Dialoge, Vorschautexte, Status- und Fehlermeldungen aus dem Backend, die „(s)“-Stellen und zusammengesetzten Sätze aus dem Plan unten, Tooltips der in Skripten erzeugten Knöpfe. Das sind die nächsten Wellen von L0; jeder Dialog lässt sich einzeln umstellen, das Prüfskript meldet fehlende Schlüssel.
+**Noch nicht umgestellt (erscheint auf Englisch):** ACT-, SPR-, Paletten-, Karten- (GAT) und Text-Editor, Status- und Fehlermeldungen aus dem Backend, die „(s)“-Stellen und zusammengesetzten Sätze aus dem Plan unten, Tooltips der in Skripten erzeugten Knöpfe. Das sind die nächsten Wellen von L0; jeder Dialog lässt sich einzeln umstellen, das Prüfskript meldet fehlende Schlüssel.
 
 **Nicht geprüft:** Aussehen aller Sprachen im echten Tauri-Fenster (nur im Browser mit dem echten Backend: Deutsch, Koreanisch, Pseudo, Japanisch, Filipino umgeschaltet, keine Skriptfehler); Mindestgröße 900 × 640 mit allen Sprachen und den Dialogen; Windows/Linux-Schriften für CJK; **die Übersetzungen selbst** (maschineller Entwurf; besonders die Erklärtexte, Verschlüsselung und Datenverlust gehören von Muttersprachlern gelesen).
 
