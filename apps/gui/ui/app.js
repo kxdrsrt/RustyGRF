@@ -128,25 +128,25 @@ async function openWithKey(path) {
     } catch (e) {
       // only a missing or wrong key is asked about again
       if (!/key/i.test(errText(e)) || !/encrypted|CRC32/i.test(errText(e))) throw e;
-      problem = /CRC32/.test(errText(e)) ? "This password does not belong to the archive." : "";
+      problem = /CRC32/.test(errText(e)) ? t("enc-wrong") : "";
     }
-    if (info && !problem && password !== null) problem = "This password does not belong to the archive.";
+    if (info && !problem && password !== null) problem = t("enc-wrong");
     const input = el("input", { type: "password", class: "field", autocomplete: "off", spellcheck: "false" });
     const answer = await ask(
-      "Encrypted archive",
+      t("enc-title"),
       [
-        el("p", { text: "This archive is encrypted (GRF Editor's scheme). Enter its password to read the files." }),
+        el("p", { text: t("enc-body") }),
         problem ? el("p", { class: "error", text: problem }) : null,
         input,
       ],
       [
-        { label: "Open without password", value: "skip" },
-        { label: "Open", value: "ok", primary: true },
+        { label: t("enc-skip"), value: "skip" },
+        { label: t("pvw-open"), value: "ok", primary: true },
       ],
     );
     if (answer === "skip" || answer === null) {
       if (info) return info;
-      throw new Error("The file table of this archive is encrypted; a password is needed to open it.");
+      throw new Error(t("enc-needs"));
     }
     password = input.value;
   }
@@ -154,15 +154,15 @@ async function openWithKey(path) {
 
 async function openPath(path, force = false) {
   if (!force && S.changes.length && SET.warnDiscard) {
-    const go = await ask("Open another archive?", el("p", { text: `${fmtNum(S.changes.length)} pending change(s) of the open archive are not saved in an archive yet. They are kept as a draft and offered again when you open this archive next time.` }), [{ label: "Open", value: true }, { label: "Cancel", value: null, primary: true }]);
+    const go = await ask(t("open-another-title"), el("p", { text: t("open-another-body", { n: S.changes.length }) }), [{ label: t("pvw-open"), value: true }, { label: "Cancel", value: null, primary: true }]);
     if (!go) return;
   }
-  setStatus(`Opening ${path} …`);
+  setStatus(t("open-running", { path }));
   try {
     S.info = await openWithKey(path);
   } catch (e) {
-    setStatus("Could not open the archive");
-    await note("Could not open", errText(e), true);
+    setStatus(t("open-failed-status"));
+    await note(t("open-failed"), errText(e), true);
     return;
   }
   $("empty").hidden = true;
@@ -193,27 +193,27 @@ async function openPath(path, force = false) {
 /** Unsaved changes of an earlier session were found for this archive: restore or discard them. */
 async function offerDraft(d) {
   const when = new Date(d.saved_at * 1000).toLocaleString();
-  const body = [el("p", { text: `${fmtNum(d.changes)} change(s) from ${when} were not saved in an archive. They were kept as a draft (for example because the app closed).` })];
-  if (d.archive_changed) body.push(el("p", { class: "error", text: "The archive itself has changed since then. Check the changes before you save." }));
-  if (d.missing_files) body.push(el("p", { class: "muted", text: `${fmtNum(d.missing_files)} replacement file(s) no longer exist on disk and will be left out.` }));
-  if (d.more) body.push(el("p", { class: "muted", text: `${fmtNum(d.more)} older draft(s) of this archive follow, one each time you open it.` }));
-  body.push(el("p", { class: "muted", text: "Later keeps this draft for another time; the changes you make now are saved as a draft of their own." }));
-  const act = await ask("Restore unsaved changes?", body, [{ label: "Restore", value: "restore", primary: true }, { label: "Discard", value: "discard" }, { label: "Later", value: null }]);
+  const body = [el("p", { text: t("draft-body", { n: d.changes, when }) })];
+  if (d.archive_changed) body.push(el("p", { class: "error", text: t("draft-archive-changed") }));
+  if (d.missing_files) body.push(el("p", { class: "muted", text: t("draft-missing", { n: d.missing_files }) }));
+  if (d.more) body.push(el("p", { class: "muted", text: t("draft-more", { n: d.more }) }));
+  body.push(el("p", { class: "muted", text: t("draft-later-note") }));
+  const act = await ask(t("draft-title"), body, [{ label: t("draft-restore"), value: "restore", primary: true }, { label: t("draft-discard"), value: "discard" }, { label: t("draft-later"), value: null }]);
   try {
     if (act === "restore") {
       const r = await invoke("restore_draft");
       setPending(await invoke("pending"));
       refreshPreview();
-      setStatus(`${fmtNum(r.restored)} change(s) restored${r.skipped ? `, ${fmtNum(r.skipped)} left out` : ""}`);
+      setStatus(r.skipped ? t("draft-restored-skipped", { restored: t("draft-restored", { n: r.restored }), skipped: r.skipped }) : t("draft-restored", { n: r.restored }));
     } else if (act === "discard") {
       await invoke("discard_draft");
-      setStatus("Draft discarded");
+      setStatus(t("draft-discarded"));
     } else {
       await invoke("defer_draft");
-      setStatus("The draft is kept for another time");
+      setStatus(t("draft-kept"));
     }
   } catch (e) {
-    await note("Could not restore the changes", errText(e), true);
+    await note(t("draft-failed"), errText(e), true);
   }
 }
 
@@ -961,8 +961,8 @@ function renderPreview(p, row, meta) {
       return [el("audio", { controls: true, src: dataUrl(p.mime, p.data) })];
     case "text": {
       const pre = el("pre", { text: p.text });
-      const note = el("div", { class: "muted" }, "Encoding: ", el("span", { class: "badge", text: p.encoding }), p.truncated ? " (shortened)" : "");
-      const edit = el("button", { type: "button", class: "small", icon: "edit", text: "Edit…", title: "Edit the text; compiled Lua is compiled again (staged, saved with Changes…)", onclick: () => openTextEditor(row) });
+      const note = el("div", { class: "muted" }, `${t("txt-encoding")} `, el("span", { class: "badge", text: p.encoding }), p.truncated ? ` ${t("txt-shortened")}` : "");
+      const edit = el("button", { type: "button", class: "small", icon: "edit", text: t("txt-edit"), title: t("txt-edit-title"), onclick: () => openTextEditor(row) });
       return [el("div", { class: "controls" }, edit), note, pre];
     }
     case "frames":
@@ -971,16 +971,16 @@ function renderPreview(p, row, meta) {
           ? el(
               "div",
               { class: "controls" },
-              el("button", { type: "button", class: "small", icon: "palette", text: "Adjust…", title: "Shift hue, scale saturation and brightness of a range of colours (staged)", onclick: () => adjustPalette(row) }),
-              el("span", { class: "muted", text: "Click a colour to change it." }),
+              el("button", { type: "button", class: "small", icon: "palette", text: t("pal-adjust"), title: t("pal-adjust-title"), onclick: () => adjustPalette(row) }),
+              el("span", { class: "muted", text: t("pal-click-hint") }),
             )
           : null,
         row.name.toLowerCase().endsWith(".spr")
           ? el(
               "div",
               { class: "controls" },
-              el("button", { type: "button", class: "small", icon: "add", text: "Add image…", title: "Append a PNG as a new image (staged)", onclick: () => addImage(row) }),
-              el("button", { type: "button", class: "small", icon: "palette", text: "Set palette…", title: "Use the colours of a .pal file (staged)", onclick: () => setPalette(row) }),
+              el("button", { type: "button", class: "small", icon: "add", text: t("spr-add"), title: t("spr-add-title"), onclick: () => addImage(row) }),
+              el("button", { type: "button", class: "small", icon: "palette", text: t("spr-setpal"), title: t("spr-setpal-title"), onclick: () => setPalette(row) }),
             )
           : null,
         el(
@@ -996,9 +996,9 @@ function renderPreview(p, row, meta) {
                 ? el(
                     "div",
                     { class: "figactions" },
-                    el("button", { type: "button", class: "small", icon: "pencil", text: "Pixels…", title: "Draw on this image: pencil, eraser, fill and colour picker on the palette colours (staged)", onclick: () => openPixelEditor(row, i) }),
-                    el("button", { type: "button", class: "small", text: "Replace…", title: "Replace this image with a PNG (staged, saved with Changes…)", onclick: () => replaceImage(row, i) }),
-                    el("button", { type: "button", class: "small", text: "Remove", title: "Remove this image; the animation next to it follows (staged)", onclick: () => removeImage(row, i) }),
+                    el("button", { type: "button", class: "small", icon: "pencil", text: t("spr-pixels"), title: t("spr-pixels-title"), onclick: () => openPixelEditor(row, i) }),
+                    el("button", { type: "button", class: "small", text: t("spr-replace"), title: t("spr-replace-title"), onclick: () => replaceImage(row, i) }),
+                    el("button", { type: "button", class: "small", text: t("btn-remove"), title: t("spr-remove-title"), onclick: () => removeImage(row, i) }),
                   )
                 : null,
             ),
@@ -1273,38 +1273,38 @@ function refreshPreview(action) {
 }
 
 async function replaceImage(row, frame) {
-  const png = await T.dialog.open({ multiple: false, directory: false, title: `PNG for image ${frame} of ${row.name}`, filters: [{ name: "PNG image", extensions: ["png"] }] });
+  const png = await T.dialog.open({ multiple: false, directory: false, title: t("spr-replace-pick", { frame, name: row.name }), filters: [{ name: t("spr-png-filter"), extensions: ["png"] }] });
   if (!png) return;
   try {
     setPending(await invoke("stage_spr_image", { index: row.index, frame, png }));
-    setStatus(`Image ${frame} of ${row.name} staged (colours are mapped to the sprite's palette); the preview shows the result. Save with Changes….`);
+    setStatus(t("spr-replace-status", { frame, name: row.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not replace the image", errText(e), true);
+    await note(t("spr-replace-failed"), errText(e), true);
   }
 }
 
 async function addImage(row) {
-  const png = await T.dialog.open({ multiple: false, directory: false, title: `PNG to add to ${row.name}`, filters: [{ name: "PNG image", extensions: ["png"] }] });
+  const png = await T.dialog.open({ multiple: false, directory: false, title: t("spr-add-pick", { name: row.name }), filters: [{ name: t("spr-png-filter"), extensions: ["png"] }] });
   if (!png) return;
   try {
     setPending(await invoke("stage_spr_add", { index: row.index, png }));
-    setStatus(`Image added to ${row.name} (staged); save with Changes….`);
+    setStatus(t("spr-add-status", { name: row.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not add the image", errText(e), true);
+    await note(t("spr-add-failed"), errText(e), true);
   }
 }
 
 async function removeImage(row, frame) {
-  const go = await ask(`Remove image ${frame}?`, el("p", { text: "Later images move down by one. Layers of the animation next to this sprite that use the image become empty, and later ones follow." }), [{ label: "Remove", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("spr-remove-heading", { n: frame }), el("p", { text: t("spr-remove-body") }), [{ label: t("btn-remove"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   try {
     setPending(await invoke("stage_spr_remove", { index: row.index, frame }));
-    setStatus(`Image ${frame} of ${row.name} removed (staged); save with Changes….`);
+    setStatus(t("spr-remove-status", { frame, name: row.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not remove the image", errText(e), true);
+    await note(t("spr-remove-failed"), errText(e), true);
   }
 }
 
@@ -1316,7 +1316,7 @@ async function openPixelEditor(row, frame) {
   try {
     v = await invoke("spr_image", { index: row.index, frame });
   } catch (e) {
-    await note("Pixels", errText(e), true);
+    await note(t("pix-error"), errText(e), true);
     return;
   }
   const { width: w, height: h, palette } = v;
@@ -1326,11 +1326,11 @@ async function openPixelEditor(row, frame) {
   const st = { tool: "pencil", color: 1, zoom: Math.max(2, Math.min(24, Math.floor(480 / Math.max(w, h)))), down: false, last: null, grid: true };
   const rgb = palette.map((p) => [parseInt(p.slice(0, 2), 16), parseInt(p.slice(2, 4), 16), parseInt(p.slice(4, 6), 16)]);
 
-  const canvas = el("canvas", { class: "pixcanvas", tabindex: "0", "aria-label": `Image ${frame}, ${w} by ${h} pixels. Arrow keys move the cursor, Space draws.` });
+  const canvas = el("canvas", { class: "pixcanvas", tabindex: "0", "aria-label": t("pix-canvas-aria", { frame, w, h }) });
   const off = document.createElement("canvas");
   off.width = w;
   off.height = h;
-  const readout = el("span", { class: "muted", text: `${w} x ${h} px` });
+  const readout = el("span", { class: "muted", text: t("pix-size", { w, h }) });
   const cursor = { x: 0, y: 0 };
 
   const draw = () => {
@@ -1369,7 +1369,7 @@ async function openPixelEditor(row, frame) {
   };
   const status = () => {
     const i = cursor.y * w + cursor.x;
-    readout.textContent = `${w} x ${h} px — x ${cursor.x}, y ${cursor.y}: colour ${px[i]} (#${palette[px[i]]})${px[i] === 0 ? ", transparent" : ""}`;
+    readout.textContent = t(px[i] === 0 ? "pix-readout-t" : "pix-readout", { w, h, x: cursor.x, y: cursor.y, c: px[i], hex: palette[px[i]] });
   };
   const pushUndo = () => {
     undo.push(px.slice());
@@ -1470,8 +1470,8 @@ async function openPixelEditor(row, frame) {
       b.setAttribute("aria-pressed", String(n === name));
     }
   };
-  const bar = el("div", { class: "controls wrap" }, tool("pencil", "pencil", "Pencil", "P"), tool("eraser", "eraser", "Eraser", "E"), tool("fill", "fill", "Fill", "F"), tool("picker", "picker", "Picker", "I"));
-  const zoom = el("input", { type: "range", min: "1", max: "32", value: String(st.zoom), "aria-label": "Zoom" });
+  const bar = el("div", { class: "controls wrap" }, tool("pencil", "pencil", t("pix-pencil"), "P"), tool("eraser", "eraser", t("pix-eraser"), "E"), tool("fill", "fill", t("pix-fill"), "F"), tool("picker", "picker", t("pix-picker"), "I"));
+  const zoom = el("input", { type: "range", min: "1", max: "32", value: String(st.zoom), "aria-label": t("pix-zoom") });
   zoom.addEventListener("input", () => {
     st.zoom = Number(zoom.value);
     draw();
@@ -1480,21 +1480,21 @@ async function openPixelEditor(row, frame) {
     st.grid = grid.checked;
     draw();
   } });
-  const undoBtn = el("button", { type: "button", class: "small", icon: "undo", text: "Undo", onclick: () => {
+  const undoBtn = el("button", { type: "button", class: "small", icon: "undo", text: t("btn-undo"), onclick: () => {
     if (undo.length) px.set(undo.pop());
     draw();
   } });
-  const resetBtn = el("button", { type: "button", class: "small", icon: "reset", text: "Revert", onclick: () => {
+  const resetBtn = el("button", { type: "button", class: "small", icon: "reset", text: t("pix-revert"), onclick: () => {
     pushUndo();
     px.set(original);
     draw();
   } });
-  bar.append(el("label", { class: "muted", text: "Zoom " }, zoom), el("label", { class: "muted" }, grid, " Grid"), undoBtn, resetBtn);
+  bar.append(el("label", { class: "muted", text: `${t("pix-zoom")} ` }, zoom), el("label", { class: "muted" }, grid, ` ${t("pix-grid")}`), undoBtn, resetBtn);
 
-  const sw = el("div", { class: "swatches", role: "listbox", "aria-label": "Palette" });
+  const sw = el("div", { class: "swatches", role: "listbox", "aria-label": t("pix-palette") });
   const swatches = () => {
     sw.replaceChildren(
-      ...palette.map((p, i) => el("button", { type: "button", class: `swatch${i === st.color ? " cur" : ""}${i === 0 ? " zero" : ""}`, style: i === 0 ? "" : `background:#${p}`, title: `${i}: #${p}${i === 0 ? " (transparent)" : ""}`, role: "option", "aria-selected": String(i === st.color), "aria-label": `Colour ${i}`, onclick: () => {
+      ...palette.map((p, i) => el("button", { type: "button", class: `swatch${i === st.color ? " cur" : ""}${i === 0 ? " zero" : ""}`, style: i === 0 ? "" : `background:#${p}`, title: `${i}: #${p}${i === 0 ? ` ${t("pix-swatch-zero")}` : ""}`, role: "option", "aria-selected": String(i === st.color), "aria-label": t("pal-colour", { n: i }), onclick: () => {
         st.color = i;
         if (st.tool === "picker") setTool("pencil");
         swatches();
@@ -1504,15 +1504,15 @@ async function openPixelEditor(row, frame) {
   swatches();
   setTool("pencil");
 
-  $("pix-title").textContent = `Pixels of image ${frame} — ${row.name}`;
-  $("pix-body").replaceChildren(el("div", { class: "pixed" }, el("div", {}, bar, el("div", { class: "pixstage" }, canvas), readout), el("div", {}, el("h3", { class: "muted", text: "Palette (click a colour; 0 is transparent)" }), sw)));
+  $("pix-title").textContent = t("pix-title", { frame, name: row.name });
+  $("pix-body").replaceChildren(el("div", { class: "pixed" }, el("div", {}, bar, el("div", { class: "pixstage" }, canvas), readout), el("div", {}, el("h3", { class: "muted", text: t("pix-palette-heading") }), sw)));
   const dlg = $("pix-dlg");
   const actions = $("pix-actions");
   const finish = (go) =>
     new Promise((resolve) => {
       actions.replaceChildren(
-        el("button", { type: "button", text: "Cancel", onclick: () => { dlg.close(); resolve(false); } }),
-        el("button", { type: "button", class: "primary", icon: "changes", text: "Apply", onclick: () => { dlg.close(); resolve(true); } }),
+        el("button", { type: "button", text: t("dlg-cancel"), onclick: () => { dlg.close(); resolve(false); } }),
+        el("button", { type: "button", class: "primary", icon: "changes", text: t("dlg-apply"), onclick: () => { dlg.close(); resolve(true); } }),
       );
       dlg.addEventListener("cancel", () => resolve(false), { once: true });
       dlg.showModal();
@@ -1533,15 +1533,15 @@ async function openPixelEditor(row, frame) {
   const go = await finish();
   dlg.removeEventListener("keydown", keyTools);
   if (!go) return;
-  if (px.every((v, i) => v === original[i])) return setStatus("No pixel changed.");
+  if (px.every((v, i) => v === original[i])) return setStatus(t("pix-nochange"));
   let bin = "";
   for (let i = 0; i < px.length; i += 8192) bin += String.fromCharCode(...px.subarray(i, i + 8192));
   try {
     setPending(await invoke("stage_spr_pixels", { index: row.index, frame, pixels: btoa(bin) }));
-    setStatus(`Image ${frame} of ${row.name} edited (staged); save with Changes….`);
+    setStatus(t("pix-status", { frame, name: row.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not stage the pixels", errText(e), true);
+    await note(t("pix-failed"), errText(e), true);
   }
 }
 
@@ -1551,7 +1551,7 @@ async function openPixelEditor(row, frame) {
 function gatEditor(row, p) {
   const { cells_x: cx, cells_y: cy, types } = p.gat;
   const sel = { x0: 0, y0: 0, x1: 0, y1: 0, on: false };
-  const img = el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: `map, ${cx} by ${cy} cells`, draggable: "false" });
+  const img = el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: t("gat-alt", { x: cx, y: cy }), draggable: "false" });
   const box = el("div", { class: "gatsel", hidden: true });
   const stage = el("div", { class: "checker gatstage" }, img, box);
   const field = (label, key, max) => {
@@ -1564,14 +1564,14 @@ function gatEditor(row, p) {
     });
     return [el("label", { class: "muted", text: `${label} ` }, i), i];
   };
-  const [lx0, ix0] = field("x from", "x0", cx - 1);
-  const [lx1, ix1] = field("to", "x1", cx - 1);
-  const [ly0, iy0] = field("y from", "y0", cy - 1);
-  const [ly1, iy1] = field("to", "y1", cy - 1);
-  const kind = el("select", { "aria-label": "Cell type" }, el("option", { value: "", text: "type: no change" }), ...types.map(([k, n]) => el("option", { value: String(k), text: `${k}: ${n}` })));
-  const height = el("input", { type: "number", step: "0.5", placeholder: "no change", class: "narrow wide", "aria-label": "Height" });
-  const apply = el("button", { type: "button", class: "small", icon: "edit", text: "Set cells", disabled: true, title: "Set the type and/or height of the chosen cells (staged, saved with Changes…)" });
-  const readout = el("span", { class: "muted", text: "Drag on the map to choose cells." });
+  const [lx0, ix0] = field(t("gat-x-from"), "x0", cx - 1);
+  const [lx1, ix1] = field(t("gat-to"), "x1", cx - 1);
+  const [ly0, iy0] = field(t("gat-y-from"), "y0", cy - 1);
+  const [ly1, iy1] = field(t("gat-to"), "y1", cy - 1);
+  const kind = el("select", { "aria-label": t("gat-type-aria") }, el("option", { value: "", text: t("gat-type-nochange") }), ...types.map(([k, n]) => el("option", { value: String(k), text: `${k}: ${n}` })));
+  const height = el("input", { type: "number", step: "0.5", placeholder: t("gat-height-ph"), class: "narrow wide", "aria-label": t("gat-height") });
+  const apply = el("button", { type: "button", class: "small", icon: "edit", text: t("gat-set"), disabled: true, title: t("gat-set-title") });
+  const readout = el("span", { class: "muted", text: t("gat-drag") });
   const draw = () => {
     const [xa, xb, ya, yb] = [Math.min(sel.x0, sel.x1), Math.max(sel.x0, sel.x1), Math.min(sel.y0, sel.y1), Math.max(sel.y0, sel.y1)];
     box.hidden = !sel.on;
@@ -1581,7 +1581,7 @@ function gatEditor(row, p) {
       ix1.value = xb;
       iy0.value = ya;
       iy1.value = yb;
-      readout.textContent = `x ${xa}–${xb}, y ${ya}–${yb}: ${fmtNum((xb - xa + 1) * (yb - ya + 1))} cell(s)`;
+      readout.textContent = t("gat-readout", { xa, xb, ya, yb, cells: t("gat-cells", { n: (xb - xa + 1) * (yb - ya + 1) }) });
     }
     apply.disabled = !sel.on;
   };
@@ -1609,24 +1609,24 @@ function gatEditor(row, p) {
   stage.addEventListener("pointerup", () => (dragging = false));
   apply.addEventListener("click", async () => {
     const h = height.value.trim() === "" ? null : Number(height.value);
-    if (kind.value === "" && h === null) return note("Set cells", "Choose a cell type and/or a height first.");
+    if (kind.value === "" && h === null) return note(t("gat-set"), t("gat-need"));
     try {
       const r = await invoke("stage_gat_edit", { index: row.index, edit: { x0: sel.x0, y0: sel.y0, x1: sel.x1, y1: sel.y1, kind: kind.value === "" ? null : Number(kind.value), height: h } });
       setPending(r.pending);
-      setStatus(`${fmtNum(r.changed)} cell(s) of ${row.name} changed (staged); save with Changes….`);
+      setStatus(t("gat-status", { cells: t("gat-cells", { n: r.changed }), name: row.name }));
       refreshPreview();
     } catch (e) {
-      await note("Could not change the cells", errText(e), true);
+      await note(t("gat-failed"), errText(e), true);
     }
   });
-  const all = el("button", { type: "button", class: "small", text: "Select all", onclick: () => {
+  const all = el("button", { type: "button", class: "small", text: t("gat-select-all"), onclick: () => {
       Object.assign(sel, { x0: 0, y0: 0, x1: cx - 1, y1: cy - 1, on: true });
       draw();
     },
   });
   return [
     el("div", { class: "controls wrap" }, lx0, lx1, ly0, ly1, all),
-    el("div", { class: "controls wrap" }, kind, el("label", { class: "muted", text: "height " }, height), apply, readout),
+    el("div", { class: "controls wrap" }, kind, el("label", { class: "muted", text: `${t("gat-height")} ` }, height), apply, readout),
     stage,
     infoBlock(p.info),
   ];
@@ -1640,7 +1640,7 @@ function palImage(row, f) {
     img.style.cursor = "crosshair";
     img.style.width = "256px";
     img.style.maxWidth = "none";
-    img.title = "Click a colour to change it";
+    img.title = t("pal-click-title");
     img.addEventListener("click", (e) => {
       const r = img.getBoundingClientRect();
       const cx = Math.min(15, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * 16)));
@@ -1656,23 +1656,23 @@ async function pickColour(row, index) {
   try {
     current = (await invoke("pal_colors", { index: row.index }))[index];
   } catch (e) {
-    await note("Could not read the palette", errText(e), true);
+    await note(t("pal-read-failed"), errText(e), true);
     return;
   }
   const input = el("input", { type: "color", value: `#${current}` });
-  const go = await ask(`Colour ${index}`, [el("p", { text: index === 0 ? "Index 0 is the transparent colour in the client; its colour is rarely seen." : `Colour number ${index} of 255:` }), input], [{ label: "Set", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("pal-colour", { n: index }), [el("p", { text: index === 0 ? t("pal-zero") : t("pal-number", { n: index }) }), input], [{ label: t("act-interval-set"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   const h = input.value.slice(1);
-  await stagePal(row, { op: "set", index, rgb: [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }, `Colour ${index} of ${row.name} changed (staged); save with Changes….`);
+  await stagePal(row, { op: "set", index, rgb: [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)] }, t("pal-changed", { n: index, name: row.name }));
 }
 
 async function adjustPalette(row) {
   const f = (label, value, step) => el("label", { class: "muted", text: `${label} ` }, el("input", { type: "number", value: String(value), step: String(step), class: "narrow" }));
-  const [from, to, hue, sat, bri] = [f("From colour", 1, 1), f("to", 255, 1), f("Hue shift (°)", 0, 5), f("Saturation ×", 1, 0.05), f("Brightness ×", 1, 0.05)];
+  const [from, to, hue, sat, bri] = [f(t("pal-from"), 1, 1), f(t("pal-to"), 255, 1), f(t("pal-hue"), 0, 5), f(t("pal-sat"), 1, 0.05), f(t("pal-bri"), 1, 0.05)];
   const v = (l) => Number(l.querySelector("input").value);
-  const go = await ask(`Adjust colours of ${row.name}`, [el("p", { text: "Colour 0 is the transparent one, so the range starts at 1." }), el("div", { class: "bar" }, from, to), el("div", { class: "bar" }, hue, sat, bri)], [{ label: "Apply", value: true, primary: true }, { label: "Cancel", value: null }]);
+  const go = await ask(t("pal-adjust-heading", { name: row.name }), [el("p", { text: t("pal-range-note") }), el("div", { class: "bar" }, from, to), el("div", { class: "bar" }, hue, sat, bri)], [{ label: t("dlg-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
-  await stagePal(row, { op: "adjust", from: v(from), to: v(to), hue: v(hue), saturation: v(sat), brightness: v(bri) }, `Colours of ${row.name} adjusted (staged); save with Changes….`);
+  await stagePal(row, { op: "adjust", from: v(from), to: v(to), hue: v(hue), saturation: v(sat), brightness: v(bri) }, t("pal-adjusted", { name: row.name }));
 }
 
 async function stagePal(row, edit, message) {
@@ -1681,19 +1681,19 @@ async function stagePal(row, edit, message) {
     setStatus(message);
     refreshPreview();
   } catch (e) {
-    await note("Could not change the palette", errText(e), true);
+    await note(t("pal-failed"), errText(e), true);
   }
 }
 
 async function setPalette(row) {
-  const pal = await T.dialog.open({ multiple: false, directory: false, title: `Palette for ${row.name}`, filters: [{ name: "Palette", extensions: ["pal"] }] });
+  const pal = await T.dialog.open({ multiple: false, directory: false, title: t("pal-pick", { name: row.name }), filters: [{ name: t("pal-filter"), extensions: ["pal"] }] });
   if (!pal) return;
   try {
     setPending(await invoke("stage_spr_palette", { index: row.index, pal }));
-    setStatus(`Palette of ${row.name} changed (staged); save with Changes….`);
+    setStatus(t("pal-set-status", { name: row.name }));
     refreshPreview();
   } catch (e) {
-    await note("Could not set the palette", errText(e), true);
+    await note(t("pal-set-failed"), errText(e), true);
   }
 }
 

@@ -619,3 +619,131 @@ te-compiling = Compiling …
 te-staging = Staging …
 te-status = { $name } staged. Save with Changes….
 te-status-compiled = { $name } staged (compiled again). Save with Changes….
+
+enc-title = Encrypted archive
+enc-body = This archive is encrypted (GRF Editor's scheme). Enter its password to read the files.
+enc-wrong = This password does not belong to the archive.
+enc-skip = Open without password
+enc-needs = The file table of this archive is encrypted; a password is needed to open it.
+open-another-title = Open another archive?
+open-another-body = { $n ->
+    [one] { $n } pending change of the open archive is not saved in an archive yet. It is kept as a draft and offered again when you open this archive next time.
+   *[other] { $n } pending changes of the open archive are not saved in an archive yet. They are kept as a draft and offered again when you open this archive next time.
+ }
+open-running = Opening { $path } …
+open-failed-status = Could not open the archive
+open-failed = Could not open
+draft-title = Restore unsaved changes?
+draft-body = { $n ->
+    [one] { $n } change from { $when } was not saved in an archive. It was kept as a draft (for example because the app closed).
+   *[other] { $n } changes from { $when } were not saved in an archive. They were kept as a draft (for example because the app closed).
+ }
+draft-archive-changed = The archive itself has changed since then. Check the changes before you save.
+draft-missing = { $n ->
+    [one] { $n } replacement file no longer exists on disk and will be left out.
+   *[other] { $n } replacement files no longer exist on disk and will be left out.
+ }
+draft-more = { $n ->
+    [one] { $n } older draft of this archive follows, one each time you open it.
+   *[other] { $n } older drafts of this archive follow, one each time you open it.
+ }
+draft-later-note = Later keeps this draft for another time; the changes you make now are saved as a draft of their own.
+draft-restore = Restore
+draft-discard = Discard
+draft-later = Later
+draft-restored = { $n ->
+    [one] { $n } change restored
+   *[other] { $n } changes restored
+ }
+draft-restored-skipped = { $restored }, { $skipped } left out
+draft-discarded = Draft discarded
+draft-kept = The draft is kept for another time
+draft-failed = Could not restore the changes
+txt-encoding = Encoding:
+txt-shortened = (shortened)
+txt-edit = Edit…
+txt-edit-title = Edit the text; compiled Lua is compiled again (staged, saved with Changes…)
+pal-adjust = Adjust…
+pal-adjust-title = Shift hue, scale saturation and brightness of a range of colours (staged)
+pal-click-hint = Click a colour to change it.
+pal-click-title = Click a colour to change it
+pal-colour = Colour { $n }
+pal-zero = Index 0 is the transparent colour in the client; its colour is rarely seen.
+pal-number = Colour number { $n } of 255:
+pal-changed = Colour { $n } of { $name } changed (staged); save with Changes….
+pal-read-failed = Could not read the palette
+pal-adjust-heading = Adjust colours of { $name }
+pal-range-note = Colour 0 is the transparent one, so the range starts at 1.
+pal-from = From colour
+pal-to = to
+pal-hue = Hue shift (°)
+pal-sat = Saturation ×
+pal-bri = Brightness ×
+dlg-apply = Apply
+pal-adjusted = Colours of { $name } adjusted (staged); save with Changes….
+pal-failed = Could not change the palette
+pal-pick = Palette for { $name }
+pal-filter = Palette
+pal-set-status = Palette of { $name } changed (staged); save with Changes….
+pal-set-failed = Could not set the palette
+spr-add = Add image…
+spr-add-title = Append a PNG as a new image (staged)
+spr-setpal = Set palette…
+spr-setpal-title = Use the colours of a .pal file (staged)
+spr-pixels = Pixels…
+spr-pixels-title = Draw on this image: pencil, eraser, fill and colour picker on the palette colours (staged)
+spr-replace = Replace…
+spr-replace-title = Replace this image with a PNG (staged, saved with Changes…)
+spr-remove-title = Remove this image; the animation next to it follows (staged)
+spr-replace-pick = PNG for image { $frame } of { $name }
+spr-png-filter = PNG image
+spr-replace-status = Image { $frame } of { $name } staged (colours are mapped to the sprite's palette); the preview shows the result. Save with Changes….
+spr-replace-failed = Could not replace the image
+spr-add-pick = PNG to add to { $name }
+spr-add-status = Image added to { $name } (staged); save with Changes….
+spr-add-failed = Could not add the image
+spr-remove-heading = Remove image { $n }?
+spr-remove-body = Later images move down by one. Layers of the animation next to this sprite that use the image become empty, and later ones follow.
+spr-remove-status = Image { $frame } of { $name } removed (staged); save with Changes….
+spr-remove-failed = Could not remove the image
+pix-error = Pixels
+pix-canvas-aria = Image { $frame }, { $w } by { $h } pixels. Arrow keys move the cursor, Space draws.
+pix-size = { $w } x { $h } px
+pix-readout = { $w } x { $h } px — x { $x }, y { $y }: colour { $c } (#{ $hex })
+pix-readout-t = { $w } x { $h } px — x { $x }, y { $y }: colour { $c } (#{ $hex }), transparent
+pix-pencil = Pencil
+pix-eraser = Eraser
+pix-fill = Fill
+pix-picker = Picker
+pix-zoom = Zoom
+pix-grid = Grid
+pix-revert = Revert
+pix-palette = Palette
+pix-palette-heading = Palette (click a colour; 0 is transparent)
+pix-swatch-zero =  (transparent)
+pix-title = Pixels of image { $frame } — { $name }
+pix-nochange = No pixel changed.
+pix-status = Image { $frame } of { $name } edited (staged); save with Changes….
+pix-failed = Could not stage the pixels
+gat-alt = map, { $x } by { $y } cells
+gat-x-from = x from
+gat-y-from = y from
+gat-to = to
+gat-type-aria = Cell type
+gat-type-nochange = type: no change
+gat-height-ph = no change
+gat-height = height
+gat-set = Set cells
+gat-set-title = Set the type and/or height of the chosen cells (staged, saved with Changes…)
+gat-drag = Drag on the map to choose cells.
+gat-readout = x { $xa }–{ $xb }, y { $ya }–{ $yb }: { $cells }
+gat-cells = { $n ->
+    [one] { $n } cell
+   *[other] { $n } cells
+ }
+gat-select-all = Select all
+gat-need = Choose a cell type and/or a height first.
+gat-status = { $cells } of { $name } changed (staged); save with Changes….
+gat-failed = Could not change the cells
+
+webgl-missing = WebGL 2 is not available in this window.

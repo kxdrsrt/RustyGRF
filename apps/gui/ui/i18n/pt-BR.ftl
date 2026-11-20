@@ -609,3 +609,131 @@ te-compiling = Compilando …
 te-staging = Deixando pendente …
 te-status = { $name } pendente. Salve com “Salvar…”.
 te-status-compiled = { $name } pendente (compilado de novo). Salve com “Salvar…”.
+
+enc-title = Arquivo criptografado
+enc-body = Este arquivo está criptografado (esquema do GRF Editor). Digite a senha para ler os arquivos.
+enc-wrong = Esta senha não pertence ao arquivo.
+enc-skip = Abrir sem senha
+enc-needs = A tabela de arquivos deste arquivo está criptografada; é preciso uma senha para abri-lo.
+open-another-title = Abrir outro arquivo?
+open-another-body = { $n ->
+    [one] { $n } alteração pendente do arquivo aberto ainda não foi salva em um arquivo. Ela é mantida como rascunho e oferecida de novo na próxima vez que você abrir este arquivo.
+   *[other] { $n } alterações pendentes do arquivo aberto ainda não foram salvas em um arquivo. Elas são mantidas como rascunho e oferecidas de novo na próxima vez que você abrir este arquivo.
+ }
+open-running = Abrindo { $path } …
+open-failed-status = Não foi possível abrir o arquivo
+open-failed = Não foi possível abrir
+draft-title = Restaurar as alterações não salvas?
+draft-body = { $n ->
+    [one] { $n } alteração de { $when } não foi salva em um arquivo. Ela foi mantida como rascunho (por exemplo, porque o aplicativo foi fechado).
+   *[other] { $n } alterações de { $when } não foram salvas em um arquivo. Elas foram mantidas como rascunho (por exemplo, porque o aplicativo foi fechado).
+ }
+draft-archive-changed = O próprio arquivo mudou desde então. Confira as alterações antes de salvar.
+draft-missing = { $n ->
+    [one] { $n } arquivo de substituição não existe mais no disco e será deixado de fora.
+   *[other] { $n } arquivos de substituição não existem mais no disco e serão deixados de fora.
+ }
+draft-more = { $n ->
+    [one] Segue { $n } rascunho mais antigo deste arquivo, um a cada vez que você o abrir.
+   *[other] Seguem { $n } rascunhos mais antigos deste arquivo, um a cada vez que você o abrir.
+ }
+draft-later-note = “Depois” mantém este rascunho para outra hora; as alterações que você fizer agora são salvas como um rascunho próprio.
+draft-restore = Restaurar
+draft-discard = Descartar
+draft-later = Depois
+draft-restored = { $n ->
+    [one] { $n } alteração restaurada
+   *[other] { $n } alterações restauradas
+ }
+draft-restored-skipped = { $restored }, { $skipped } deixados de fora
+draft-discarded = Rascunho descartado
+draft-kept = O rascunho foi mantido para outra hora
+draft-failed = Não foi possível restaurar as alterações
+txt-encoding = Codificação:
+txt-shortened = (reduzido)
+txt-edit = Editar…
+txt-edit-title = Editar o texto; o Lua compilado é compilado de novo (pendente, salvo com “Salvar…”)
+pal-adjust = Ajustar…
+pal-adjust-title = Deslocar o matiz e escalar a saturação e o brilho de uma faixa de cores (pendente)
+pal-click-hint = Clique em uma cor para alterá-la.
+pal-click-title = Clique em uma cor para alterá-la
+pal-colour = Cor { $n }
+pal-zero = O índice 0 é a cor transparente no cliente; a cor dele raramente é vista.
+pal-number = Cor número { $n } de 255:
+pal-changed = Cor { $n } de { $name } alterada (pendente); salve com “Salvar…”.
+pal-read-failed = Não foi possível ler a paleta
+pal-adjust-heading = Ajustar as cores de { $name }
+pal-range-note = A cor 0 é a transparente, então a faixa começa em 1.
+pal-from = Da cor
+pal-to = até
+pal-hue = Deslocamento de matiz (°)
+pal-sat = Saturação ×
+pal-bri = Brilho ×
+dlg-apply = Aplicar
+pal-adjusted = Cores de { $name } ajustadas (pendente); salve com “Salvar…”.
+pal-failed = Não foi possível alterar a paleta
+pal-pick = Paleta para { $name }
+pal-filter = Paleta
+pal-set-status = Paleta de { $name } alterada (pendente); salve com “Salvar…”.
+pal-set-failed = Não foi possível definir a paleta
+spr-add = Adicionar imagem…
+spr-add-title = Anexar um PNG como nova imagem (pendente)
+spr-setpal = Definir paleta…
+spr-setpal-title = Usar as cores de um arquivo .pal (pendente)
+spr-pixels = Pixels…
+spr-pixels-title = Desenhar nesta imagem: lápis, borracha, preenchimento e conta-gotas com as cores da paleta (pendente)
+spr-replace = Substituir…
+spr-replace-title = Substituir esta imagem por um PNG (pendente, salvo com “Salvar…”)
+spr-remove-title = Remover esta imagem; a animação ao lado acompanha (pendente)
+spr-replace-pick = PNG para a imagem { $frame } de { $name }
+spr-png-filter = Imagem PNG
+spr-replace-status = Imagem { $frame } de { $name } pendente (as cores são mapeadas para a paleta do sprite); a visualização mostra o resultado. Salve com “Salvar…”.
+spr-replace-failed = Não foi possível substituir a imagem
+spr-add-pick = PNG a adicionar a { $name }
+spr-add-status = Imagem adicionada a { $name } (pendente); salve com “Salvar…”.
+spr-add-failed = Não foi possível adicionar a imagem
+spr-remove-heading = Remover a imagem { $n }?
+spr-remove-body = As imagens seguintes sobem uma posição. As camadas da animação ao lado deste sprite que usam a imagem ficam vazias, e as seguintes acompanham.
+spr-remove-status = Imagem { $frame } de { $name } removida (pendente); salve com “Salvar…”.
+spr-remove-failed = Não foi possível remover a imagem
+pix-error = Pixels
+pix-canvas-aria = Imagem { $frame }, { $w } por { $h } pixels. As setas movem o cursor, a barra de espaço desenha.
+pix-size = { $w } x { $h } px
+pix-readout = { $w } x { $h } px — x { $x }, y { $y }: cor { $c } (#{ $hex })
+pix-readout-t = { $w } x { $h } px — x { $x }, y { $y }: cor { $c } (#{ $hex }), transparente
+pix-pencil = Lápis
+pix-eraser = Borracha
+pix-fill = Preencher
+pix-picker = Conta-gotas
+pix-zoom = Zoom
+pix-grid = Grade
+pix-revert = Reverter
+pix-palette = Paleta
+pix-palette-heading = Paleta (clique em uma cor; 0 é transparente)
+pix-swatch-zero =  (transparente)
+pix-title = Pixels da imagem { $frame } — { $name }
+pix-nochange = Nenhum pixel foi alterado.
+pix-status = Imagem { $frame } de { $name } editada (pendente); salve com “Salvar…”.
+pix-failed = Não foi possível deixar os pixels pendentes
+gat-alt = mapa, { $x } por { $y } células
+gat-x-from = x de
+gat-y-from = y de
+gat-to = até
+gat-type-aria = Tipo de célula
+gat-type-nochange = tipo: sem alteração
+gat-height-ph = sem alteração
+gat-height = altura
+gat-set = Definir células
+gat-set-title = Definir o tipo e/ou a altura das células escolhidas (pendente, salvo com “Salvar…”)
+gat-drag = Arraste no mapa para escolher células.
+gat-readout = x { $xa }–{ $xb }, y { $ya }–{ $yb }: { $cells }
+gat-cells = { $n ->
+    [one] { $n } célula
+   *[other] { $n } células
+ }
+gat-select-all = Selecionar tudo
+gat-need = Escolha primeiro um tipo de célula e/ou uma altura.
+gat-status = { $cells } de { $name } alteradas (pendente); salve com “Salvar…”.
+gat-failed = Não foi possível alterar as células
+
+webgl-missing = WebGL 2 não está disponível nesta janela.

@@ -609,3 +609,131 @@ te-compiling = Compilation …
 te-staging = Mise en attente …
 te-status = { $name } en attente. Enregistrez avec « Enregistrer… ».
 te-status-compiled = { $name } en attente (recompilé). Enregistrez avec « Enregistrer… ».
+
+enc-title = Archive chiffrée
+enc-body = Cette archive est chiffrée (méthode de GRF Editor). Saisissez son mot de passe pour lire les fichiers.
+enc-wrong = Ce mot de passe ne correspond pas à l'archive.
+enc-skip = Ouvrir sans mot de passe
+enc-needs = La table des fichiers de cette archive est chiffrée ; un mot de passe est nécessaire pour l'ouvrir.
+open-another-title = Ouvrir une autre archive ?
+open-another-body = { $n ->
+    [one] { $n } modification en attente de l'archive ouverte n'est pas encore enregistrée dans une archive. Elle est conservée comme brouillon et reproposée à la prochaine ouverture de cette archive.
+   *[other] { $n } modifications en attente de l'archive ouverte ne sont pas encore enregistrées dans une archive. Elles sont conservées comme brouillon et reproposées à la prochaine ouverture de cette archive.
+ }
+open-running = Ouverture de { $path } …
+open-failed-status = Impossible d'ouvrir l'archive
+open-failed = Ouverture impossible
+draft-title = Restaurer les modifications non enregistrées ?
+draft-body = { $n ->
+    [one] { $n } modification du { $when } n'a pas été enregistrée dans une archive. Elle a été conservée comme brouillon (par exemple parce que l'application s'est fermée).
+   *[other] { $n } modifications du { $when } n'ont pas été enregistrées dans une archive. Elles ont été conservées comme brouillon (par exemple parce que l'application s'est fermée).
+ }
+draft-archive-changed = L'archive elle-même a changé depuis. Vérifiez les modifications avant d'enregistrer.
+draft-missing = { $n ->
+    [one] { $n } fichier de remplacement n'existe plus sur le disque et sera omis.
+   *[other] { $n } fichiers de remplacement n'existent plus sur le disque et seront omis.
+ }
+draft-more = { $n ->
+    [one] { $n } brouillon plus ancien de cette archive suit, un à chaque ouverture.
+   *[other] { $n } brouillons plus anciens de cette archive suivent, un à chaque ouverture.
+ }
+draft-later-note = « Plus tard » conserve ce brouillon pour une autre fois ; les modifications que vous faites maintenant sont enregistrées dans un brouillon à part.
+draft-restore = Restaurer
+draft-discard = Abandonner
+draft-later = Plus tard
+draft-restored = { $n ->
+    [one] { $n } modification restaurée
+   *[other] { $n } modifications restaurées
+ }
+draft-restored-skipped = { $restored }, { $skipped } omis
+draft-discarded = Brouillon abandonné
+draft-kept = Le brouillon est conservé pour une autre fois
+draft-failed = Impossible de restaurer les modifications
+txt-encoding = Encodage :
+txt-shortened = (raccourci)
+txt-edit = Modifier…
+txt-edit-title = Modifier le texte ; le Lua compilé est recompilé (en attente, enregistré avec « Enregistrer… »)
+pal-adjust = Ajuster…
+pal-adjust-title = Décaler la teinte et mettre à l'échelle la saturation et la luminosité d'une plage de couleurs (en attente)
+pal-click-hint = Cliquez sur une couleur pour la modifier.
+pal-click-title = Cliquez sur une couleur pour la modifier
+pal-colour = Couleur { $n }
+pal-zero = L'indice 0 est la couleur transparente dans le client ; sa couleur est rarement visible.
+pal-number = Couleur numéro { $n } sur 255 :
+pal-changed = Couleur { $n } de { $name } modifiée (en attente) ; enregistrez avec « Enregistrer… ».
+pal-read-failed = Impossible de lire la palette
+pal-adjust-heading = Ajuster les couleurs de { $name }
+pal-range-note = La couleur 0 est la transparente, la plage commence donc à 1.
+pal-from = De la couleur
+pal-to = à
+pal-hue = Décalage de teinte (°)
+pal-sat = Saturation ×
+pal-bri = Luminosité ×
+dlg-apply = Appliquer
+pal-adjusted = Couleurs de { $name } ajustées (en attente) ; enregistrez avec « Enregistrer… ».
+pal-failed = Impossible de modifier la palette
+pal-pick = Palette pour { $name }
+pal-filter = Palette
+pal-set-status = Palette de { $name } modifiée (en attente) ; enregistrez avec « Enregistrer… ».
+pal-set-failed = Impossible de définir la palette
+spr-add = Ajouter une image…
+spr-add-title = Ajouter un PNG comme nouvelle image (en attente)
+spr-setpal = Définir la palette…
+spr-setpal-title = Utiliser les couleurs d'un fichier .pal (en attente)
+spr-pixels = Pixels…
+spr-pixels-title = Dessiner sur cette image : crayon, gomme, remplissage et pipette avec les couleurs de la palette (en attente)
+spr-replace = Remplacer…
+spr-replace-title = Remplacer cette image par un PNG (en attente, enregistré avec « Enregistrer… »)
+spr-remove-title = Retirer cette image ; l'animation voisine suit (en attente)
+spr-replace-pick = PNG pour l'image { $frame } de { $name }
+spr-png-filter = Image PNG
+spr-replace-status = Image { $frame } de { $name } en attente (les couleurs sont ramenées à la palette du sprite) ; l'aperçu montre le résultat. Enregistrez avec « Enregistrer… ».
+spr-replace-failed = Impossible de remplacer l'image
+spr-add-pick = PNG à ajouter à { $name }
+spr-add-status = Image ajoutée à { $name } (en attente) ; enregistrez avec « Enregistrer… ».
+spr-add-failed = Impossible d'ajouter l'image
+spr-remove-heading = Retirer l'image { $n } ?
+spr-remove-body = Les images suivantes reculent d'une place. Les calques de l'animation voisine de ce sprite qui utilisent l'image deviennent vides, et les suivants suivent.
+spr-remove-status = Image { $frame } de { $name } retirée (en attente) ; enregistrez avec « Enregistrer… ».
+spr-remove-failed = Impossible de retirer l'image
+pix-error = Pixels
+pix-canvas-aria = Image { $frame }, { $w } sur { $h } pixels. Les flèches déplacent le curseur, la barre d'espace dessine.
+pix-size = { $w } x { $h } px
+pix-readout = { $w } x { $h } px — x { $x }, y { $y } : couleur { $c } (#{ $hex })
+pix-readout-t = { $w } x { $h } px — x { $x }, y { $y } : couleur { $c } (#{ $hex }), transparent
+pix-pencil = Crayon
+pix-eraser = Gomme
+pix-fill = Remplir
+pix-picker = Pipette
+pix-zoom = Zoom
+pix-grid = Grille
+pix-revert = Rétablir
+pix-palette = Palette
+pix-palette-heading = Palette (cliquez sur une couleur ; 0 est transparente)
+pix-swatch-zero =  (transparent)
+pix-title = Pixels de l'image { $frame } — { $name }
+pix-nochange = Aucun pixel modifié.
+pix-status = Image { $frame } de { $name } modifiée (en attente) ; enregistrez avec « Enregistrer… ».
+pix-failed = Impossible de mettre les pixels en attente
+gat-alt = carte, { $x } sur { $y } cellules
+gat-x-from = x de
+gat-y-from = y de
+gat-to = à
+gat-type-aria = Type de cellule
+gat-type-nochange = type : inchangé
+gat-height-ph = inchangée
+gat-height = hauteur
+gat-set = Définir les cellules
+gat-set-title = Définir le type et/ou la hauteur des cellules choisies (en attente, enregistré avec « Enregistrer… »)
+gat-drag = Faites glisser sur la carte pour choisir des cellules.
+gat-readout = x { $xa }–{ $xb }, y { $ya }–{ $yb } : { $cells }
+gat-cells = { $n ->
+    [one] { $n } cellule
+   *[other] { $n } cellules
+ }
+gat-select-all = Tout sélectionner
+gat-need = Choisissez d'abord un type de cellule et/ou une hauteur.
+gat-status = { $cells } de { $name } modifiées (en attente) ; enregistrez avec « Enregistrer… ».
+gat-failed = Impossible de modifier les cellules
+
+webgl-missing = WebGL 2 n’est pas disponible dans cette fenêtre.

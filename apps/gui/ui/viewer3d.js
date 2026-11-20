@@ -143,7 +143,7 @@ void main() {
     host.append(canvas);
     const gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
     if (!gl) {
-      canvas.replaceWith(Object.assign(document.createElement("p"), { className: "error", textContent: "WebGL 2 is not available in this window." }));
+      canvas.replaceWith(Object.assign(document.createElement("p"), { className: "error", textContent: window.t ? window.t("webgl-missing") : "WebGL 2 is not available in this window." }));
       return { destroy() {} };
     }
     const prog = gl.createProgram();
@@ -457,7 +457,7 @@ void main() { vec3 c = uHasTex ? texture(uTex, vUv).rgb : vec3(0.2, 0.45, 0.8); 
     host.append(canvas);
     const gl = canvas.getContext("webgl2", { antialias: true, alpha: false });
     if (!gl) {
-      canvas.replaceWith(Object.assign(document.createElement("p"), { className: "error", textContent: "WebGL 2 is not available in this window." }));
+      canvas.replaceWith(Object.assign(document.createElement("p"), { className: "error", textContent: window.t ? window.t("webgl-missing") : "WebGL 2 is not available in this window." }));
       return { destroy() {}, set() {} };
     }
     let dirty = false;

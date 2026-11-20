@@ -598,3 +598,128 @@ te-compiling = Kino-compile …
 te-staging = Ibinibin …
 te-status = Nakabinbin ang { $name }. I-save gamit ang I-save….
 te-status-compiled = Nakabinbin ang { $name } (na-compile muli). I-save gamit ang I-save….
+
+enc-title = Naka-encrypt na archive
+enc-body = Naka-encrypt ang archive na ito (paraan ng GRF Editor). Ilagay ang password nito para mabasa ang mga file.
+enc-wrong = Hindi sa archive na ito ang password na ito.
+enc-skip = Buksan nang walang password
+enc-needs = Naka-encrypt ang file table ng archive na ito; kailangan ng password para buksan ito.
+open-another-title = Magbukas ng ibang archive?
+open-another-body = { $n ->
+    [one] Hindi pa nase-save sa archive ang { $n } nakabinbing pagbabago ng bukas na archive. Itinatago ito bilang draft at iaalok muli sa susunod na pagbukas mo ng archive na ito.
+   *[other] Hindi pa nase-save sa archive ang { $n } nakabinbing pagbabago ng bukas na archive. Itinatago ang mga ito bilang draft at iaalok muli sa susunod na pagbukas mo ng archive na ito.
+ }
+open-running = Binubuksan ang { $path } …
+open-failed-status = Hindi mabuksan ang archive
+open-failed = Hindi mabuksan
+draft-title = Ibalik ang mga hindi na-save na pagbabago?
+draft-body = { $n ->
+    [one] Hindi na-save sa archive ang { $n } pagbabago mula { $when }. Itinago ito bilang draft (halimbawa dahil nagsara ang app).
+   *[other] Hindi na-save sa archive ang { $n } pagbabago mula { $when }. Itinago ang mga ito bilang draft (halimbawa dahil nagsara ang app).
+ }
+draft-archive-changed = Nagbago na ang mismong archive mula noon. Suriin ang mga pagbabago bago mag-save.
+draft-missing = { $n ->
+    [one] Wala na sa disk ang { $n } kapalit na file at hindi ito isasama.
+   *[other] Wala na sa disk ang { $n } kapalit na file at hindi ang mga ito isasama.
+ }
+draft-more = { $n ->
+    [one] May { $n } mas lumang draft pa ng archive na ito, isa sa bawat pagbukas mo.
+   *[other] May { $n } mas lumang draft pa ng archive na ito, isa sa bawat pagbukas mo.
+ }
+draft-later-note = Ang "Mamaya" ay itinatago ang draft na ito para sa ibang pagkakataon; ang mga pagbabagong gagawin mo ngayon ay isasave bilang sariling draft.
+draft-restore = Ibalik
+draft-discard = Itapon
+draft-later = Mamaya
+draft-restored = { $n } pagbabago ang naibalik
+draft-restored-skipped = { $restored }, { $skipped } ang hindi isinama
+draft-discarded = Itinapon ang draft
+draft-kept = Itinatago ang draft para sa ibang pagkakataon
+draft-failed = Hindi maibalik ang mga pagbabago
+txt-encoding = Encoding:
+txt-shortened = (pinaikli)
+txt-edit = I-edit…
+txt-edit-title = I-edit ang teksto; ang naka-compile na Lua ay kino-compile muli (nakabinbin, sine-save gamit ang I-save…)
+pal-adjust = Ayusin…
+pal-adjust-title = Ilipat ang hue at i-scale ang saturation at liwanag ng saklaw ng mga kulay (nakabinbin)
+pal-click-hint = Mag-click ng kulay para baguhin ito.
+pal-click-title = Mag-click ng kulay para baguhin ito
+pal-colour = Kulay { $n }
+pal-zero = Ang index 0 ay ang transparent na kulay sa client; bihirang makita ang kulay nito.
+pal-number = Kulay bilang { $n } sa 255:
+pal-changed = Binago ang kulay { $n } ng { $name } (nakabinbin); i-save gamit ang I-save….
+pal-read-failed = Hindi mabasa ang palette
+pal-adjust-heading = Ayusin ang mga kulay ng { $name }
+pal-range-note = Ang kulay 0 ang transparent, kaya nagsisimula sa 1 ang saklaw.
+pal-from = Mula sa kulay
+pal-to = hanggang
+pal-hue = Paglipat ng hue (°)
+pal-sat = Saturation ×
+pal-bri = Liwanag ×
+dlg-apply = Ilapat
+pal-adjusted = Inayos ang mga kulay ng { $name } (nakabinbin); i-save gamit ang I-save….
+pal-failed = Hindi mabago ang palette
+pal-pick = Palette para sa { $name }
+pal-filter = Palette
+pal-set-status = Binago ang palette ng { $name } (nakabinbin); i-save gamit ang I-save….
+pal-set-failed = Hindi maitakda ang palette
+spr-add = Magdagdag ng larawan…
+spr-add-title = Idagdag ang isang PNG bilang bagong larawan (nakabinbin)
+spr-setpal = Itakda ang palette…
+spr-setpal-title = Gamitin ang mga kulay ng isang .pal file (nakabinbin)
+spr-pixels = Mga pixel…
+spr-pixels-title = Gumuhit sa larawang ito: lapis, pambura, fill at color picker gamit ang mga kulay ng palette (nakabinbin)
+spr-replace = Palitan…
+spr-replace-title = Palitan ang larawang ito ng PNG (nakabinbin, sine-save gamit ang I-save…)
+spr-remove-title = Alisin ang larawang ito; susunod ang katabing animation (nakabinbin)
+spr-replace-pick = PNG para sa larawan { $frame } ng { $name }
+spr-png-filter = Larawang PNG
+spr-replace-status = Nakabinbin ang larawan { $frame } ng { $name } (imamamapa ang mga kulay sa palette ng sprite); ipinapakita ng preview ang resulta. I-save gamit ang I-save….
+spr-replace-failed = Hindi mapalitan ang larawan
+spr-add-pick = PNG na idadagdag sa { $name }
+spr-add-status = Naidagdag ang larawan sa { $name } (nakabinbin); i-save gamit ang I-save….
+spr-add-failed = Hindi maidagdag ang larawan
+spr-remove-heading = Alisin ang larawan { $n }?
+spr-remove-body = Uusad nang isa ang mga susunod na larawan. Magiging walang laman ang mga layer ng katabing animation na gumagamit ng larawan, at susunod ang mga sumusunod.
+spr-remove-status = Inalis ang larawan { $frame } ng { $name } (nakabinbin); i-save gamit ang I-save….
+spr-remove-failed = Hindi maalis ang larawan
+pix-error = Mga pixel
+pix-canvas-aria = Larawan { $frame }, { $w } by { $h } pixel. Ginagalaw ng mga arrow key ang cursor, gumuguhit ang Space.
+pix-size = { $w } x { $h } px
+pix-readout = { $w } x { $h } px — x { $x }, y { $y }: kulay { $c } (#{ $hex })
+pix-readout-t = { $w } x { $h } px — x { $x }, y { $y }: kulay { $c } (#{ $hex }), transparent
+pix-pencil = Lapis
+pix-eraser = Pambura
+pix-fill = Fill
+pix-picker = Picker
+pix-zoom = Zoom
+pix-grid = Grid
+pix-revert = Ibalik
+pix-palette = Palette
+pix-palette-heading = Palette (mag-click ng kulay; transparent ang 0)
+pix-swatch-zero =  (transparent)
+pix-title = Mga pixel ng larawan { $frame } — { $name }
+pix-nochange = Walang pixel na nagbago.
+pix-status = Na-edit ang larawan { $frame } ng { $name } (nakabinbin); i-save gamit ang I-save….
+pix-failed = Hindi maibinbin ang mga pixel
+gat-alt = mapa, { $x } by { $y } na cell
+gat-x-from = x mula
+gat-y-from = y mula
+gat-to = hanggang
+gat-type-aria = Uri ng cell
+gat-type-nochange = uri: walang pagbabago
+gat-height-ph = walang pagbabago
+gat-height = taas
+gat-set = Itakda ang mga cell
+gat-set-title = Itakda ang uri at/o taas ng mga napiling cell (nakabinbin, sine-save gamit ang I-save…)
+gat-drag = I-drag sa mapa para pumili ng mga cell.
+gat-readout = x { $xa }–{ $xb }, y { $ya }–{ $yb }: { $cells }
+gat-cells = { $n ->
+    [one] { $n } cell
+   *[other] { $n } na cell
+ }
+gat-select-all = Piliin lahat
+gat-need = Pumili muna ng uri ng cell at/o taas.
+gat-status = Binago ang { $cells } ng { $name } (nakabinbin); i-save gamit ang I-save….
+gat-failed = Hindi mabago ang mga cell
+
+webgl-missing = Hindi available ang WebGL 2 sa window na ito.

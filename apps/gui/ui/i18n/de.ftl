@@ -609,3 +609,131 @@ te-compiling = Kompiliere …
 te-staging = Merke vor …
 te-status = { $name } vorgemerkt. Mit „Speichern…“ sichern.
 te-status-compiled = { $name } vorgemerkt (neu kompiliert). Mit „Speichern…“ sichern.
+
+enc-title = Verschlüsseltes Archiv
+enc-body = Dieses Archiv ist verschlüsselt (Verfahren von GRF Editor). Gib sein Passwort ein, um die Dateien zu lesen.
+enc-wrong = Dieses Passwort gehört nicht zum Archiv.
+enc-skip = Ohne Passwort öffnen
+enc-needs = Die Dateitabelle dieses Archivs ist verschlüsselt; zum Öffnen wird ein Passwort gebraucht.
+open-another-title = Anderes Archiv öffnen?
+open-another-body = { $n ->
+    [one] { $n } ausstehende Änderung des geöffneten Archivs ist noch in keinem Archiv gespeichert. Sie wird als Entwurf aufbewahrt und beim nächsten Öffnen dieses Archivs wieder angeboten.
+   *[other] { $n } ausstehende Änderungen des geöffneten Archivs sind noch in keinem Archiv gespeichert. Sie werden als Entwurf aufbewahrt und beim nächsten Öffnen dieses Archivs wieder angeboten.
+ }
+open-running = Öffne { $path } …
+open-failed-status = Archiv konnte nicht geöffnet werden
+open-failed = Öffnen nicht möglich
+draft-title = Nicht gespeicherte Änderungen wiederherstellen?
+draft-body = { $n ->
+    [one] { $n } Änderung vom { $when } wurde nicht in einem Archiv gespeichert. Sie wurde als Entwurf aufbewahrt (zum Beispiel, weil die App geschlossen wurde).
+   *[other] { $n } Änderungen vom { $when } wurden nicht in einem Archiv gespeichert. Sie wurden als Entwurf aufbewahrt (zum Beispiel, weil die App geschlossen wurde).
+ }
+draft-archive-changed = Das Archiv selbst hat sich seitdem geändert. Prüfe die Änderungen, bevor du speicherst.
+draft-missing = { $n ->
+    [one] { $n } Ersatzdatei existiert nicht mehr auf der Festplatte und wird weggelassen.
+   *[other] { $n } Ersatzdateien existieren nicht mehr auf der Festplatte und werden weggelassen.
+ }
+draft-more = { $n ->
+    [one] { $n } älterer Entwurf dieses Archivs folgt, einer bei jedem Öffnen.
+   *[other] { $n } ältere Entwürfe dieses Archivs folgen, einer bei jedem Öffnen.
+ }
+draft-later-note = „Später“ hebt diesen Entwurf für ein andermal auf; die Änderungen, die du jetzt machst, werden als eigener Entwurf gesichert.
+draft-restore = Wiederherstellen
+draft-discard = Verwerfen
+draft-later = Später
+draft-restored = { $n ->
+    [one] { $n } Änderung wiederhergestellt
+   *[other] { $n } Änderungen wiederhergestellt
+ }
+draft-restored-skipped = { $restored }, { $skipped } weggelassen
+draft-discarded = Entwurf verworfen
+draft-kept = Der Entwurf bleibt für ein andermal erhalten
+draft-failed = Änderungen konnten nicht wiederhergestellt werden
+txt-encoding = Kodierung:
+txt-shortened = (gekürzt)
+txt-edit = Bearbeiten…
+txt-edit-title = Den Text bearbeiten; kompiliertes Lua wird neu kompiliert (vorgemerkt, wird mit „Speichern…“ gesichert)
+pal-adjust = Anpassen…
+pal-adjust-title = Farbton verschieben sowie Sättigung und Helligkeit eines Farbbereichs skalieren (vorgemerkt)
+pal-click-hint = Klicke eine Farbe an, um sie zu ändern.
+pal-click-title = Klicke eine Farbe an, um sie zu ändern
+pal-colour = Farbe { $n }
+pal-zero = Index 0 ist im Client die durchsichtige Farbe; ihre Farbe ist selten zu sehen.
+pal-number = Farbnummer { $n } von 255:
+pal-changed = Farbe { $n } von { $name } geändert (vorgemerkt); mit „Speichern…“ sichern.
+pal-read-failed = Palette konnte nicht gelesen werden
+pal-adjust-heading = Farben von { $name } anpassen
+pal-range-note = Farbe 0 ist die durchsichtige, der Bereich beginnt daher bei 1.
+pal-from = Von Farbe
+pal-to = bis
+pal-hue = Farbtonverschiebung (°)
+pal-sat = Sättigung ×
+pal-bri = Helligkeit ×
+dlg-apply = Anwenden
+pal-adjusted = Farben von { $name } angepasst (vorgemerkt); mit „Speichern…“ sichern.
+pal-failed = Palette konnte nicht geändert werden
+pal-pick = Palette für { $name }
+pal-filter = Palette
+pal-set-status = Palette von { $name } geändert (vorgemerkt); mit „Speichern…“ sichern.
+pal-set-failed = Palette konnte nicht gesetzt werden
+spr-add = Bild hinzufügen…
+spr-add-title = Ein PNG als neues Bild anhängen (vorgemerkt)
+spr-setpal = Palette setzen…
+spr-setpal-title = Die Farben einer .pal-Datei verwenden (vorgemerkt)
+spr-pixels = Pixel…
+spr-pixels-title = Auf diesem Bild zeichnen: Stift, Radierer, Füllen und Pipette mit den Palettenfarben (vorgemerkt)
+spr-replace = Ersetzen…
+spr-replace-title = Dieses Bild durch ein PNG ersetzen (vorgemerkt, wird mit „Speichern…“ gesichert)
+spr-remove-title = Dieses Bild entfernen; die Animation daneben folgt (vorgemerkt)
+spr-replace-pick = PNG für Bild { $frame } von { $name }
+spr-png-filter = PNG-Bild
+spr-replace-status = Bild { $frame } von { $name } vorgemerkt (Farben werden auf die Palette des Sprites abgebildet); die Vorschau zeigt das Ergebnis. Mit „Speichern…“ sichern.
+spr-replace-failed = Bild konnte nicht ersetzt werden
+spr-add-pick = PNG, das zu { $name } hinzugefügt wird
+spr-add-status = Bild zu { $name } hinzugefügt (vorgemerkt); mit „Speichern…“ sichern.
+spr-add-failed = Bild konnte nicht hinzugefügt werden
+spr-remove-heading = Bild { $n } entfernen?
+spr-remove-body = Spätere Bilder rücken um eins nach. Ebenen der Animation neben diesem Sprite, die das Bild nutzen, werden leer, spätere folgen nach.
+spr-remove-status = Bild { $frame } von { $name } entfernt (vorgemerkt); mit „Speichern…“ sichern.
+spr-remove-failed = Bild konnte nicht entfernt werden
+pix-error = Pixel
+pix-canvas-aria = Bild { $frame }, { $w } mal { $h } Pixel. Pfeiltasten bewegen den Cursor, die Leertaste zeichnet.
+pix-size = { $w } x { $h } px
+pix-readout = { $w } x { $h } px — x { $x }, y { $y }: Farbe { $c } (#{ $hex })
+pix-readout-t = { $w } x { $h } px — x { $x }, y { $y }: Farbe { $c } (#{ $hex }), durchsichtig
+pix-pencil = Stift
+pix-eraser = Radierer
+pix-fill = Füllen
+pix-picker = Pipette
+pix-zoom = Zoom
+pix-grid = Raster
+pix-revert = Zurücksetzen
+pix-palette = Palette
+pix-palette-heading = Palette (Farbe anklicken; 0 ist durchsichtig)
+pix-swatch-zero =  (durchsichtig)
+pix-title = Pixel von Bild { $frame } — { $name }
+pix-nochange = Kein Pixel geändert.
+pix-status = Bild { $frame } von { $name } bearbeitet (vorgemerkt); mit „Speichern…“ sichern.
+pix-failed = Pixel konnten nicht vorgemerkt werden
+gat-alt = Karte, { $x } mal { $y } Zellen
+gat-x-from = x von
+gat-y-from = y von
+gat-to = bis
+gat-type-aria = Zelltyp
+gat-type-nochange = Typ: keine Änderung
+gat-height-ph = keine Änderung
+gat-height = Höhe
+gat-set = Zellen setzen
+gat-set-title = Typ und/oder Höhe der gewählten Zellen setzen (vorgemerkt, wird mit „Speichern…“ gesichert)
+gat-drag = Auf der Karte ziehen, um Zellen zu wählen.
+gat-readout = x { $xa }–{ $xb }, y { $ya }–{ $yb }: { $cells }
+gat-cells = { $n ->
+    [one] { $n } Zelle
+   *[other] { $n } Zellen
+ }
+gat-select-all = Alles wählen
+gat-need = Wähle zuerst einen Zelltyp und/oder eine Höhe.
+gat-status = { $cells } von { $name } geändert (vorgemerkt); mit „Speichern…“ sichern.
+gat-failed = Zellen konnten nicht geändert werden
+
+webgl-missing = WebGL 2 ist in diesem Fenster nicht verfügbar.
