@@ -937,7 +937,21 @@ function resetViewButton(handle) {
 }
 
 const dataUrl = (mime, data) => `data:${mime};base64,${data}`;
-const infoBlock = (lines) => (lines?.length ? el("div", { class: "info" }, el("pre", { text: lines.join("\n") })) : null);
+/** The name of a GAT cell type in the current language. */
+const gatTypeName = (k) => t(k < 0 ? "gat-tn-weird" : k <= 6 ? `gat-tn-${k}` : "gat-tn-4");
+
+/** A line from the backend: plain text, or a catalogue key with its values. */
+function noteText(n) {
+  if (typeof n === "string") return n;
+  const args = { ...n.args };
+  if (n.key === "pvw-n-gat-type") {
+    args.name = gatTypeName(args.k);
+    args.cells = t("gat-cells", { n: args.n });
+  }
+  return t(n.key, args);
+}
+
+const infoBlock = (lines) => (lines?.length ? el("div", { class: "info" }, el("pre", { text: lines.map(noteText).join("\n") })) : null);
 
 function renderPreview(p, row, meta) {
   switch (p.kind) {
@@ -991,7 +1005,7 @@ function renderPreview(p, row, meta) {
               "figure",
               {},
               el("div", { class: "checker" }, palImage(row, f)),
-              el("figcaption", { text: f.label }),
+              el("figcaption", { text: noteText(f.label) }),
               row.name.toLowerCase().endsWith(".spr")
                 ? el(
                     "div",
@@ -1085,7 +1099,7 @@ function renderPreview(p, row, meta) {
       if (p.gat) return gatEditor(row, p);
       return [el("div", { class: "checker" }, el("img", { src: dataUrl("image/png", p.png), width: p.width, height: p.height, alt: "map" })), infoBlock(p.info)];
     case "info":
-      return [el("pre", { text: p.lines.join("\n") })];
+      return [el("pre", { text: p.lines.map(noteText).join("\n") })];
     case "video": {
       const note = el("p", { class: "muted", role: "status" });
       const open = el("button", { type: "button", class: "small", icon: "video", text: t("pvw-video-open"), title: t("pvw-video-open-title"), onclick: async () => {
@@ -1106,7 +1120,7 @@ function renderPreview(p, row, meta) {
     case "hex":
       return [el("div", { class: "muted", text: t("pvw-hex-head", { n: p.size }) }), el("pre", { text: p.dump })];
     default:
-      return [el("p", { class: "placeholder", text: p.text || "" })];
+      return [el("p", { class: "placeholder", text: noteText(p.text || "") })];
   }
 }
 
@@ -1568,7 +1582,7 @@ function gatEditor(row, p) {
   const [lx1, ix1] = field(t("gat-to"), "x1", cx - 1);
   const [ly0, iy0] = field(t("gat-y-from"), "y0", cy - 1);
   const [ly1, iy1] = field(t("gat-to"), "y1", cy - 1);
-  const kind = el("select", { "aria-label": t("gat-type-aria") }, el("option", { value: "", text: t("gat-type-nochange") }), ...types.map(([k, n]) => el("option", { value: String(k), text: `${k}: ${n}` })));
+  const kind = el("select", { "aria-label": t("gat-type-aria") }, el("option", { value: "", text: t("gat-type-nochange") }), ...types.map(([k, n]) => el("option", { value: String(k), text: `${k}: ${gatTypeName(k)}` })));
   const height = el("input", { type: "number", step: "0.5", placeholder: t("gat-height-ph"), class: "narrow wide", "aria-label": t("gat-height") });
   const apply = el("button", { type: "button", class: "small", icon: "edit", text: t("gat-set"), disabled: true, title: t("gat-set-title") });
   const readout = el("span", { class: "muted", text: t("gat-drag") });
@@ -1635,7 +1649,7 @@ function gatEditor(row, p) {
 // ---------- palette editing ----------
 
 function palImage(row, f) {
-  const img = el("img", { src: dataUrl("image/png", f.png), alt: f.label });
+  const img = el("img", { src: dataUrl("image/png", f.png), alt: noteText(f.label) });
   if (row.name.toLowerCase().endsWith(".pal")) {
     img.style.cursor = "crosshair";
     img.style.width = "256px";

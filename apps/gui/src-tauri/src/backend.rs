@@ -675,7 +675,40 @@ pub struct Frame {
     pub png: String,
     pub width: u32,
     pub height: u32,
-    pub label: String,
+    pub label: Note,
+}
+
+/// A line of text for the UI. `Key` carries a catalogue key and its values, so the UI can
+/// show it in its own language; `Plain` is shown as it is (names, messages from the libraries).
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum Note {
+    Plain(String),
+    Key {
+        key: &'static str,
+        args: serde_json::Value,
+    },
+}
+
+impl From<String> for Note {
+    fn from(s: String) -> Self {
+        Note::Plain(s)
+    }
+}
+
+impl From<&str> for Note {
+    fn from(s: &str) -> Self {
+        Note::Plain(s.into())
+    }
+}
+
+macro_rules! note {
+    ($key:literal) => {
+        Note::Key { key: $key, args: serde_json::Value::Null }
+    };
+    ($key:expr, $($args:tt)+) => {
+        Note::Key { key: $key, args: serde_json::json!({ $($args)+ }) }
+    };
 }
 
 /// The ground of a map as the file stores it, packed: 36 bytes per tile (8 `f32` uv, `u16` texture
@@ -793,7 +826,7 @@ pub enum Preview {
     },
     Frames {
         frames: Vec<Frame>,
-        info: Vec<String>,
+        info: Vec<Note>,
     },
     Animation {
         gif: String,
@@ -803,7 +836,7 @@ pub enum Preview {
         actions: usize,
         frames: usize,
         interval_ms: u32,
-        info: Vec<String>,
+        info: Vec<Note>,
         note: Option<String>,
     },
     Scene {
@@ -813,7 +846,7 @@ pub enum Preview {
         instances: Vec<InstanceOut>,
         light: LightOut,
         water: Option<WaterOut>,
-        info: Vec<String>,
+        info: Vec<Note>,
     },
     Model {
         nodes: Vec<ModelNodeOut>,
@@ -826,7 +859,7 @@ pub enum Preview {
         max: [f32; 3],
         alpha: f32,
         triangles: usize,
-        info: Vec<String>,
+        info: Vec<Note>,
     },
     Effect {
         gif: String,
@@ -834,19 +867,19 @@ pub enum Preview {
         height: u32,
         frames: usize,
         fps: u32,
-        info: Vec<String>,
+        info: Vec<Note>,
     },
     Map {
         png: String,
         width: u32,
         height: u32,
-        info: Vec<String>,
+        info: Vec<Note>,
         /// Set for a GAT: its size in cells, the pixels per cell in the picture and the cell types.
         gat: Option<GatMeta>,
     },
     Info {
         title: String,
-        lines: Vec<String>,
+        lines: Vec<Note>,
     },
     Hex {
         dump: String,
@@ -862,7 +895,7 @@ pub enum Preview {
         size: u32,
     },
     Message {
-        text: String,
+        text: Note,
     },
 }
 
@@ -1205,7 +1238,7 @@ fn b64(bytes: &[u8]) -> String {
     B64.encode(bytes)
 }
 
-fn png_frame(img: &RgbaImage, label: String) -> Option<Frame> {
+fn png_frame(img: &RgbaImage, label: Note) -> Option<Frame> {
     Some(Frame {
         png: b64(&rgba_to_png(img).ok()?),
         width: u32::from(img.width),
@@ -2403,12 +2436,12 @@ impl Session {
         let entry = self.arc.entry(index).map_err(|e| e.to_string())?;
         if !entry.is_file() {
             return Ok(Preview::Message {
-                text: "Empty marker entry".into(),
+                text: note!("pvw-n-empty-marker"),
             });
         }
         let data = match self.read_working(index) {
             Ok(d) => d,
-            Err(e) => return Ok(Preview::Message { text: e }),
+            Err(e) => return Ok(Preview::Message { text: e.into() }),
         };
         let kind = ext(&name);
         Ok(match kind.as_str() {
@@ -2450,7 +2483,7 @@ impl Session {
                     data: b64(&pcm),
                 },
                 Err(e) => Preview::Message {
-                    text: format!("This sound cannot be played here: {e}"),
+                    text: note!("pvw-n-sound-fail", "error": e.to_string()),
                 },
             },
             "mp3" => Preview::Audio {
@@ -2475,21 +2508,22 @@ impl Session {
                     pixels: px,
                 };
                 Preview::Frames {
-                    frames: png_frame(&img, "256 colours (index 0 is transparent)".into())
+                    frames: png_frame(&img, note!("pvw-n-palette-label"))
                         .into_iter()
                         .collect(),
-                    info: vec!["Palette: 256 colours".into()],
+                    info: vec![note!("pvw-n-palette")],
                 }
             }
             "gat" => {
                 let g = Gat::parse(&data).map_err(|e| e.to_string())?;
                 let (lo, hi) = g.height_range();
-                let mut info = vec![format!(
-                    "GAT {} - {} x {} cells, heights {lo:.1} to {hi:.1}",
-                    g.version, g.width, g.height
+                let mut info = vec![note!(
+                    "pvw-n-gat",
+                    "version": g.version.to_string(), "w": g.width, "h": g.height,
+                    "lo": format!("{lo:.1}"), "hi": format!("{hi:.1}")
                 )];
                 for (k, n) in g.type_counts() {
-                    info.push(format!("type {k} ({}): {n} cells", gat::type_name(k)));
+                    info.push(note!("pvw-n-gat-type", "k": k, "n": n));
                 }
                 let img = g.to_image().ok_or("map too large")?;
                 let s = if img.width < 200 {
@@ -2561,7 +2595,7 @@ impl Session {
                             }
                         }
                         Err(e) => Preview::Message {
-                            text: format!("Compiled Lua (bytecode) that cannot be shown yet: {e}"),
+                            text: note!("pvw-n-luac-fail", "error": e.to_string()),
                         },
                     }
                 } else {
@@ -2768,14 +2802,10 @@ impl Session {
                 cubes.extend(v.to_le_bytes());
             }
         }
-        info.push(format!(
-            "GND {} - {} x {} cells, {} tiles, {} lightmaps, {} textures",
-            g.version,
-            g.width,
-            g.height,
-            g.tiles.len(),
-            g.lightmap_count,
-            g.textures.len()
+        info.push(note!(
+            "pvw-n-gnd",
+            "version": g.version.to_string(), "w": g.width, "h": g.height,
+            "tiles": g.tiles.len(), "lightmaps": g.lightmap_count, "textures": g.textures.len()
         ));
         let ground = GroundOut {
             width: g.width,
@@ -2850,10 +2880,10 @@ impl Session {
                 });
             }
             let (m, l, s_, e) = r.object_counts();
-            info.push(format!(
-                "RSW {} - ground {}, {m} models, {l} lights, {s_} sounds, {e} effects",
-                r.version,
-                self.shown(&rsw::text(&r.ground))
+            info.push(note!(
+                "pvw-n-rsw",
+                "version": r.version.to_string(), "ground": self.shown(&rsw::text(&r.ground)),
+                "models": m, "lights": l, "sounds": s_, "effects": e
             ));
             let mut by_model: HashMap<Vec<u8>, Option<usize>> = HashMap::new();
             let mut missing: Vec<String> = Vec::new();
@@ -2930,36 +2960,23 @@ impl Session {
                     },
                 });
             }
-            info.push(format!(
-                "{} model instances of {} different models{}",
-                instances.len(),
-                models.len(),
-                if missing.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " ({} not found: {})",
-                        missing.len(),
-                        missing
-                            .iter()
-                            .take(5)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                }
+            info.push(note!(
+                "pvw-n-instances",
+                "instances": instances.len(), "models": models.len()
             ));
+            if !missing.is_empty() {
+                info.push(note!(
+                    "pvw-n-models-missing",
+                    "n": missing.len(),
+                    "names": missing.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
         }
         let missing_tex = pool.out.iter().filter(|t| t.png.is_none()).count();
-        info.push(format!(
-            "{} textures{}",
-            pool.out.len(),
-            if missing_tex > 0 {
-                format!(" ({missing_tex} missing)")
-            } else {
-                String::new()
-            }
-        ));
+        info.push(note!("pvw-n-textures", "n": pool.out.len()));
+        if missing_tex > 0 {
+            info.push(note!("pvw-n-textures-missing", "n": missing_tex));
+        }
         Ok(Preview::Scene {
             textures: pool.out,
             ground: Some(ground),
@@ -3011,34 +3028,23 @@ impl Session {
             .iter()
             .filter(|t| t.png.is_none() && !t.name.is_empty())
             .count();
-        let mut info = vec![format!(
-            "RSM {} - {} nodes, {} triangles, {} textures{}{}",
-            model.version,
-            model.nodes.len(),
-            posed.triangles,
-            pool.out.len(),
-            if missing > 0 {
-                format!(" ({missing} missing)")
-            } else {
-                String::new()
-            },
-            if duration > 0.0 {
-                format!(", animation loops every {:.1} s", duration / 1000.0)
-            } else {
-                String::new()
-            }
+        let mut info = vec![note!(
+            "pvw-n-rsm",
+            "version": model.version.to_string(), "nodes": model.nodes.len(),
+            "triangles": posed.triangles, "textures": pool.out.len()
         )];
+        if missing > 0 {
+            info.push(note!("pvw-n-textures-missing", "n": missing));
+        }
+        if duration > 0.0 {
+            info.push(note!("pvw-n-rsm-loop", "secs": format!("{:.1}", duration / 1000.0)));
+        }
         for n in &model.nodes {
-            info.push(format!(
-                "node {} ({} vertices, {} faces){}",
-                self.shown_bytes(&n.name),
-                n.vertices.len(),
-                n.faces.len(),
-                if n.rot_keys.len() > 1 || n.pos_keys.len() > 1 || n.scale_keys.len() > 1 {
-                    ", moves"
-                } else {
-                    ""
-                }
+            let moves = n.rot_keys.len() > 1 || n.pos_keys.len() > 1 || n.scale_keys.len() > 1;
+            info.push(note!(
+                if moves { "pvw-n-node-moves" } else { "pvw-n-node" },
+                "name": self.shown_bytes(&n.name),
+                "v": n.vertices.len(), "f": n.faces.len()
             ));
         }
         Ok(Preview::Model {
@@ -3092,21 +3098,24 @@ impl Session {
         let delay = ((100.0 * step as f32 / fps as f32).round().max(2.0)) as u16;
         let gif =
             encode_gif(&canvases, &vec![delay; canvases.len()], 1).map_err(|e| e.to_string())?;
-        let mut info = vec![format!(
-            "STR - {fps} fps, {total} frames{}, {} layers, {} textures",
-            if step > 1 {
-                format!(" (every {step}th shown)")
-            } else {
-                String::new()
-            },
-            s.layers.len(),
-            textures.len() + missing.len()
+        let mut info = vec![note!(
+            "pvw-n-str",
+            "fps": fps, "frames": total, "layers": s.layers.len(),
+            "textures": textures.len() + missing.len()
         )];
-        if !missing.is_empty() {
-            info.push(format!("missing textures ({}):", missing.len()));
-            info.extend(missing.iter().take(12).map(|m| format!("  {m}")));
+        if step > 1 {
+            info.push(note!("pvw-n-str-step", "step": step));
         }
-        info.push("Simplified preview: blend modes and key animation as in the client, no lighting, shown on a dark background.".into());
+        if !missing.is_empty() {
+            info.push(note!("pvw-n-str-missing", "n": missing.len()));
+            info.extend(
+                missing
+                    .iter()
+                    .take(12)
+                    .map(|m| Note::Plain(format!("  {m}"))),
+            );
+        }
+        info.push(note!("pvw-n-str-simple"));
         Ok(Preview::Effect {
             gif: b64(&gif),
             width: canvases[0].width,
@@ -3133,45 +3142,40 @@ impl Session {
     fn preview_spr(&self, data: &[u8]) -> Result<Preview, String> {
         let spr = Spr::parse(data).map_err(|e| e.to_string())?;
         let frames = spr.frames_rgba();
-        let mut info = vec![format!(
-            "SPR {} - {} palette images, {} true-colour images",
-            spr.version,
-            spr.indexed.len(),
-            spr.rgba.len()
+        let mut info = vec![note!(
+            "pvw-n-spr",
+            "version": spr.version.to_string(), "pal": spr.indexed.len(), "rgba": spr.rgba.len()
         )];
-        info.extend(spr.warnings.iter().map(|w| format!("warning: {w}")));
+        info.extend(
+            spr.warnings
+                .iter()
+                .map(|w| note!("pvw-n-warning", "text": w)),
+        );
         if frames.len() > MAX_SPR_FRAMES {
-            info.push(format!(
-                "showing the first {MAX_SPR_FRAMES} of {} images",
-                frames.len()
-            ));
+            info.push(note!("pvw-n-spr-limit", "shown": MAX_SPR_FRAMES, "total": frames.len()));
         }
         let out = frames
             .iter()
             .take(MAX_SPR_FRAMES)
             .enumerate()
-            .filter_map(|(i, f)| png_frame(f, format!("{i}: {} x {}", f.width, f.height)))
+            .filter_map(|(i, f)| png_frame(f, format!("{i}: {} x {}", f.width, f.height).into()))
             .collect();
         Ok(Preview::Frames { frames: out, info })
     }
 
     fn preview_act(&self, index: usize, data: &[u8], action: usize) -> Result<Preview, String> {
         let act = Act::parse(data).map_err(|e| e.to_string())?;
-        let mut info = vec![format!(
-            "ACT {} - {} actions, {} frames, {} layers",
-            act.version,
-            act.actions.len(),
-            act.actions.iter().map(|a| a.frames.len()).sum::<usize>(),
-            act.layers().count()
+        let mut info = vec![note!(
+            "pvw-n-act",
+            "version": act.version.to_string(), "actions": act.actions.len(),
+            "frames": act.actions.iter().map(|a| a.frames.len()).sum::<usize>(),
+            "layers": act.layers().count()
         )];
         let Some(si) = self.sibling(index, "spr") else {
             return Ok(Preview::Info {
                 title: "Animation".into(),
                 lines: {
-                    info.push(
-                        "The matching .spr is not in this archive, so there is nothing to draw."
-                            .into(),
-                    );
+                    info.push(note!("pvw-n-act-nospr"));
                     info
                 },
             });
@@ -3181,14 +3185,14 @@ impl Session {
         let action = action.min(actions.saturating_sub(1));
         let Some(a) = act.actions.get(action) else {
             return Ok(Preview::Message {
-                text: "The animation has no actions".into(),
+                text: note!("pvw-n-act-none"),
             });
         };
         let Some(bounds) =
             bounds_of(&act, &spr, action, 0..a.frames.len()).map_err(|e| e.to_string())?
         else {
             return Ok(Preview::Message {
-                text: format!("Action {action} draws nothing"),
+                text: note!("pvw-n-act-empty", "action": action),
             });
         };
         let scale = if bounds.width() <= 80 && bounds.height() <= 80 {
@@ -3351,6 +3355,17 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The number of cells of a type in a GAT preview, from its info lines.
+    fn gat_cells(info: &[Note], kind: i64) -> Option<u64> {
+        info.iter().find_map(|l| match l {
+            Note::Key {
+                key: "pvw-n-gat-type",
+                args,
+            } if args["k"] == kind => args["n"].as_u64(),
+            _ => None,
+        })
+    }
     use rgrf_core::build::{BuildOptions, build};
     use std::fs;
 
@@ -3477,11 +3492,7 @@ mod tests {
         let Preview::Map { info, .. } = s.preview(i, None).unwrap() else {
             panic!()
         };
-        assert!(
-            info.iter()
-                .any(|l| l.contains("type 1") && l.contains("4 cells")),
-            "{info:?}"
-        );
+        assert_eq!(gat_cells(&info, 1), Some(4), "{info:?}");
         // saved as a new archive and opened again, the map has the new cells
         let out = dir.join("edited.grf");
         let r = save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
@@ -3491,17 +3502,13 @@ mod tests {
         let Preview::Map { info, .. } = again.preview(j, None).unwrap() else {
             panic!()
         };
-        assert!(
-            info.iter()
-                .any(|l| l.contains("type 1") && l.contains("4 cells")),
-            "{info:?}"
-        );
+        assert_eq!(gat_cells(&info, 1), Some(4), "{info:?}");
         // and the original archive is untouched
         let orig = Session::open(&grf).unwrap();
         let Preview::Map { info, .. } = orig.preview(find(&orig, "map.gat"), None).unwrap() else {
             panic!()
         };
-        assert!(info.iter().any(|l| l.contains("type 5")), "{info:?}");
+        assert!(gat_cells(&info, 5).is_some(), "{info:?}");
         let _ = &mut again;
         // wrong input stages nothing
         let bad = GatEdit {
@@ -3720,7 +3727,9 @@ mod tests {
             Preview::Frames { frames, info } => {
                 assert_eq!(frames.len(), 1);
                 assert_eq!((frames[0].width, frames[0].height), (2, 2));
-                assert!(info[0].starts_with("SPR 2.1"));
+                assert!(
+                    matches!(&info[0], Note::Key { key: "pvw-n-spr", args } if args["version"] == "2.1")
+                );
             }
             other => panic!("{other:?}"),
         }
@@ -3732,7 +3741,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!((width, height), (8, 8), "small maps are enlarged");
-                assert!(info.iter().any(|l| l.contains("not walkable")));
+                assert!(gat_cells(&info, 1).is_some(), "{info:?}");
             }
             other => panic!("{other:?}"),
         }
@@ -3981,7 +3990,7 @@ mod tests {
         s.stage_remove(&[readme]).unwrap();
         assert!(matches!(
             s.preview(readme, None).unwrap(),
-            Preview::Message { text } if text.contains("removal")
+            Preview::Message { text: Note::Plain(t) } if t.contains("removal")
         ));
         let mut r = Session::open(&out).unwrap();
         let (spr_i, act_i) = (find(&mut r, "a.spr"), find(&mut r, "a.act"));

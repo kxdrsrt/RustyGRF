@@ -15,7 +15,9 @@
 
 **Auch Hex-Editor, beide Dialoge „Bilder verkleinern“, die Vorschau (Kopfzeile, Ordner, Animation, 3D-Modell und Karte mit allen Schaltern, Effekt, Video, Hex), „Bild speichern“, „Karte extrahieren“, der ACT-Editor (Ebenen, Anker, Zwischenbilder, Referenzen, Sound, Intervall) Text-/Lua-Editor, SPR-Bilder (ersetzen, hinzufügen, entfernen), Pixel-Editor, Paletten-Bearbeitung, Karten-Zellen-Editor (GAT), Passwort- und Entwurfsdialog sowie die Statuszeile beim Öffnen sind umgestellt. **Alle Texte der Oberfläche in `app.js` laufen jetzt über den Katalog.** (674 Schlüssel).**
 
-**Noch nicht umgestellt (erscheint auf Englisch):** Texte, die das Rust-Backend liefert (Info-Zeilen der Vorschau wie „ACT 2.5 - 40 actions“, „256 colours …“, Fehlermeldungen und Statusmeldungen aus `rgrf-core`); dafür braucht es Fehlercodes mit Parametern (siehe Plan unten). Außerdem die Menüpunkte, die das Betriebssystem selbst liefert (die übersetzt es nach der Systemsprache).
+**Info-Zeilen der Vorschau (2026-11-20):** Das Backend liefert sie als `Note`: entweder Klartext (Namen, Meldungen der Bibliotheken) oder ein Katalogschlüssel mit Werten (`{key: "pvw-n-spr", args: {…}}`, Schlüssel `pvw-n-*`). Die Oberfläche übersetzt sie in `noteText()`; die Namen der GAT-Zelltypen stehen als `gat-tn-*` im Katalog. Die Tests prüfen Schlüssel und Werte statt englischer Sätze. Stand: 710 Schlüssel. Zusammengesetzte Sätze mit Mehrzahl („1 Texturen“) sind noch nicht in allen Zeilen sauber.
+
+**Noch nicht umgestellt (erscheint auf Englisch):** Fehlermeldungen und Statusmeldungen aus dem Rust-Teil (siehe Plan unten) sowie die Menüpunkte, die das Betriebssystem selbst liefert (die übersetzt es nach der Systemsprache).
 
 **Nicht geprüft:** Aussehen aller Sprachen im echten Tauri-Fenster (nur im Browser mit dem echten Backend: Deutsch, Koreanisch, Pseudo, Japanisch, Filipino umgeschaltet, keine Skriptfehler); Mindestgröße 900 × 640 mit allen Sprachen und den Dialogen; Windows/Linux-Schriften für CJK; **die Übersetzungen selbst** (maschineller Entwurf; besonders die Erklärtexte, Verschlüsselung und Datenverlust gehören von Muttersprachlern gelesen).
 
@@ -43,7 +45,7 @@
 Aus `app.js`, `index.html`, `viewer3d.js` und `lib.rs` per Suchmuster gezählt: etwa **500 bis 700 Texte**. Gezählt wurden Beschriftungen (`text:`, `title:`, `label:`), Dialogtitel, Texte im HTML und 18 Menüeinträge; die Zahl ist eine **Untergrenze**, weil viele Sätze aus Teilen zusammengesetzt werden. Zu bereinigen sind vorher:
 - **22 Stellen mit „(s)“** („3 pending change(s)“): braucht echte Mehrzahlformen.
 - **etwa 45 Sätze mit eingesetzten Werten** (`${n} files …`): Wortstellung ist in anderen Sprachen anders, deshalb ein Satz mit Platzhaltern statt zusammengesetzter Stücke.
-- **Fehlertexte aus dem Rust-Teil** (etwa 85 Stellen im Backend): heute fertige englische Sätze. Besser: stabile **Fehlercodes mit Parametern** (`{code: "name_collision", path: …}`), die die Oberfläche übersetzt. Die rohe Meldung bleibt für das Protokoll.
+- **Fehlertexte aus dem Rust-Teil** (etwa 85 Stellen im Backend): heute fertige englische Sätze. Der Weg dafür ist mit `Note` schon gelegt (Info-Zeilen laufen so); Fehler (`Result<_, String>`) müssten auf einen Fehlertyp mit Schlüssel umgestellt werden. Besser: stabile **Fehlercodes mit Parametern** (`{code: "name_collision", path: …}`), die die Oberfläche übersetzt. Die rohe Meldung bleibt für das Protokoll.
 
 ## Technik (Empfehlung, Entscheidung offen)
 

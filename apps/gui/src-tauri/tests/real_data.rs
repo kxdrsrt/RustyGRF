@@ -3,7 +3,12 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use rustygrf_gui_lib::backend::{Preview, Session};
+use rustygrf_gui_lib::backend::{Note, Preview, Session};
+
+/// Whether a preview line is the catalogue line `key` for this format version.
+fn is_note(n: &Note, key: &str, version: &str) -> bool {
+    matches!(n, Note::Key { key: k, args } if *k == key && args["version"] == version)
+}
 
 fn open() -> Option<Session> {
     let Some(base) = std::env::var_os("RGRF_TESTDATA") else {
@@ -103,7 +108,7 @@ fn previews_of_real_files() {
                 (624, 784),
                 "312 x 392 cells, enlarged twice"
             );
-            assert!(info[0].starts_with("GAT 1.2"));
+            assert!(is_note(&info[0], "pvw-n-gat", "1.2"));
         }
         other => panic!("{other:?}"),
     }
@@ -129,7 +134,7 @@ fn previews_of_real_files() {
             let water = water.unwrap();
             assert_eq!(water.frames.len(), 32, "the whole water cycle is found");
             assert!(water.frame_ms > 0.0);
-            assert!(info[1].contains("RSW 2.1"), "{info:?}");
+            assert!(is_note(&info[1], "pvw-n-rsw", "2.1"), "{info:?}");
             assert!(
                 instances
                     .iter()
@@ -291,7 +296,7 @@ fn previews_of_real_files() {
     match s.preview(spr, None).unwrap() {
         Preview::Frames { frames, info } => {
             assert!(frames.len() > 10, "{} frames", frames.len());
-            assert!(info[0].starts_with("SPR 2.1"));
+            assert!(is_note(&info[0], "pvw-n-spr", "2.1"));
         }
         other => panic!("{other:?}"),
     }
