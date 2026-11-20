@@ -1315,7 +1315,7 @@ pub fn export_selection(
             method,
             format: Format::V200,
             names: NameMode::Cp1252,
-            dedupe: ext.as_deref() != Some("gpf"),
+            dedupe: !matches!(ext.as_deref(), Some("gpf" | "gsf")),
             ..BuildOptions::default()
         };
         build(&tmp, dst, &opts, ctl).map_err(|e| e.to_string())

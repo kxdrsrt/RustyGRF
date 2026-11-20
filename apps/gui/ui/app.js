@@ -115,7 +115,7 @@ async function chooseArchive() {
   const path = await T.dialog.open({
     multiple: false,
     directory: false,
-    filters: [{ name: "GRF, GPF, Thor and RGZ archives", extensions: ["grf", "gpf", "thor", "rgz"] }],
+    filters: [{ name: "GRF, GPF, GSF, Thor and RGZ archives", extensions: ["grf", "gpf", "gsf", "thor", "rgz"] }],
   });
   if (path) await openPath(Array.isArray(path) ? path[0] : path);
 }
@@ -159,7 +159,7 @@ async function openWithKey(path) {
 /** The backend refused because another window shows the archive (and brought that window forward). */
 const isOpenElsewhere = (e) => typeof e === "string" && e.includes('"err-open-elsewhere"');
 /** A new archive made by File › New: an empty GRF in the app's folder, named for its type. */
-const untitledKind = (path) => /untitled-\d+\.(grf|gpf|rgz|thor)$/i.exec(path || "")?.[1].toLowerCase() || null;
+const untitledKind = (path) => /untitled-\d+\.(grf|gpf|gsf|rgz|thor)$/i.exec(path || "")?.[1].toLowerCase() || null;
 
 async function openPath(path, force = false) {
   // a window shows one archive: another one opens in a new window (or comes forward in its own)
@@ -2605,7 +2605,7 @@ async function saveInPlace(req) {
   }
 }
 
-const SAVE_TYPES = { grf: "GRF", gpf: "GPF", thor: "Thor", rgz: "RGZ" };
+const SAVE_TYPES = { grf: "GRF", gpf: "GPF", gsf: "GSF", thor: "Thor", rgz: "RGZ" };
 const extOfPath = (p) => (/\.([a-z0-9]+)$/i.exec(p || "")?.[1] || "grf").toLowerCase();
 
 /**
@@ -2742,7 +2742,7 @@ async function doHashes() {
 /** Tools › Compare: what differs from another archive, and those differences as a patch. */
 async function doCompare() {
   if (!S.info) return;
-  const other = await T.dialog.open({ multiple: false, directory: false, title: t("cmp-pick"), filters: [{ name: "GRF, GPF, Thor, RGZ", extensions: ["grf", "gpf", "thor", "rgz"] }] });
+  const other = await T.dialog.open({ multiple: false, directory: false, title: t("cmp-pick"), filters: [{ name: "GRF, GPF, GSF, Thor, RGZ", extensions: ["grf", "gpf", "gsf", "thor", "rgz"] }] });
   if (!other) return;
   const job = showJob(t("cmp-running"));
   let r;
@@ -3005,7 +3005,7 @@ async function doBuild() {
 }
 
 async function doMerge() {
-  const picked = await T.dialog.open({ multiple: true, directory: false, title: t("merge-pick"), filters: [{ name: "GRF, GPF, Thor and RGZ archives", extensions: ["grf", "gpf", "thor", "rgz"] }] });
+  const picked = await T.dialog.open({ multiple: true, directory: false, title: t("merge-pick"), filters: [{ name: "GRF, GPF, GSF, Thor and RGZ archives", extensions: ["grf", "gpf", "gsf", "thor", "rgz"] }] });
   const paths = Array.isArray(picked) ? [...picked] : picked ? [picked] : [];
   if (paths.length < 2) {
     if (paths.length) await note(t("merge-title"), t("merge-need-two"), true);
@@ -3731,7 +3731,7 @@ async function exportRows(list, row) {
   const go = await ask(t("exp-title"), [el("p", { text: t("exp-intro", { n: indices.length }) }), el("div", { class: "form" }, el("label", {}, `${t("exp-method")} `, method)), el("p", { class: "muted", text: t("exp-note") })], [{ label: t("exp-choose"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   const base = baseOf(row.name).replace(/\.[^.]+$/, "") || "export";
-  const dst = await T.dialog.save({ title: t("exp-save-as"), defaultPath: `${base}.grf`, filters: [{ name: "GRF, GPF", extensions: ["grf", "gpf"] }] });
+  const dst = await T.dialog.save({ title: t("exp-save-as"), defaultPath: `${base}.grf`, filters: [{ name: "GRF, GPF, GSF", extensions: ["grf", "gpf", "gsf"] }] });
   if (!dst) return;
   const job = showJob(t("exp-running"));
   try {

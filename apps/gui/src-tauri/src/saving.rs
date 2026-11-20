@@ -374,7 +374,7 @@ fn same_content(dst: &Path, files: &[(GrfPath, Vec<u8>)]) -> Result<bool, String
 /// The file name of a new archive of `kind`; the page knows such a file as unsaved by this name.
 pub fn untitled_name(kind: &str, stamp: u128) -> Result<String, String> {
     match kind {
-        "grf" | "gpf" | "rgz" | "thor" => Ok(format!("untitled-{stamp}.{kind}")),
+        "grf" | "gpf" | "gsf" | "rgz" | "thor" => Ok(format!("untitled-{stamp}.{kind}")),
         other => Err(format!("unknown archive type '{other}'")),
     }
 }
@@ -627,7 +627,7 @@ mod tests {
         std::fs::write(&f, b"hello").unwrap();
         s.stage_add(r"data\a.txt", &f).unwrap();
         let plan = s.edit_plan().unwrap();
-        for ext in ["grf", "gpf", "thor", "rgz"] {
+        for ext in ["grf", "gpf", "gsf", "thor", "rgz"] {
             let req = SaveRequest {
                 dst: d.join(format!("out.{ext}")),
                 ..SaveRequest::default()

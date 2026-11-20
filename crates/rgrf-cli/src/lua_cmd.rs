@@ -76,7 +76,7 @@ pub fn check(input: &Path, pattern: Option<&str>, names: NameMode, json: bool) -
             })
             .collect::<Result<_>>()?
     } else if input.extension().is_some_and(|e| {
-        ["grf", "gpf", "thor", "rgz"]
+        ["grf", "gpf", "gsf", "thor", "rgz"]
             .iter()
             .any(|x| e.eq_ignore_ascii_case(x))
     }) {

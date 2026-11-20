@@ -111,6 +111,8 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 | MP3/OGG bearbeiten | – (bräuchte einen Decoder und einen Encoder) | ❌ |
 | MCP-Werkzeug für Klänge | – | ❌ |
 
+**GSF („Gravity Secure Patch“, 2026-11-21):** GRF Editor liest `.gsf` mit demselben Leser wie `.grf`/`.gpf` (`GrfContainerProvider`, `GrfHolder.Merge`: ein Fall `.gsf` neben `.grf` und `.gpf`; ein eigenes Format gibt es dort nicht). RustyGRF öffnet Archive nach ihrer Kennung, nicht nach der Endung, und speichert `.gsf` jetzt als GRF; „Öffnen“, „Zusammenführen“, „Vergleichen“, „Speichern unter“ und die Dateizuordnung kennen die Endung. Nicht geprüft: eine echte `.gsf` von Gravity (keine Beispieldatei vorhanden). **cnRO:** in GRF Editor ist die Schlüsseltabelle `CnRODefaultProtectedKeys` leer; öffentliche Quellen dazu gibt es nicht, die Schlüssel sind ein Geheimnis von Gravity/dem Betreiber. Ohne eine Beispieldatei samt Schlüsselblock lässt sich das nicht bauen.
+
 ## Was RustyGRF anders machen soll
 - Alles in **einer** App und **einer** Bibliothek (GRF Editor, ACT Editor und Palette Editor sind getrennte Programme).
 - Dieselbe Funktion in CLI und MCP, damit ein Agent Sprites prüfen und Archive bauen kann.

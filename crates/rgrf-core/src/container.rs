@@ -20,7 +20,8 @@ const MAX_KEY_BLOCK: u32 = 20 + 65535 * 64;
 /// Which container format an [`crate::Archive`] was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// GRF (also the `.gpf` patch files of Gravity, which are GRFs).
+    /// GRF (also the `.gpf` patch files and the `.gsf` "Gravity Secure Patch" files of Gravity, which
+    /// are GRFs: GRF Editor opens `.gsf` with its GRF reader, too).
     Grf,
     /// Thor patch (`.thor`).
     Thor,

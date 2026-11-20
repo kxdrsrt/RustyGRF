@@ -23,7 +23,8 @@
       {
         "ext": [
           "grf",
-          "gpf"
+          "gpf",
+          "gsf"
         ],
         "mimeType": "application/x-ragnarok-grf",
         "name": "GRF archive",
