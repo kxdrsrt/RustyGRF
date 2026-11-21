@@ -220,7 +220,7 @@ fn remember_theme(app: AppHandle, theme: String) {
 /// Opens a web address of the About box in the system browser (only these addresses).
 #[tauri::command]
 fn open_link(url: String) -> Res<()> {
-    const ALLOWED: [&str; 2] = ["https://github.com/", "https://bento.me/"];
+    const ALLOWED: [&str; 1] = ["https://github.com/"];
     if !ALLOWED.iter().any(|a| url.starts_with(a))
         || url.contains(['"', ' ', '&', '|', '^', '<', '>'])
     {

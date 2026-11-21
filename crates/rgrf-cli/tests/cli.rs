@@ -2821,6 +2821,62 @@ fn client_slim_copies_what_the_client_reads_and_makes_the_music_and_skins_smalle
 }
 
 #[test]
+fn client_slim_turns_a_loose_32_bit_icon_into_a_24_bit_24_by_24_one() {
+    let dir = tmpdir("slim-icon");
+    let icons = dir.join("full/data/ui/item");
+    std::fs::create_dir_all(&icons).unwrap();
+    // 32 x 32, 32 bits with alpha as modern programs save them: a V4 header, channel masks and
+    // rows top-down; red, the top left quarter transparent
+    let mut bmp = b"BM".to_vec();
+    let pixels = 32 * 32 * 4u32;
+    bmp.extend((14 + 108 + pixels).to_le_bytes());
+    bmp.extend([0u8; 4]);
+    bmp.extend((14u32 + 108).to_le_bytes());
+    bmp.extend(108u32.to_le_bytes());
+    bmp.extend(32i32.to_le_bytes());
+    bmp.extend((-32i32).to_le_bytes());
+    bmp.extend(1u16.to_le_bytes());
+    bmp.extend(32u16.to_le_bytes());
+    bmp.extend(3u32.to_le_bytes());
+    bmp.extend(pixels.to_le_bytes());
+    bmp.extend([0u8; 16]);
+    for mask in [0x00ff_0000u32, 0x0000_ff00, 0x0000_00ff, 0xff00_0000] {
+        bmp.extend(mask.to_le_bytes());
+    }
+    bmp.extend([0u8; 52]);
+    for row in 0..32 {
+        for col in 0..32 {
+            let transparent = row < 16 && col < 16;
+            bmp.extend(if transparent {
+                [0, 0, 0, 0]
+            } else {
+                [0, 0, 200, 255]
+            });
+        }
+    }
+    std::fs::write(icons.join("npc_x.bmp"), &bmp).unwrap();
+    std::fs::write(dir.join("full/DATA.INI"), b"[Data]\r\n").unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    let o = rgrf(&["client", "slim", &p("full"), "-o", &p("out"), "--fix-icons"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = std::fs::read(dir.join("out/data/ui/item/npc_x.bmp")).unwrap();
+    let info = rgrf_formats::bmp::info(&out).unwrap();
+    assert_eq!((info.bits, info.width, info.height), (24, 24, 24));
+    let img = rgrf_formats::bmp::parse(&out).unwrap();
+    let px = |x: usize, y: usize| img.pixels[(y * 24 + x) * 4..(y * 24 + x) * 4 + 3].to_vec();
+    assert_eq!(px(2, 2), [255, 0, 255], "the transparent corner is magenta");
+    assert_eq!(px(20, 20), [200, 0, 0], "the rest is red");
+    // an icon that is fine is copied as it is, and without the option nothing changes
+    let o = rgrf(&["client", "slim", &p("full"), "-o", &p("plain")]);
+    assert!(o.status.success());
+    assert_eq!(
+        std::fs::read(dir.join("plain/data/ui/item/npc_x.bmp")).unwrap(),
+        bmp
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn image_reduce_dir_makes_pngs_smaller_without_changing_a_pixel() {
     use rgrf_formats::png_io::{frame_from_png, rgba_to_png_fast};
     use rgrf_formats::spr::RgbaImage;

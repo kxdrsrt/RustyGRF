@@ -47,3 +47,4 @@ Mit Erlaubnis von Tokeiburu nach GRF Editors Quelltext gelesen und in Rust neu g
 
 ## MP3 und Ogg bearbeiten (2026-11-21, Merkmal `lossy-audio`)
 - **LAME** (über `mp3lame-encoder`/`mp3lame-sys`, der C-Quelltext wird mitgebaut) steht unter der **LGPL** (die Crates nennen LGPL-3.0); **Symphonia** (MP3-/Vorbis-Decoder, rein Rust) unter **MPL-2.0**; **libvorbis mit aoTuV** und **libogg** (über `vorbis_rs`) unter **BSD-3-Clause**. Weil LAME LGPL ist, hängt die Projektlizenz `MIT OR Apache-2.0` der **Bibliothek `rgrf-formats`** nicht daran: das Merkmal ist dort **aus**; CLI, MCP-Server und GUI schalten es an. Wer eine Binärdatei weitergibt, muss den LGPL-Teil (Quelltext von LAME liegt auf crates.io) und die MPL-Dateien verfügbar halten; wer das nicht will, baut ohne das Merkmal (dann bleiben MP3/Ogg nur abspielbar, nicht bearbeitbar). Die Ausnahmen stehen in `deny.toml`. **Entscheidung 2026-11-21 (Empfehlung, noch umkehrbar).**
+

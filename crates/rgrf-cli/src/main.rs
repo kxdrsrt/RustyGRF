@@ -727,6 +727,9 @@ enum ClientCmd {
         /// Store 24-bit BMPs as 8 bits where the picture keeps this many dB (0 keeps them)
         #[arg(long, default_value_t = 0.0)]
         min_psnr: f64,
+        /// Turn loose 32-bit or oversized icons in data/**/item/ into 24 x 24 24-bit icons
+        #[arg(long)]
+        fix_icons: bool,
         /// Clean MP3s without changing a frame (tags, junk and cut-off frames removed); the music
         /// stays exactly as it sounds. Not used for files that --bgm-kbps encodes again
         #[arg(long)]
@@ -1929,6 +1932,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 bgm_kbps,
                 min_psnr,
                 mp3_clean,
+                fix_icons,
                 png,
                 jpegtran,
                 keep_grf,
@@ -1941,6 +1945,7 @@ fn run(cli: &Cli) -> Result<i32> {
                     bgm_kbps: (*bgm_kbps > 0).then_some(*bgm_kbps),
                     min_psnr: (*min_psnr > 0.0).then_some(*min_psnr),
                     mp3_clean: *mp3_clean,
+                    fix_icons: *fix_icons,
                     png: (*png > 0).then_some(*png),
                     jpegtran: jpegtran.as_deref(),
                     keep_grf: *keep_grf,

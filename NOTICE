@@ -25,4 +25,4 @@ Weitere Inspiration
 Dieses Projekt enthaelt keine Spieldaten von Gravity/Ragnarok Online.
 Drittbibliotheken: siehe THIRD-PARTY.md.
 
-cps.dll template (crates/rgrf-core/assets/cps-template.dll): GRFEditor/Files/cps.dll of GRF Editor by Tokeiburu, included with his permission (MD5 d35eb41c552d8c2572b6938f7cd222b3). Used by `rgrf client encrypt`.
+cps.dll template (crates/rgrf-core/assets/cps-template.dll): GRFEditor/Files/cps.dll of GRF Editor by Tokeiburu (MD5 d35eb41c552d8c2572b6938f7cd222b3). Used by `rgrf client encrypt`.

@@ -3482,7 +3482,7 @@ async function openAbout() {
       ),
     ),
     el("h4", { text: t("about-made-by") }),
-    el("p", {}, "Kadir Sert · ", link("github.com/kxdrsrt", "https://github.com/kxdrsrt"), " · ", link("bento.me/kadir-sert", "https://bento.me/kadir-sert")),
+    el("p", {}, "Kadir Sert · ", link("github.com/kxdrsrt", "https://github.com/kxdrsrt")),
     el("h4", { text: t("about-thanks") }),
     el("ul", { class: "credits" },
       el("li", {}, link("Tokeiburu", "https://github.com/Tokeiburu"), ` — ${t("about-tokeiburu")}`),

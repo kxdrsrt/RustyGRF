@@ -19,6 +19,11 @@ pub struct SlimArgs<'a> {
     pub bgm_kbps: Option<u32>,
     /// Clean MP3s without changing a frame: tags, junk and cut-off frames go (see `mp3_clean`).
     pub mp3_clean: bool,
+    /// Loose icons in `data/**/item/` that are 32-bit with transparency or larger than 24 x 24
+    /// become 24 x 24 24-bit pictures with the magenta the client reads as transparent: the
+    /// client shows its built-in default icon for a skill that is dragged when the loose file
+    /// is not in the form of the others.
+    pub fix_icons: bool,
     /// Store 24-bit BMPs as 8 bits where the picture keeps this PSNR; `None` leaves them.
     pub min_psnr: Option<f64>,
     /// Zopfli iterations of the lossless PNG pass; `None` leaves PNGs.
@@ -73,6 +78,48 @@ fn walk(dir: &Path, rel: &Path, files: &mut Vec<PathBuf>, dirs: &mut Vec<PathBuf
         }
     }
     Ok(())
+}
+
+/// A picture as a 24 x 24 icon: averaged over the source pixels each icon pixel covers, the
+/// transparent ones (alpha below half) are the magenta the client does not draw.
+fn icon_24(img: &rgrf_formats::spr::RgbaImage) -> rgrf_formats::spr::RgbaImage {
+    const N: usize = 24;
+    let (w, h) = (usize::from(img.width), usize::from(img.height));
+    let mut pixels = Vec::with_capacity(N * N * 4);
+    for y in 0..N {
+        for x in 0..N {
+            let (x0, x1) = (
+                x * w / N,
+                ((x + 1) * w).div_ceil(N).max(x * w / N + 1).min(w),
+            );
+            let (y0, y1) = (
+                y * h / N,
+                ((y + 1) * h).div_ceil(N).max(y * h / N + 1).min(h),
+            );
+            let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let p = &img.pixels[(sy * w + sx) * 4..(sy * w + sx) * 4 + 4];
+                    let al = u32::from(p[3]);
+                    r += u32::from(p[0]) * al;
+                    g += u32::from(p[1]) * al;
+                    b += u32::from(p[2]) * al;
+                    a += al;
+                    n += 1;
+                }
+            }
+            if a * 2 < n * 255 || n == 0 {
+                pixels.extend([255, 0, 255, 255]);
+            } else {
+                pixels.extend([(r / a) as u8, (g / a) as u8, (b / a) as u8, 255]);
+            }
+        }
+    }
+    rgrf_formats::spr::RgbaImage {
+        width: N as u16,
+        height: N as u16,
+        pixels,
+    }
 }
 
 /// MP3 at a lower rate; `Ok(None)` when the file is not worth it.
@@ -219,6 +266,34 @@ pub fn slim(folder: &Path, output: &Path, args: &SlimArgs, json: bool) -> Result
                         Some(_) => copy(""),
                         None => copy("music kept (no MP3 frames found)"),
                     };
+                }
+                if args.fix_icons
+                    && l.ends_with(".bmp")
+                    && top(rel) == "data"
+                    && rel
+                        .components()
+                        .any(|c| c.as_os_str().eq_ignore_ascii_case("item"))
+                {
+                    let data = fs::read(&from)?;
+                    if let Ok(i) = bmp::info(&data)
+                        && (i.bits == 32 || i.width > 24 || i.height > 24)
+                        && i.width <= 64
+                        && i.height <= 64
+                        && let Ok(img) = bmp::parse(&data)
+                    {
+                        let out = bmp::write_rgb(&icon_24(&img));
+                        fs::write(&to, &out)?;
+                        return Ok(Dealt::Changed {
+                            kind: "icon",
+                            before: size,
+                            after: out.len() as u64,
+                            note: format!(
+                                "{} x {}, {} bits -> 24 x 24, 24 bits",
+                                i.width, i.height, i.bits
+                            ),
+                        });
+                    }
+                    return copy("");
                 }
                 // the guild emblems must stay the 24-bit pictures the client asks for
                 if let (Some(psnr), true) =
