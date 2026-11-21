@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
 use rgrf_formats::act_fx;
 use rgrf_formats::act_ops::{EffectKind, EffectScope, RotationCopy, Template, parse_indexes};
+use rgrf_formats::act_setup::{self, Model, Placement, SetupError, SetupKind};
 use rgrf_formats::edit::EditError;
 use rgrf_formats::gif_io::upscale;
 use rgrf_formats::png_io::rgba_to_png;
@@ -278,6 +279,133 @@ pub struct FxScope {
     pub length: usize,
     #[serde(default)]
     pub loop_missing: bool,
+}
+
+/// One reference image of "Setup Headgear/Head": the pictures to compare and what the animation
+/// shows there now.
+#[derive(Serialize, Debug)]
+pub struct SetupRow {
+    pub reference_image: usize,
+    pub usage: Option<(usize, usize)>,
+    /// Number of the image in the animation's sprite (palette images first), `-1` for none.
+    pub image: i32,
+    pub dx: i32,
+    pub dy: i32,
+    /// The reference image as PNG (base64).
+    pub reference_png: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct SetupInfo {
+    pub rows: Vec<SetupRow>,
+    /// The sprite of the animation: all its images as small PNGs (base64), palette ones first.
+    pub images: Vec<Option<String>>,
+    /// Images of the sprite beyond the ones in `images`.
+    pub more_images: usize,
+}
+
+/// The images that are listed with a picture in the dialog.
+const SETUP_PICTURES: usize = 96;
+
+fn setup_error(e: SetupError) -> String {
+    match e {
+        SetupError::EmptyReference => err!("err-setup-empty-reference"),
+        SetupError::NoImage(n) => err!("err-setup-no-image", "n": n),
+    }
+}
+
+fn spr_png(spr: &Spr, abs: usize) -> Option<String> {
+    let img = match spr.indexed.get(abs) {
+        Some(_) => spr.indexed_to_rgba(abs)?,
+        None => spr.rgba.get(abs - spr.indexed.len())?.clone(),
+    };
+    Some(B64.encode(rgba_to_png(&img).ok()?))
+}
+
+/// What "Setup Headgear/Head" starts from: one row for each image of the reference head.
+pub fn setup_info(
+    act_bytes: &[u8],
+    spr_bytes: &[u8],
+    ref_act: &[u8],
+    ref_spr: &[u8],
+) -> Result<SetupInfo, String> {
+    let act = Act::parse(act_bytes).map_err(|e| e.to_string())?;
+    let spr = Spr::parse(spr_bytes).map_err(|e| e.to_string())?;
+    let reference = Act::parse(ref_act).map_err(|e| e.to_string())?;
+    let rspr = Spr::parse(ref_spr).map_err(|e| e.to_string())?;
+    if reference.layers().all(|(_, _, _, l)| l.sprite_index < 0) {
+        return Err(err!("err-setup-empty-reference"));
+    }
+    let models: Vec<Model> = act_setup::current_models(&act, &spr, &reference, rspr.indexed.len());
+    let total = spr.indexed.len() + spr.rgba.len();
+    Ok(SetupInfo {
+        rows: models
+            .iter()
+            .map(|m| SetupRow {
+                reference_image: m.reference_image,
+                usage: m.usage,
+                image: m.placement.image,
+                dx: m.placement.dx,
+                dy: m.placement.dy,
+                reference_png: spr_png(&rspr, m.reference_image),
+            })
+            .collect(),
+        images: (0..total.min(SETUP_PICTURES))
+            .map(|i| spr_png(&spr, i))
+            .collect(),
+        more_images: total.saturating_sub(SETUP_PICTURES),
+    })
+}
+
+/// One row the user settled on.
+#[derive(Deserialize, Debug, Clone)]
+pub struct SetupChoice {
+    pub image: i32,
+    #[serde(default)]
+    pub dx: i32,
+    #[serde(default)]
+    pub dy: i32,
+}
+
+/// Builds the frames of the animation from the choices (one for each reference image).
+pub fn apply_setup(
+    act_bytes: &[u8],
+    spr_bytes: &[u8],
+    ref_act: &[u8],
+    ref_spr: &[u8],
+    head: bool,
+    choices: &[SetupChoice],
+) -> Result<Vec<u8>, String> {
+    let mut act = Act::parse(act_bytes).map_err(|e| e.to_string())?;
+    let spr = Spr::parse(spr_bytes).map_err(|e| e.to_string())?;
+    let reference = Act::parse(ref_act).map_err(|e| e.to_string())?;
+    let rspr = Spr::parse(ref_spr).map_err(|e| e.to_string())?;
+    let placements: Vec<Placement> = choices
+        .iter()
+        .map(|c| Placement {
+            image: c.image,
+            dx: c.dx.clamp(-10_000, 10_000),
+            dy: c.dy.clamp(-10_000, 10_000),
+        })
+        .collect();
+    let n = act_setup::apply(
+        &mut act,
+        &spr,
+        &reference,
+        &rspr,
+        &placements,
+        if head {
+            SetupKind::Head
+        } else {
+            SetupKind::Headgear
+        },
+    )
+    .map_err(setup_error)?;
+    if n == 0 {
+        return Err(err!("err-act-no-match"));
+    }
+    let v = act.version;
+    act.to_bytes(v).map_err(|e| e.to_string())
 }
 
 fn half_angle() -> f32 {

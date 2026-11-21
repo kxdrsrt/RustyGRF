@@ -2597,6 +2597,90 @@ async function actScriptImageFx(kind) {
   await loadActFrame();
 }
 
+const SETUP_REF_KEY = "rustygrf-setup-reference";
+
+/**
+ * ACT Editor's "Setup Headgear/Head": every image of the reference head gets the image of this
+ * animation that belongs to it, and how far it lies from it; the whole animation (all directions,
+ * frames and mirrored copies) is then built from that.
+ */
+async function actSetup(head) {
+  if (E.busy) return;
+  stopActPlay();
+  const title = t(head ? "as-setup-head" : "as-setup-headgear");
+  const female = /[\\/]여[_\\/]/.test(E.row.name);
+  const last = localStorage.getItem(SETUP_REF_KEY);
+  const ref = el("input", { type: "text", class: "field", list: "setup-presets", spellcheck: "false", value: last || REF_PRESETS()[female ? 3 : 2][0] });
+  const presets = el("datalist", { id: "setup-presets" }, REF_PRESETS().slice(2).map(([v, label]) => el("option", { value: v, label })));
+  const table = el("div", { style: "max-height:50vh;overflow:auto" });
+  const problem = el("p", { class: "error", role: "alert" });
+  let info = null;
+  const picture = (png, alt) => (png ? el("img", { src: dataUrl("image/png", png), alt, style: "image-rendering:pixelated;max-width:64px;max-height:64px;vertical-align:middle;background:var(--checker, #888)" }) : el("span", { class: "muted", text: "–" }));
+  const rows = [];
+  const draw = () => {
+    rows.length = 0;
+    const total = info.images.length + info.more_images;
+    table.replaceChildren(
+      el(
+        "table",
+        {},
+        el("thead", {}, el("tr", {}, ...["as-setup-th-ref", "as-setup-th-image", "", "x", "y"].map((k) => el("th", { text: k ? (k.length > 1 ? t(k) : k) : "" })))),
+        el(
+          "tbody",
+          {},
+          ...info.rows.map((r) => {
+            const sel = el("select", {}, el("option", { value: "-1", text: t("as-setup-none"), selected: r.image < 0 }), ...Array.from({ length: total }, (_, i) => el("option", { value: String(i), text: String(i), selected: i === r.image })));
+            const dx = numberField(r.dx);
+            const dy = numberField(r.dy);
+            const shown = el("span", {});
+            const show = () => shown.replaceChildren(Number(sel.value) >= 0 ? picture(info.images[Number(sel.value)], "") : "");
+            sel.addEventListener("change", show);
+            show();
+            rows.push({ sel, dx, dy });
+            return el(
+              "tr",
+              {},
+              el("td", {}, picture(r.reference_png, `${r.reference_image}`), " ", el("span", { class: "muted", text: r.usage ? t("as-setup-used", { n: r.reference_image, action: r.usage[0], frame: r.usage[1] + 1 }) : t("as-setup-unused", { n: r.reference_image }) })),
+              el("td", {}, sel),
+              el("td", {}, shown),
+              el("td", {}, dx),
+              el("td", {}, dy),
+            );
+          }),
+        ),
+      ),
+    );
+  };
+  const load = async () => {
+    problem.textContent = "";
+    try {
+      info = await invoke("act_setup_info", { index: E.row.index, reference: ref.value });
+      localStorage.setItem(SETUP_REF_KEY, ref.value.trim());
+      draw();
+    } catch (e) {
+      info = null;
+      table.replaceChildren();
+      problem.textContent = errText(e);
+    }
+  };
+  const loadBtn = el("button", { type: "button", class: "small", text: t("as-setup-load"), onclick: load });
+  const body = [el("p", { text: t(head ? "as-setup-head-intro" : "as-setup-headgear-intro") }), formRow(t("as-setup-ref"), ref), presets, loadBtn, problem, table, el("p", { class: "muted", text: t("as-setup-note") })];
+  const go = ask(title, body, [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  load();
+  if (!(await go) || !info) return;
+  E.busy = true;
+  try {
+    const choices = rows.map((r) => ({ image: Number(r.sel.value), dx: Math.round(Number(r.dx.value) || 0), dy: Math.round(Number(r.dy.value) || 0) }));
+    setPending(await invoke("stage_act_setup", { index: E.row.index, reference: ref.value, head, choices }));
+  } catch (e) {
+    E.busy = false;
+    await note(title, errText(e), true);
+    return loadActFrame();
+  }
+  E.busy = false;
+  await loadActFrame();
+}
+
 async function actDefaultAnchors(female) {
   if (E.busy) return;
   stopActPlay();
@@ -2639,6 +2723,9 @@ function actScriptsMenu(ev, v) {
       { label: t("as-fx-additive"), run: () => actScriptImageFx("additive") },
       { label: t("as-fx-cut"), run: () => actScriptImageFx("cut") },
       { label: t("as-fx-outline"), run: () => actScriptImageFx("outline") },
+      "-",
+      { label: t("as-setup-headgear"), run: () => actSetup(false) },
+      { label: t("as-setup-head"), run: () => actSetup(true) },
       "-",
       { label: t("as-anchors-male"), run: () => actDefaultAnchors(false) },
       { label: t("as-anchors-female"), run: () => actDefaultAnchors(true) },

@@ -291,6 +291,16 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?;
             to_json(s.pending())
         }),
+        "act_setup_info" => with(state, |s| {
+            let reference: String = arg(a, "reference")?;
+            to_json(s.act_setup_info(arg(a, "index")?, &reference)?)
+        }),
+        "stage_act_setup" => with(state, |s| {
+            let reference: String = arg(a, "reference")?;
+            let choices: Vec<rustygrf_gui_lib::act_editor::SetupChoice> = arg(a, "choices")?;
+            s.stage_act_setup(arg(a, "index")?, &reference, arg(a, "head")?, &choices)?;
+            to_json(s.pending())
+        }),
         "stage_act_image_fx" => with(state, |s| {
             let fx: rustygrf_gui_lib::act_editor::ImageFx = arg(a, "fx")?;
             let scope: rustygrf_gui_lib::act_editor::FxScope = arg(a, "scope")?;

@@ -684,3 +684,89 @@ fn single_rsm2_models_become_rsm_in_one_undoable_step() {
     let r = s.page(0, t.min(1));
     assert!(s.stage_model_downgrade(&[r[0].index]).is_err() && s.pending().is_empty());
 }
+
+#[test]
+fn setting_up_a_real_headgear_from_its_own_placement_changes_almost_nothing() {
+    use rustygrf_gui_lib::act_editor::SetupChoice;
+    let Some(mut s) = open() else { return };
+    s.set_names("cp949").unwrap();
+    let hat = find(&mut s, "남_Blue_Frill_Ribbon.act");
+    let reference = "data\\sprite\\인간족\\머리통\\남\\1_남.act";
+    // the first layer of every frame: picture, offset and mirror
+    let first_layers = |s: &Session| {
+        let mut out = Vec::new();
+        let v0 = s.act_view(hat, 0, 0).unwrap();
+        for a in 0..v0.actions {
+            let n = s.act_view(hat, a, 0).unwrap().frames;
+            for f in 0..n {
+                let l = &s.act_view(hat, a, f).unwrap().layers;
+                out.push(
+                    l.first()
+                        .map(|l| (l.sprite_index, l.offset_x, l.offset_y, l.mirror)),
+                );
+            }
+        }
+        out
+    };
+    let before = first_layers(&s);
+    let info = s.act_setup_info(hat, reference).unwrap();
+    assert!(info.rows.len() >= 9, "{} reference images", info.rows.len());
+    assert!(info.rows.iter().any(|r| r.image >= 0));
+    assert!(info.rows.iter().all(|r| r.reference_png.is_some()));
+    let choices: Vec<SetupChoice> = info
+        .rows
+        .iter()
+        .map(|r| SetupChoice {
+            image: r.image,
+            dx: r.dx,
+            dy: r.dy,
+        })
+        .collect();
+    s.stage_act_setup(hat, reference, false, &choices).unwrap();
+    let after = first_layers(&s);
+    assert_eq!(before.len(), after.len());
+    // the artist's own offsets differ a little from "reference offset plus a constant" (for
+    // example while walking), but the pictures follow the head's poses everywhere (456 of 456 measured, 276 within 2 px)
+    type Layer = (i32, f32, f32, bool);
+    let count = |f: &dyn Fn(&Layer, &Layer) -> bool| {
+        before
+            .iter()
+            .zip(&after)
+            .filter(|(b, a)| matches!((b, a), (Some(b), Some(a)) if f(b, a)))
+            .count()
+    };
+    let pictures = count(&|b, a| b.0 == a.0);
+    let near = count(&|b, a| b.0 == a.0 && (b.1 - a.1).abs() <= 2.0 && (b.2 - a.2).abs() <= 3.0);
+    eprintln!(
+        "{pictures} / {near} of {} first layers keep their picture / sit near",
+        before.len()
+    );
+    assert!(
+        pictures * 10 >= before.len() * 8,
+        "{pictures} of {}",
+        before.len()
+    );
+    assert!(near * 2 >= before.len(), "{near} of {}", before.len());
+    // a head is set up the same way, and the reference must exist
+    assert!(s.act_setup_info(hat, "data\\sprite\\no_such.act").is_err());
+    assert!(s.stage_act_setup(hat, reference, true, &choices).is_ok());
+}
+
+#[test]
+fn an_effect_preview_names_the_effect_numbers_of_its_str_file() {
+    let Some(mut s) = open() else { return };
+    let i = find(&mut s, r"effect\stonecurse.str");
+    match s.preview(i, None).unwrap() {
+        Preview::Effect { info, .. } => {
+            let line = info.iter().find_map(|n| match n {
+                Note::Key {
+                    key: "pvw-n-str-effect",
+                    args,
+                } => Some(args["ids"].clone()),
+                _ => None,
+            });
+            assert_eq!(line, Some("23, 195".into()), "{info:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}

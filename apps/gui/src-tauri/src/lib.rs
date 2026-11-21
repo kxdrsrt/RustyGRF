@@ -946,6 +946,37 @@ async fn stage_act_anchors(
     .await
 }
 
+/// The starting point of "Setup Headgear/Head": a row for each image of the reference head.
+#[tauri::command]
+async fn act_setup_info(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    reference: String,
+) -> Res<act_editor::SetupInfo> {
+    with_session(&state, &window, move |s| {
+        s.act_setup_info(index, &reference)
+    })
+    .await
+}
+
+/// "Setup Headgear/Head": builds the animation from the reference head (staged).
+#[tauri::command]
+async fn stage_act_setup(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    reference: String,
+    head: bool,
+    choices: Vec<act_editor::SetupChoice>,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_act_setup(index, &reference, head, &choices)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// An effect that makes new pictures in the sprite next to the animation (staged).
 #[tauri::command]
 async fn stage_act_image_fx(
@@ -2035,6 +2066,8 @@ pub fn run() {
             stage_act_anchors,
             stage_act_default_anchors,
             stage_act_image_fx,
+            act_setup_info,
+            stage_act_setup,
             stage_new_act,
             stage_removals,
             open_folder,

@@ -160,7 +160,14 @@ Gelesen: `EMenuInteraction.cs`, `ETreeViewInteraction.cs`, `EListViewInteraction
 
 **Danach erledigt (2026-11-21):** MCP-Werkzeuge für Hashlisten, Thor-Packen/-Entpacken und die seltenen Formate (`grf_hashlist_*`, `grf_thor_*`, `grf_rare_*`); „Baumzustand merken“ (offene Ordner je Archiv, bis 20 Archive, Einstellung); „Thor-Hash anhängen“ im Speichern-Dialog (nie die alte Liste kopieren, immer neu berechnet); die drei Bild-Effekte (siehe oben); **Zoomen im ACT-Editor** (100–800 %, Knöpfe oder Strg/Cmd + Mausrad; Verschieben über die Bildlaufleisten, Zoom und Bildlaufposition bleiben während der Wiedergabe; Auswahl, Ziehen und Anker rechnen mit dem Zoom: gemessen, 40 Bildschirmpixel bei 200 % verschieben die Ebene um 5 Einheiten).
 
-**Weiterhin offen:** der Dialog „Setup Headgear/Head“ (die Anker-Tabellen gibt es als „Standard-Anker“); `Effects2Str` bewusst nicht (eine feste Tabelle Effektnummer → STR-Datei, ohne Nutzen für den Client-Bau).
+**„Setup Headgear/Head“ ✅ und `Effects2Str` ✅ (2026-11-21, 4. Durchgang):**
+
+| Funktion | RustyGRF | Stand |
+|---|---|---|
+| ACT: „Setup Headgear…“ und „Setup Head…“ (`HeadEditorDialog`): jedes Bild des Referenz-Kopfes bekommt das passende Bild der Animation und einen Abstand; daraus entstehen alle Richtungen, Frames und gespiegelten Kopien (der Kopf mit leerer Ebene davor) | Menü „Skripte“ (`rgrf_formats::act_setup`, GUI `act_setup_info` / `stage_act_setup`): Referenz-Kopf wählen (Vorschläge männlich/weiblich), Tabelle mit Bild des Referenz-Kopfes, Bildwahl mit Vorschau, x/y; die Ausgangswerte werden aus der Animation gelesen, ohne Änderung bleibt sie also fast wie sie ist | ✅ Tests (Kern 4, GUI an der echten `남_Blue_Frill_Ribbon.act` mit `1_남.act`: 456 von 456 Frames behalten ihr Bild, 276 liegen bis 2 px daneben; die übrigen weichen ab, weil der Künstler die Versätze von Hand gesetzt hat, nicht als „Referenz plus Konstante“), im Browser bedient (Tabelle mit 15 Bildern, x ändern, übernehmen, vorgemerkt). Die Frame-Zuordnung (drei Kopfhaltungen in Steh-/Sitzaktionen, sonst Rest) und die Halb-Pixel-Regel bei Spiegelung sind wie im Original. **Nicht gebaut:** „Setup Garment“ (im ACT Editor selbst abgeschaltet: „just too buggy“); die Bühne mit Ziehen im Dialog (stattdessen Zahlen und Bildwahl; das Ergebnis lässt sich danach im Editor mit dem Referenz-Kopf ansehen) |
+| `Effects2Str`: Tabelle Effektnummer ↔ STR-Datei | `rgrf rare effect [NUMMER oder DATEI]`, MCP `grf_effect_str`, Bibliothek `rgrf_formats::effects2str`; in der STR-Vorschau steht die Effektnummer | ✅ Tests (Bibliothek, CLI, MCP, echte `stonecurse.str`: 23 und 195). 118 Einträge; die koreanischen Namen sind im Original als Latin-1 falsch gespeichert und hier richtig dekodiert; der Eintrag 134 (`freezed.str`) wird im Original am Ende noch einmal leer überschrieben, das übernehmen wir nicht |
+
+**Weiterhin offen:** nichts aus der Liste von GRF Editor und ACT Editor, außer dem, was oben als „nicht gebaut“ oder „nicht geprüft“ steht.
 
 **Behoben (2026-11-21):** Bei schmalem Fenster (unter 900 px) lag die Liste nur auf halber Höhe neben einem 6 px breiten Vorschaustreifen, weil die Regel für die Ordneransicht mit Vorschau rechts die allgemeine Schmalfenster-Regel überstimmte. Jetzt bleibt die Vorschau bis 721 px rechts (schmalere Spalte), darunter liegt sie unter der Liste (60 %); im Browser (alle vier Ansichten) und im echten Windows-Fenster der VM (angedockt 960×540: ganze Liste sichtbar) gemessen.
 
@@ -215,7 +222,7 @@ Gelesen: `EMenuInteraction.cs`, `ETreeViewInteraction.cs`, `EListViewInteraction
 
 | Funktion in GRF/ACT Editor | Stand bei uns |
 | --- | --- |
-| ACT: „Setup Headgear/Head/Garment“ (Hilfen, die eine Animation für Kopfbedeckung, Kopf oder Umhang aus einer Vorlage aufbauen), „Duplicate frames…“, „Add sprite to all frames…“, „Edit frames/actions…“ (Dialoge mit Mehrfachauswahl), Effekte (Ein-/Ausblenden, Atmen, Umriss, Farbüberlagerung, „Cut sprite“) | ❌ |
+| ACT: „Setup Headgear/Head/Garment“ (Hilfen, die eine Animation für Kopfbedeckung, Kopf oder Umhang aus einer Vorlage aufbauen; Headgear und Head ✅ 4. Durchgang), „Duplicate frames…“, „Add sprite to all frames…“, „Edit frames/actions…“ (Dialoge mit Mehrfachauswahl), Effekte (Ein-/Ausblenden, Atmen, Umriss, Farbüberlagerung, „Cut sprite“) | ❌ |
 | ACT: „New ACT“ aus Vorlagen; Sprite-Liste: Einfügen/Ersetzen für einen Bereich von Bildern; Hintergrundfarbe der Vorschau; Zoomen und Verschieben während der Wiedergabe | ❌ |
 | Thor/GPF: „Add files to remove…“ / „Set as removed“ (Löschanweisungen von Hand hinzufügen) | ◐ `thor create --remove` und Vergleich→Thor schreiben sie; im GUI nicht von Hand |
 | Baum: „New folder…“, „Extract root files only“ | ❌ (gering) |

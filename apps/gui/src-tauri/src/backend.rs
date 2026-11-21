@@ -3133,6 +3133,67 @@ impl Session {
         })
     }
 
+    /// The animation and sprite of a reference head, found by its path in the archive.
+    fn reference_pair(&self, index: usize, path: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let p = GrfPath::from_display(&path.trim().replace('/', "\\"), self.mode);
+        let i = match p.and_then(|p| self.arc.find(&p)) {
+            Some(i) if i != index => i,
+            Some(_) => return Err(err!("err-setup-same-file")),
+            None => return Err(err!("err-setup-no-reference", "path": path.trim())),
+        };
+        let act = self.working_bytes(i)?.1;
+        let spr = self
+            .sibling(i, "spr")
+            .ok_or_else(|| err!("err-setup-no-reference-spr", "path": path.trim()))?;
+        Ok((act, self.working_bytes(spr)?.1))
+    }
+
+    /// The starting point of "Setup Headgear/Head" for the animation `index`.
+    pub fn act_setup_info(
+        &self,
+        index: usize,
+        reference: &str,
+    ) -> Result<act_editor::SetupInfo, String> {
+        let (ract, rspr) = self.reference_pair(index, reference)?;
+        let act = self.working_bytes(index)?.1;
+        let spr_i = self
+            .sibling(index, "spr")
+            .ok_or_else(|| err!("err-no-spr"))?;
+        let spr = self.working_bytes(spr_i)?.1;
+        act_editor::setup_info(&act, &spr, &ract, &rspr)
+    }
+
+    /// "Setup Headgear/Head": the animation is built from the reference head and the choices.
+    pub fn stage_act_setup(
+        &mut self,
+        index: usize,
+        reference: &str,
+        head: bool,
+        choices: &[act_editor::SetupChoice],
+    ) -> Result<(), String> {
+        self.transact(|s| {
+            let (ract, rspr) = s.reference_pair(index, reference)?;
+            let (name, act, mut what) = s.working_bytes(index)?;
+            let spr_i = s.sibling(index, "spr").ok_or_else(|| err!("err-no-spr"))?;
+            let spr = s.working_bytes(spr_i)?.1;
+            let out = act_editor::apply_setup(&act, &spr, &ract, &rspr, head, choices)?;
+            what.push(
+                if head {
+                    "head set up"
+                } else {
+                    "headgear set up"
+                }
+                .into(),
+            );
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(out),
+                what,
+            });
+            Ok(())
+        })
+    }
+
     /// An effect that makes new pictures (cut, outline, additive colour): the animation and the
     /// sprite next to it change, both staged.
     pub fn stage_act_image_fx(
@@ -4825,6 +4886,13 @@ impl Session {
                     .take(12)
                     .map(|m| Note::Plain(format!("  {m}"))),
             );
+        }
+        // the table holds the Korean names, whatever the name mode shown
+        let file = GrfPath::new(entry_name[dir_len..].to_vec()).display(NameMode::Cp949);
+        let ids = rgrf_formats::effects2str::ids_of(&file);
+        if !ids.is_empty() {
+            let list: Vec<String> = ids.iter().map(i32::to_string).collect();
+            info.push(note!("pvw-n-str-effect", "ids": list.join(", ")));
         }
         info.push(note!("pvw-n-str-simple"));
         Ok(Preview::Effect {
