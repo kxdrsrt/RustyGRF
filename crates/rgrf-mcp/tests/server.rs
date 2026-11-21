@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 14);
+    assert_eq!(ro.len(), 15);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 29);
+    assert_eq!(names(&rw).len(), 30);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -1067,5 +1067,23 @@ fn hash_lists_thor_patchers_and_rare_files_work_through_the_tools() {
         json!({"path": p("e.bmp"), "kind": "imf"}),
     );
     assert!(e.contains("IMF"), "{e}");
+    // the effect table needs no files
+    let v = ok(&s, "grf_effect_str", json!({"effect": 30}));
+    assert_eq!(v["effects"][0]["str"], "thunderstorm.str");
+    let v = ok(&s, "grf_effect_str", json!({"str_file": "Stonecurse.str"}));
+    assert_eq!(v["effects"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        ok(&s, "grf_effect_str", json!({}))["effects"]
+            .as_array()
+            .unwrap()
+            .len(),
+        118
+    );
+    assert!(
+        ok(&s, "grf_effect_str", json!({"effect": 1}))["effects"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

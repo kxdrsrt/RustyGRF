@@ -3,6 +3,7 @@
 pub mod act;
 pub mod act_fx;
 pub mod act_ops;
+pub mod act_setup;
 pub mod audio;
 pub mod bmp;
 pub mod bson;
@@ -10,6 +11,7 @@ pub mod cfb;
 pub mod downgrade;
 pub mod ebm;
 pub mod edit;
+pub mod effects2str;
 pub mod flat_map;
 pub mod fna;
 pub mod gat;

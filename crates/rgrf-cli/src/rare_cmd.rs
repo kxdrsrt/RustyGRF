@@ -230,6 +230,36 @@ pub fn imf_cmd(io: &Io) -> Result<i32> {
     Ok(0)
 }
 
+/// `effect`: the effect table of GRF Editor (`Effects2Str`).
+pub fn effect_cmd(query: Option<&str>, json: bool) -> Result<i32> {
+    use rgrf_formats::effects2str::{EFFECTS, ids_of, str_of};
+    let rows: Vec<(i32, &str)> = match query.map(str::trim).filter(|q| !q.is_empty()) {
+        None => EFFECTS.to_vec(),
+        Some(q) => match q.parse::<i32>() {
+            Ok(id) => str_of(id).map(|n| (id, n)).into_iter().collect(),
+            Err(_) => ids_of(q)
+                .into_iter()
+                .filter_map(|i| str_of(i).map(|n| (i, n)))
+                .collect(),
+        },
+    };
+    if json {
+        let list: Vec<_> = rows
+            .iter()
+            .map(|(i, n)| json!({"effect": i, "str": n}))
+            .collect();
+        println!(
+            "{}",
+            json!({"schema_version": crate::SCHEMA_VERSION, "effects": list})
+        );
+    } else {
+        for (i, n) in &rows {
+            println!("{i}\t{n}");
+        }
+    }
+    Ok(if rows.is_empty() { 1 } else { 0 })
+}
+
 pub fn fna_cmd(io: &Io) -> Result<i32> {
     let (data, what) = load(io.input, io.entry, io.names)?;
     let f = fna::Fna::parse(&data).with_context(|| format!("{what} is not an FNA file"))?;

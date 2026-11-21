@@ -706,6 +706,17 @@ pub const TOOLS: &[Tool] = &[
         run: rare_info_tool,
     },
     Tool {
+        name: "grf_effect_str",
+        title: "Look up an effect number or STR file",
+        description: "GRF Editor's table of effect numbers and the STR files they play (118 entries). With `effect` the STR file of that number; with `str_file` (a name or path) the numbers that play it; without both, the whole table.",
+        params: &[
+            opt("effect", Ty::Int, "An effect number."),
+            opt("str_file", Ty::Str, "The name of an STR file."),
+        ],
+        writes: false,
+        run: effect_str_tool,
+    },
+    Tool {
         name: "grf_rare_convert",
         title: "Convert a seldom used client file",
         description: "bson_to_json and json_to_bson (the bytes come back the same), ebm_to_bmp and bmp_to_ebm (guild emblems are zlib-compressed BMPs). A loose file, or `entry` of an archive for the first of each pair; writes a new file. Put the result into an archive with grf_edit.",
@@ -2086,6 +2097,27 @@ fn thor_unpack_tool(ctx: &Ctx, a: &Args) -> Out {
 
 fn rare_bytes(ctx: &Ctx, a: &Args) -> Result<(Vec<u8>, String), String> {
     audio_bytes(ctx, a)
+}
+
+fn effect_str_tool(_: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::effects2str::{EFFECTS, ids_of, str_of};
+    let rows: Vec<(i32, &str)> = if let Some(id) = a.opt_u64("effect") {
+        i32::try_from(id)
+            .ok()
+            .and_then(|i| str_of(i).map(|n| (i, n)))
+            .into_iter()
+            .collect()
+    } else if let Some(n) = a.opt_str("str_file") {
+        ids_of(n)
+            .into_iter()
+            .filter_map(|i| str_of(i).map(|s| (i, s)))
+            .collect()
+    } else {
+        EFFECTS.to_vec()
+    };
+    Ok(
+        json!({"effects": rows.iter().map(|(i, n)| json!({"effect": i, "str": n})).collect::<Vec<_>>()}),
+    )
 }
 
 fn rare_info_tool(ctx: &Ctx, a: &Args) -> Out {

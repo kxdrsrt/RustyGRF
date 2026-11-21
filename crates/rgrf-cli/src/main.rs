@@ -425,6 +425,11 @@ enum RareCmd {
         #[arg(long)]
         overwrite: bool,
     },
+    /// Which STR effect an effect number plays (GRF Editor's effect table), or which numbers play an STR file
+    Effect {
+        /// An effect number, or the name of an STR file; without it the whole table
+        query: Option<String>,
+    },
     /// Guild emblem (.ebm) as BMP
     EbmToBmp {
         input: PathBuf,
@@ -1664,6 +1669,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 &rare_cmd::io(input, entry, &None, *overwrite, cli.names, cli.json),
                 rare_cmd::dir_of(output),
             ),
+            RareCmd::Effect { query } => rare_cmd::effect_cmd(query.as_deref(), cli.json),
             RareCmd::Imf { input, entry } => rare_cmd::imf_cmd(&rare_cmd::io(
                 input, entry, &None, false, cli.names, cli.json,
             )),

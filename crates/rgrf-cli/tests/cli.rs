@@ -3007,6 +3007,20 @@ fn hash_lists_and_packed_thor_patchers_work_without_archives_of_the_game() {
 }
 
 #[test]
+fn the_effect_table_answers_both_ways() {
+    let r = rgrf(&["rare", "effect", "30"]);
+    assert_eq!(
+        String::from_utf8_lossy(&r.stdout).trim(),
+        "30\tthunderstorm.str"
+    );
+    let r = rgrf(&["rare", "effect", "Stonecurse.str"]);
+    assert_eq!(String::from_utf8_lossy(&r.stdout).lines().count(), 2);
+    let r = rgrf(&["rare", "effect", "--json"]);
+    assert!(String::from_utf8_lossy(&r.stdout).contains("\"effect\":204"));
+    assert_eq!(rgrf(&["rare", "effect", "1"]).status.code(), Some(1));
+}
+
+#[test]
 fn rare_formats_convert_back_and_forth() {
     let dir = tmpdir("rare");
     std::fs::create_dir_all(&dir).unwrap();
