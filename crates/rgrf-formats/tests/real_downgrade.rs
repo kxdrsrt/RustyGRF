@@ -81,3 +81,47 @@ fn maps_with_rsm2_models_downgrade_to_readable_files() {
     eprintln!("{maps} maps, {models} models, {instances} instances");
     assert!(maps > 0, "no map with RSM2 models");
 }
+
+#[test]
+fn turning_models_move_the_same_after_the_downgrade() {
+    use rgrf_formats::rsm_model;
+    let Some(path) = data_grf() else { return };
+    let arc = Archive::open(&path).unwrap();
+    let (mut checked, mut worst) = (0, 0.0f32);
+    for e in arc.entries() {
+        if !e.name.as_bytes().to_ascii_lowercase().ends_with(b".rsm2") {
+            continue;
+        }
+        let bytes = arc.read(arc.find(&e.name).unwrap()).unwrap().data;
+        let m2 = rsm_model::parse(&bytes).unwrap();
+        let turns = m2.nodes.iter().any(|n| n.rot_keys.len() > 1);
+        // position and scale key frames cannot move in the old format
+        let others = m2
+            .nodes
+            .iter()
+            .any(|n| n.pos_keys.len() > 1 || n.scale_keys.len() > 1);
+        if !turns || others {
+            continue;
+        }
+        let r = rgrf_formats::downgrade::model_to_rsm1(&bytes).unwrap();
+        let m1 = rsm_model::parse(&r.bytes).unwrap();
+        let length = rsm_model::duration_ms(&m2);
+        for step in 0..6 {
+            let t = length * step as f32 / 5.0;
+            let a = rsm_model::baked_vertices_at(&m2, t);
+            let b = rsm_model::baked_vertices_at(&m1, t);
+            for (va, vb) in a.iter().zip(&b[1..]) {
+                for (x, y) in va.iter().zip(vb) {
+                    let want = [-x[0], -x[1], x[2]];
+                    for k in 0..3 {
+                        worst = worst.max((want[k] - y[k]).abs());
+                    }
+                }
+            }
+        }
+        checked += 1;
+    }
+    eprintln!("{checked} turning models, worst deviation {worst}");
+    assert!(checked > 0);
+    assert!(worst < 0.05, "deviation {worst}");
+}

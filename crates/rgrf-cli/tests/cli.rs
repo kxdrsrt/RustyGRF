@@ -2592,6 +2592,94 @@ fn grf_editor_encryption_end_to_end() {
     let o = rgrf(&["--encrypt", "repack", &p("plain.grf"), "-o", &p("x.grf")]);
     assert_eq!(o.status.code(), Some(1));
 
+    // single files: only b.txt encrypted, then a.txt as well, then b.txt decrypted again
+    let o = run(&[
+        "crypt",
+        &p("plain.grf"),
+        "-o",
+        &p("one.grf"),
+        "--encrypt-entry",
+        "b.txt",
+        "-q",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&rgrf(&["--json", "info", &p("one.grf")]));
+    assert_eq!(v["grf_editor_encryption"]["encrypted_entries"], 1);
+    let o = rgrf(&["cat", &p("one.grf"), r"data\a.txt"]);
+    assert_eq!(
+        o.stdout, b"hello hello hello hello\n",
+        "a.txt stays readable"
+    );
+    let o = run(&[
+        "crypt",
+        &p("one.grf"),
+        "-o",
+        &p("two.grf"),
+        "--encrypt-entry",
+        "a.txt",
+        "--decrypt-entry",
+        "b.txt",
+        "-q",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&rgrf(&["--json", "info", &p("two.grf")]));
+    assert_eq!(v["grf_editor_encryption"]["encrypted_entries"], 1);
+    let o = run(&["cat", &p("two.grf"), r"data\a.txt"]);
+    assert_eq!(o.stdout, b"hello hello hello hello\n");
+    let o = rgrf(&["cat", &p("two.grf"), r"data\b.txt"]);
+    assert_eq!(
+        o.stdout, b"second second second second\n",
+        "b.txt is plain now"
+    );
+    let o = run(&[
+        "crypt",
+        &p("two.grf"),
+        "-o",
+        &p("y.grf"),
+        "--encrypt-entry",
+        "nothing-like-this",
+    ]);
+    assert_eq!(o.status.code(), Some(1));
+
+    // the file table alone: the archive then opens only with the key, and the entries stay as they were
+    let o = run(&[
+        "crypt",
+        &p("two.grf"),
+        "-o",
+        &p("tab.grf"),
+        "--encrypt-table",
+        "-q",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = rgrf(&["info", &p("tab.grf")]);
+    assert_eq!(o.status.code(), Some(1), "no key, no table");
+    let v = json(&run(&["--json", "info", &p("tab.grf")]));
+    assert_eq!(v["grf_editor_encryption"]["encrypted_entries"], 1);
+    let o = run(&["cat", &p("tab.grf"), r"data\b.txt"]);
+    assert_eq!(o.stdout, b"second second second second\n");
+    // by default a later crypt keeps the table encrypted; --decrypt-table writes it plain
+    let o = run(&[
+        "crypt",
+        &p("tab.grf"),
+        "-o",
+        &p("tab2.grf"),
+        "--encrypt-entry",
+        "b.txt",
+        "-q",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(rgrf(&["info", &p("tab2.grf")]).status.code(), Some(1));
+    let o = run(&[
+        "crypt",
+        &p("tab2.grf"),
+        "-o",
+        &p("tab3.grf"),
+        "--decrypt-table",
+        "-q",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(rgrf(&["info", &p("tab3.grf")]).status.success());
+
     // the client side: needs GRF Editor's cps.dll (here a stand-in with the placeholder)
     let mut dll = vec![5u8; 300];
     dll.extend_from_slice(b"uncompress\0");
@@ -2785,6 +2873,46 @@ fn audio_edit_trims_fades_and_resamples_a_wav() {
         !rgrf(&["audio", "edit", s, "--op", "wobble", "-o", o, "--overwrite"])
             .status
             .success()
+    );
+
+    // MP3 and Ogg: the WAV becomes an MP3 (1 s at 22.05 kHz), which is trimmed and stays an MP3,
+    // then becomes an Ogg
+    let (m1, m2, g1) = (dir.join("a.mp3"), dir.join("b.mp3"), dir.join("c.ogg"));
+    let (m1, m2, g1) = (
+        m1.to_str().unwrap(),
+        m2.to_str().unwrap(),
+        g1.to_str().unwrap(),
+    );
+    let r = rgrf(&[
+        "audio", "edit", s, "--op", "gain:0", "--to", "mp3", "--kbps", "64", "-o", m1,
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let i = json(&rgrf(&["--json", "audio", "info", m1]));
+    assert_eq!(i["format"], "mp3");
+    assert_eq!(i["sample_rate"].as_u64(), Some(22_050));
+    let r = rgrf(&[
+        "--json",
+        "audio",
+        "edit",
+        m1,
+        "--op",
+        "trim:100-600",
+        "-o",
+        m2,
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(json(&r)["details"]["format"], "mp3");
+    let len = json(&rgrf(&["--json", "audio", "info", m2]))["duration_ms"]
+        .as_u64()
+        .unwrap();
+    assert!((450..=650).contains(&len), "{len} ms");
+    let r = rgrf(&[
+        "audio", "edit", m2, "--op", "reverse", "--to", "ogg", "-o", g1,
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(
+        json(&rgrf(&["--json", "audio", "info", g1]))["format"],
+        "ogg"
     );
     let _ = std::fs::remove_dir_all(dir);
 }

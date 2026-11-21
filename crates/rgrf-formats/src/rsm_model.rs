@@ -790,7 +790,12 @@ pub fn local_matrix(m: &Model, node: usize) -> [f32; 16] {
 /// The vertices of every node baked into the file's space at the static pose (key frame 0), in
 /// node order: what GRF Editor's "flatten" writes into a model.
 pub fn baked_vertices(m: &Model) -> Vec<Vec<[f32; 3]>> {
-    let mats = node_matrices_at(m, 0.0);
+    baked_vertices_at(m, 0.0)
+}
+
+/// Like [`baked_vertices`], `t` milliseconds into the animation loop.
+pub fn baked_vertices_at(m: &Model, t: f32) -> Vec<Vec<[f32; 3]>> {
+    let mats = node_matrices_at(m, t);
     m.nodes
         .iter()
         .enumerate()
@@ -799,6 +804,177 @@ pub fn baked_vertices(m: &Model) -> Vec<Vec<[f32; 3]>> {
             n.vertices.iter().map(|&v| apply(&vm, v)).collect()
         })
         .collect()
+}
+
+/// A node of an RSM 1.4 model made from an RSM2 one: what the old format can say about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rsm1Node {
+    pub pos: [f32; 3],
+    pub scale: [f32; 3],
+    /// Rotation key frames, the frame in milliseconds (empty for a node that does not turn).
+    pub rot_keys: Vec<(i32, [f32; 4])>,
+    /// Vertices with the node's fixed rotation baked in (a node with key frames keeps its own).
+    pub vertices: Vec<[f32; 3]>,
+}
+
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let ([ax, ay, az, aw], [bx, by, bz, bw]) = (a, b);
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+/// The quaternion (x, y, z, w) of the rotation in the upper 3 x 3 part of `m`.
+fn to_quat(m: &Mat4) -> [f32; 4] {
+    let r = |i: usize, j: usize| m[j * 4 + i];
+    let t = r(0, 0) + r(1, 1) + r(2, 2);
+    let q = if t > 0.0 {
+        let s = (t + 1.0).sqrt() * 2.0;
+        [
+            (r(2, 1) - r(1, 2)) / s,
+            (r(0, 2) - r(2, 0)) / s,
+            (r(1, 0) - r(0, 1)) / s,
+            s / 4.0,
+        ]
+    } else if r(0, 0) > r(1, 1) && r(0, 0) > r(2, 2) {
+        let s = (1.0 + r(0, 0) - r(1, 1) - r(2, 2)).sqrt() * 2.0;
+        [
+            s / 4.0,
+            (r(0, 1) + r(1, 0)) / s,
+            (r(0, 2) + r(2, 0)) / s,
+            (r(2, 1) - r(1, 2)) / s,
+        ]
+    } else if r(1, 1) > r(2, 2) {
+        let s = (1.0 + r(1, 1) - r(0, 0) - r(2, 2)).sqrt() * 2.0;
+        [
+            (r(0, 1) + r(1, 0)) / s,
+            s / 4.0,
+            (r(1, 2) + r(2, 1)) / s,
+            (r(0, 2) - r(2, 0)) / s,
+        ]
+    } else {
+        let s = (1.0 + r(2, 2) - r(0, 0) - r(1, 1)).sqrt() * 2.0;
+        [
+            (r(0, 2) + r(2, 0)) / s,
+            (r(1, 2) + r(2, 1)) / s,
+            s / 4.0,
+            (r(1, 0) - r(0, 1)) / s,
+        ]
+    };
+    let n = q.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
+    q.map(|x| x / n)
+}
+
+/// The rotation and the uniform scale that come closest to the linear part of `m`.
+fn rotation_and_scale(m: &Mat4) -> (Mat4, f32) {
+    let col = |c: usize| [m[c * 4], m[c * 4 + 1], m[c * 4 + 2]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let unit = |a: [f32; 3]| {
+        let l = dot(a, a).sqrt().max(1e-12);
+        a.map(|x| x / l)
+    };
+    let (c0, c1) = (col(0), col(1));
+    let e0 = unit(c0);
+    let k = dot(c1, e0);
+    let e1 = unit([c1[0] - k * e0[0], c1[1] - k * e0[1], c1[2] - k * e0[2]]);
+    let e2 = [
+        e0[1] * e1[2] - e0[2] * e1[1],
+        e0[2] * e1[0] - e0[0] * e1[2],
+        e0[0] * e1[1] - e0[1] * e1[0],
+    ];
+    let c2 = col(2);
+    let det = dot(c2, e2) * dot(c0, e0) * dot(c1, e1);
+    let rot = [
+        e0[0], e0[1], e0[2], 0.0, e1[0], e1[1], e1[2], 0.0, e2[0], e2[1], e2[2], 0.0, 0.0, 0.0,
+        0.0, 1.0,
+    ];
+    (rot, det.abs().cbrt())
+}
+
+/// Turns the nodes of an RSM2 model (version 2.2 or later) into what RSM 1.4 can hold, so that
+/// the model moves as before wherever it turns: the rotation key frames stay, the fixed rotation
+/// and scale of a node without key frames move into its vertices and into the positions and key
+/// frames of the nodes below it. Position and scale key frames are frozen at their first value
+/// (the old format has no room for them).
+pub fn rsm1_nodes(m: &Model) -> Vec<Rsm1Node> {
+    let by_name: HashMap<&[u8], usize> = m
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.name.as_slice(), i))
+        .collect();
+    // the fixed linear part each node leaves to the nodes below it, in node order
+    let mut fixed: Vec<Option<Mat4>> = vec![None; m.nodes.len()];
+    let mut out: Vec<Option<Rsm1Node>> = vec![None; m.nodes.len()];
+    fn go(
+        i: usize,
+        m: &Model,
+        by_name: &HashMap<&[u8], usize>,
+        fixed: &mut Vec<Option<Mat4>>,
+        out: &mut Vec<Option<Rsm1Node>>,
+        depth: usize,
+    ) -> Mat4 {
+        if let Some(q) = fixed[i] {
+            return q;
+        }
+        let n = &m.nodes[i];
+        let parent = by_name
+            .get(n.parent.as_slice())
+            .copied()
+            .filter(|&p| p != i && depth < 64);
+        let above = parent.map_or(IDENTITY, |p| go(p, m, by_name, fixed, out, depth + 1));
+        let rest = if m.nodes.len() == 1 {
+            [0.0; 3]
+        } else {
+            n.offset
+        };
+        let pos = n.pos_keys.first().map_or(rest, |k| k.1);
+        let scale = n.scale_keys.first().map_or(n.scale, |k| k.1);
+        let pos = apply(&above, pos);
+        let (q, node) = if n.rot_keys.len() > 1 {
+            let (rot, u) = rotation_and_scale(&above);
+            let turn = to_quat(&rot);
+            let keys = n
+                .rot_keys
+                .iter()
+                .map(|&(f, k)| (key_ms(m, f).round() as i32, quat_mul(turn, k)))
+                .collect();
+            (
+                IDENTITY,
+                Rsm1Node {
+                    pos,
+                    scale: scale.map(|s| s * u),
+                    rot_keys: keys,
+                    vertices: n.vertices.clone(),
+                },
+            )
+        } else {
+            let rot = n
+                .rot_keys
+                .first()
+                .map_or_else(|| from_mat3(&n.mat3), |k| from_quat(k.1));
+            let q = mul(&above, &mul(&rot, &scaling(scale)));
+            (
+                q,
+                Rsm1Node {
+                    pos,
+                    scale: [1.0; 3],
+                    rot_keys: Vec::new(),
+                    vertices: n.vertices.iter().map(|&v| apply(&q, v)).collect(),
+                },
+            )
+        };
+        fixed[i] = Some(q);
+        out[i] = Some(node);
+        q
+    }
+    for i in 0..m.nodes.len() {
+        go(i, m, &by_name, &mut fixed, &mut out, 0);
+    }
+    out.into_iter().flatten().collect()
 }
 
 /// Triangles of one node in node space (offset and 3 x 3 matrix applied, the node's own movement

@@ -26,6 +26,7 @@ pub struct Archive<R: ReadAt = Source> {
     max_entry_size: u64,
     crypt: Option<Crypt>,
     protected: Protected,
+    table_encrypted: bool,
 }
 
 /// The key block of a 0x300 archive (Gravity's protected entries) and what could be read from it.
@@ -100,7 +101,19 @@ impl<R: ReadAt> Archive<R> {
 
     fn from_source_with_key(src: R, key: Option<&Key>) -> Result<Self> {
         let c = container::read_container_with(&src, key)?;
-        Ok(Self::from_parts(src, c))
+        // a file table that was encrypted (GRF Editor's "Encrypt File Table"; opened with its key)
+        let mut head = [0u8; 3];
+        let table_encrypted = c.header.version >= 0x200
+            && src
+                .read_exact_at(
+                    &mut head,
+                    c.table.abs_offset + u64::from(c.table.prefix_len),
+                )
+                .is_ok()
+            && grfcrypt::looks_encrypted(&head);
+        let mut a = Self::from_parts(src, c);
+        a.table_encrypted = table_encrypted;
+        Ok(a)
     }
 
     fn from_parts(src: R, c: container::Container) -> Self {
@@ -113,6 +126,7 @@ impl<R: ReadAt> Archive<R> {
             max_entry_size: DEFAULT_MAX_ENTRY_SIZE,
             crypt: None,
             protected: Protected::default(),
+            table_encrypted: false,
         };
         a.read_key_block();
         a.detect_encryption();
@@ -196,6 +210,11 @@ impl<R: ReadAt> Archive<R> {
             key: None,
             crypted,
         });
+    }
+
+    /// Whether the file table was found encrypted (the archive was opened with its key).
+    pub fn table_encrypted(&self) -> bool {
+        self.table_encrypted
     }
 
     /// Whether the archive uses GRF Editor's encryption (has the hidden entry).
@@ -379,7 +398,7 @@ impl<R: ReadAt> Archive<R> {
                         data,
                         status: codec::DecodeStatus::Ok,
                     },
-                    // a variant that is not ported (Chinese key blocks): reported as encrypted
+                    // a variant that is not ported: reported as encrypted
                     Err(gravity::GravityError::Unsupported(_)) => Decoded {
                         data: Vec::new(),
                         status: codec::DecodeStatus::Encrypted,

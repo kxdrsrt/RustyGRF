@@ -60,3 +60,58 @@ fn every_wav_of_the_client_is_editable() {
         "not every sound could be edited: {outcome:?}"
     );
 }
+
+/// The background music of the client is MP3 outside the archives: every file reads, a trimmed
+/// copy is written as MP3 again with about the same bit rate and reads back at the new length.
+#[cfg(feature = "lossy-audio")]
+#[test]
+fn the_background_music_can_be_trimmed_and_written_as_mp3_again() {
+    use rgrf_formats::audio::Format;
+    let Some(base) = std::env::var_os("RGRF_TESTDATA") else {
+        eprintln!("SKIPPED: RGRF_TESTDATA is not set");
+        return;
+    };
+    let dir = PathBuf::from(base).join("client-dev/full/BGM");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        eprintln!("SKIPPED: no {}", dir.display());
+        return;
+    };
+    let mut files: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("mp3")))
+        .collect();
+    files.sort();
+    assert!(!files.is_empty());
+    let results: Vec<String> = files
+        .par_iter()
+        .enumerate()
+        .filter_map(|(n, p)| {
+            let bytes = std::fs::read(p).unwrap();
+            let (mut a, src) = match Audio::decode(&bytes) {
+                Ok(x) => x,
+                Err(e) => return Some(format!("{}: {e}", p.display())),
+            };
+            assert_eq!(src.format, Format::Mp3);
+            // every 12th file goes through the encoder too (it is slow)
+            if n % 12 != 0 {
+                return None;
+            }
+            let before = a.duration_ms();
+            a.apply(&Op::parse("trim:1000-6000").unwrap()).unwrap();
+            let out = a.encode(&src).unwrap();
+            let (b, again) = Audio::decode(&out).unwrap();
+            assert_eq!(again.format, Format::Mp3);
+            let len = b.duration_ms();
+            assert!(
+                (4900..=5200).contains(&len),
+                "{}: {len} ms (was {before})",
+                p.display()
+            );
+            let (k0, k1) = (src.kbps.unwrap_or(0) as f64, again.kbps.unwrap_or(0) as f64);
+            assert!(k1 > k0 * 0.5 && k1 < k0 * 1.6 + 20.0, "{k0} -> {k1} kbit/s");
+            None
+        })
+        .collect();
+    assert!(results.is_empty(), "{results:#?}");
+    eprintln!("{} MP3 files read", files.len());
+}

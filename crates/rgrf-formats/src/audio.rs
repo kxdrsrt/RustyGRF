@@ -1,6 +1,7 @@
 //! Editing sounds of the client: cut, trim, fade, volume, resample, a few effects. A sound is read
-//! with [`wav::decode`] (PCM and both ADPCM kinds), edited as planar `f32` and written as 16-bit
-//! PCM WAV. The operations have a short text form (`gain:3`, `trim:200-900`, `echo:250,0.4,0.3`) that the
+//! with [`wav::decode`] (PCM and both ADPCM kinds; MP3 and Ogg Vorbis with the feature
+//! `lossy-audio`), edited as planar `f32` and written as 16-bit PCM WAV (MP3 and Ogg again as what
+//! they were, see [`Audio::decode`]). The operations have a short text form (`gain:3`, `trim:200-900`, `echo:250,0.4,0.3`) that the
 //! CLI and the GUI share, see [`Op::parse`].
 
 use crate::wav::{self, WavError};
@@ -13,6 +14,10 @@ pub enum AudioError {
     Unknown(String),
     #[error("{0}: {1}")]
     Args(&'static str, String),
+    #[error("{0}")]
+    Lossy(String),
+    #[error("MP3 and Ogg Vorbis sounds can only be edited in a build with the feature lossy-audio")]
+    NoLossy,
     #[error("the range {0}-{1} ms is empty or outside the sound ({2} ms long)")]
     Range(u32, u32, u32),
 }
@@ -60,6 +65,47 @@ pub enum Op {
     },
     LowPass(f32, Option<Range>),
     HighPass(f32, Option<Range>),
+}
+
+/// The file formats of sounds the editor reads and writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Wav,
+    Mp3,
+    Ogg,
+}
+
+impl Format {
+    /// The format by the first bytes of a file.
+    pub fn detect(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(b"RIFF") {
+            Some(Self::Wav)
+        } else if bytes.starts_with(b"OggS") {
+            Some(Self::Ogg)
+        } else if bytes.starts_with(b"ID3")
+            || (bytes.len() > 2 && bytes[0] == 0xFF && bytes[1] & 0xE0 == 0xE0)
+        {
+            Some(Self::Mp3)
+        } else {
+            None
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Mp3 => "mp3",
+            Self::Ogg => "ogg",
+        }
+    }
+}
+
+/// What a sound was read from: the format and, for MP3 and Ogg, its average bit rate (the edited
+/// sound is written with about the same).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Source {
+    pub format: Format,
+    pub kbps: Option<u32>,
 }
 
 /// Planar samples in -1..1.
@@ -249,6 +295,43 @@ impl Audio {
 
     pub fn to_wav(&self) -> Vec<u8> {
         wav::encode_pcm16(self.rate, &self.channels)
+    }
+
+    /// Reads a WAV, MP3 or Ogg Vorbis file by its first bytes.
+    pub fn decode(bytes: &[u8]) -> Result<(Self, Source), AudioError> {
+        let format = Format::detect(bytes).unwrap_or(Format::Wav);
+        if format == Format::Wav {
+            let a = Self::from_wav(bytes)?;
+            return Ok((a, Source { format, kbps: None }));
+        }
+        #[cfg(feature = "lossy-audio")]
+        {
+            let d = crate::lossy::decode(bytes, format.extension())
+                .map_err(|e| AudioError::Lossy(e.0))?;
+            let a = Self {
+                rate: d.rate,
+                channels: d.channels,
+            };
+            let kbps = crate::lossy::average_kbps(bytes.len(), f64::from(a.duration_ms()) / 1000.0);
+            Ok((a, Source { format, kbps }))
+        }
+        #[cfg(not(feature = "lossy-audio"))]
+        Err(AudioError::NoLossy)
+    }
+
+    /// Writes the sound in the format it was read in.
+    pub fn encode(&self, source: &Source) -> Result<Vec<u8>, AudioError> {
+        match source.format {
+            Format::Wav => Ok(self.to_wav()),
+            #[cfg(feature = "lossy-audio")]
+            Format::Mp3 => crate::lossy::encode_mp3(self.rate, &self.channels, source.kbps)
+                .map_err(|e| AudioError::Lossy(e.0)),
+            #[cfg(feature = "lossy-audio")]
+            Format::Ogg => crate::lossy::encode_ogg(self.rate, &self.channels, source.kbps)
+                .map_err(|e| AudioError::Lossy(e.0)),
+            #[cfg(not(feature = "lossy-audio"))]
+            _ => Err(AudioError::NoLossy),
+        }
     }
 
     /// Samples per channel.

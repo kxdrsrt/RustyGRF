@@ -7,10 +7,15 @@
 //! and 113, body ciphers 1, 5, 7, 128 and 133, key blocks encrypted with CHAM or holding the kRO
 //! default keys) and the jRO variant (header 241 with IDEA, bodies 259 XTEA-CFB, 260 TEA-CFB and
 //! 269 RC5-OFB, key blocks GRF Editor recognises by their SHA-256); data stored, zlib or LZ4.
-//! Not ported: the Chinese variant (`ProtectedCnDecoder.cs`), which GRF Editor itself cannot reach:
-//! its entry header reader refuses the header version 2 that variant needs, and its 64-byte keys
-//! fail the 60-byte check. Checked against the 40 vectors GRF Editor ships and 24 jRO vectors made
-//! with GRF Editor's own decoder (`tests/fixtures`).
+//! The Chinese variant (`ProtectedCnDecoder.cs`: entry header version 2 with a signature, body
+//! cipher 9 with RC6 and an IDEA mask, one of two key blocks GRF Editor knows by their SHA-256) is
+//! ported from code that GRF Editor itself cannot run: its entry header reader refuses the header
+//! version 2 and its 64-byte keys fail the 60-byte check. Here the first 60 bytes of a key are
+//! used and the Ed25519 signature of the header is not checked; the hash of the decoded content
+//! still is, so a wrong reading is an error, never wrong data. **No real cnRO archive was
+//! available:** only a round trip with an encoder written from the same code has been tried.
+//! Checked against the 40 vectors GRF Editor ships and 24 jRO vectors made with GRF Editor's own
+//! decoder (`tests/fixtures`).
 //!
 //! An entry is a 104-byte header (encrypted, with an XXH32 checksum) and a body whose first 128
 //! bytes are plain and whose rest is encrypted with keys derived from the raw file name bytes,
@@ -24,6 +29,8 @@ use sha2::{Digest, Sha256};
 use twox_hash::{XxHash3_128, XxHash32};
 
 pub const HEADER_SIZE: usize = 104;
+/// An entry header of version 2 (Chinese variant) is followed by a 64-byte signature.
+const CN_HEADER_SIZE: usize = 168;
 const MAX_OUTPUT: usize = 256 << 20;
 const MAX_PACKED: usize = 258 << 20;
 
@@ -111,11 +118,13 @@ pub fn decode_archive_keys(raw: &[u8]) -> Result<ArchiveKeys> {
     if let Some(keys) = jro_archive_keys(raw)? {
         return Ok(keys);
     }
+    if let Some(keys) = cn_archive_keys(raw)? {
+        return Ok(keys);
+    }
     let size = word(raw, 12) as usize;
     if size == 0 || !size.is_multiple_of(64) || size / 64 > 65535 || size != raw.len() - 20 {
         return Err(GravityError::Unsupported(
-            "archive key block of an unknown layout (perhaps the Chinese variant, not supported)"
-                .into(),
+            "archive key block of an unknown layout".into(),
         ));
     }
     let mut decoded = raw[20..20 + size].to_vec();
@@ -167,17 +176,22 @@ pub fn decode(
     }
     let name_hash = native_hash(raw_name, 0);
     let header = decode_header(payload, &name_hash)?;
+    let cn = header[0] == 2;
+    let header_size = if cn { CN_HEADER_SIZE } else { HEADER_SIZE };
+    if payload.len() < header_size {
+        return invalid("truncated entry header");
+    }
     let padded = word(&header, 12) as usize;
     let compressed = word(&header, 16) as usize;
     let output = word(&header, 20) as usize;
     if output != expected || output > MAX_OUTPUT {
         return invalid("output size differs from the file table");
     }
-    if padded > MAX_PACKED || padded > payload.len() - HEADER_SIZE || compressed > padded {
+    if padded > MAX_PACKED || padded > payload.len() - header_size || compressed > padded {
         return invalid("body size lies outside the stored data");
     }
     let cipher = u16::from_le_bytes([header[8], header[9]]);
-    if !matches!(cipher, 1 | 5 | 7 | 128 | 133 | 259 | 260 | 269) {
+    if !(matches!(cipher, 1 | 5 | 7 | 128 | 133 | 259 | 260 | 269) || (cn && cipher == 9)) {
         return invalid(format!("unsupported body cipher {cipher}"));
     }
     let compression = header[10];
@@ -207,8 +221,11 @@ pub fn decode(
                 0
             };
     }
-    let mut body = payload[HEADER_SIZE..HEADER_SIZE + padded].to_vec();
-    if matches!(cipher, 259 | 260 | 269) {
+    let mut body = payload[header_size..header_size + padded].to_vec();
+    if cn && cipher == 9 {
+        let material: &[u8; 60] = params[..60].try_into().expect("60 bytes");
+        body = cn_body(body, &header, raw_name, material);
+    } else if matches!(cipher, 259 | 260 | 269) {
         let material: &[u8; 60] = params[..60].try_into().expect("60 bytes");
         body = jro_body(body, &header, raw_name, cipher, material)?;
     } else if compressed > 128 {
@@ -265,8 +282,11 @@ pub fn decode(
 }
 
 fn decode_header(payload: &[u8], name_hash: &[u8; 16]) -> Result<[u8; HEADER_SIZE]> {
-    if payload.len() < HEADER_SIZE || payload[0] != 1 {
+    if payload.len() < HEADER_SIZE || !matches!(payload[0], 1 | 2) {
         return invalid("unsupported or truncated entry header");
+    }
+    if payload[0] == 2 && !matches!(payload[1], 1 | 2) {
+        return invalid("unsupported signed entry header cipher");
     }
     if payload[1] == 241 {
         return jro_header(payload);
@@ -320,6 +340,91 @@ fn inflate_exact(stream: &[u8], expected: usize) -> Result<Vec<u8>> {
     }
     out.truncate(expected);
     Ok(out)
+}
+
+// ---------- the Chinese variant ----------
+
+/// The two key blocks (156 bytes) GRF Editor knows, by their SHA-256.
+const CN_ENVELOPES: [&str; 2] = [
+    "a09a4c27abdfbb473392e1e246b8def486ff820bdd51de7ad7206c279cc3b529",
+    "2ef7f6c8fb08fa9d90b163de26c04a7323ec9231f59efcb7c783f1dee040053a",
+];
+
+/// The keys such a block stands for: two records of an id and 64 bytes.
+const CN_KEYS: [u8; 136] = [
+    0x01, 0x00, 0x00, 0x00, 0xbc, 0x66, 0xd8, 0x90, 0x8f, 0xa7, 0x19, 0x7b, 0x0f, 0x90, 0x22, 0xed,
+    0x42, 0x6d, 0xdf, 0x1f, 0xdf, 0xcf, 0xef, 0xca, 0x44, 0xd0, 0xd6, 0xc9, 0xde, 0xc0, 0x66, 0x0f,
+    0xa6, 0x01, 0x0e, 0x05, 0x72, 0x2a, 0x70, 0x8d, 0xc7, 0x1e, 0xf8, 0x67, 0xfb, 0x59, 0x64, 0x5d,
+    0x47, 0x7c, 0xc4, 0x74, 0x8a, 0xf3, 0xa0, 0x5e, 0xcf, 0xbf, 0x42, 0x64, 0x6b, 0x04, 0xe9, 0x9c,
+    0xe3, 0x9d, 0x21, 0xa7, 0x02, 0x00, 0x00, 0x00, 0xbd, 0x2a, 0x05, 0xe0, 0x5b, 0x87, 0x25, 0x5a,
+    0x4e, 0x9d, 0x3f, 0xde, 0x38, 0x69, 0xa2, 0xb6, 0x45, 0x8f, 0xf7, 0x49, 0x12, 0x20, 0x9c, 0xf9,
+    0x62, 0x23, 0x3e, 0x60, 0x44, 0x55, 0x4f, 0x6c, 0x34, 0x1c, 0xaf, 0x34, 0x97, 0x9c, 0x29, 0xa6,
+    0x64, 0xd4, 0x2e, 0x5e, 0xeb, 0xa3, 0x56, 0x74, 0xa6, 0xe3, 0x19, 0x3e, 0x5e, 0xce, 0x9a, 0x7d,
+    0xe1, 0x1b, 0x3d, 0x59, 0xe8, 0xd7, 0xe8, 0x78,
+];
+
+/// The keys of a key block that is one of the two known (the keys are not in the block itself).
+fn cn_archive_keys(raw: &[u8]) -> Result<Option<ArchiveKeys>> {
+    if raw.len() != 156 {
+        return Ok(None);
+    }
+    let hash: String = Sha256::digest(raw)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if !CN_ENVELOPES.contains(&hash.as_str()) {
+        return Ok(None);
+    }
+    if word(raw, 0) != 258 || word(raw, 12) != 136 {
+        return invalid("invalid CN archive key block");
+    }
+    if crc32fast::hash(&CN_KEYS) != word(raw, 16) {
+        return invalid("CN archive key checksum mismatch");
+    }
+    let mut keys = ArchiveKeys::new();
+    for rec in CN_KEYS.as_chunks::<68>().0 {
+        let id = word(rec, 0);
+        if id == 0 || id > 65535 || keys.contains_key(&id) {
+            return invalid("invalid CN key id");
+        }
+        // the records hold 64 bytes, a key is used with 60
+        keys.insert(id, rec[4..64].try_into().expect("60 bytes"));
+    }
+    Ok(Some(keys))
+}
+
+/// Body cipher 9: RC6 with feedback over a window (the first KiB behind 1152 bytes of the body,
+/// else everything from byte 128 in whole blocks), then a 16-byte IDEA mask over all from byte 128.
+fn cn_body(
+    mut body: Vec<u8>,
+    header: &[u8; HEADER_SIZE],
+    name: &[u8],
+    material: &[u8; 60],
+) -> Vec<u8> {
+    if body.len() <= 128 {
+        return body;
+    }
+    let rest = body.len() - 128;
+    let (at, n) = if rest >= 2048 {
+        (1152, 1024)
+    } else {
+        (128, rest & !15)
+    };
+    let keys = rc6_keys(&material[16..32]);
+    let mut feedback: [u8; 16] = material[44..60].try_into().expect("16 bytes");
+    for off in (at..at + n).step_by(16) {
+        let stream = rc6_encrypt(&feedback, &keys);
+        let cipher: [u8; 16] = body[off..off + 16].try_into().expect("16 bytes");
+        for i in 0..16 {
+            body[off + i] = cipher[i] ^ stream[i];
+        }
+        feedback = cipher;
+    }
+    let name_hash = native_hash(name, 0);
+    let header_hash: [u8; 16] = header[24..40].try_into().expect("16 bytes");
+    let mask = idea_mask(&name_hash, &header_hash, &material[50..58]);
+    xor_mask(&mut body[128..], &mask);
+    body
 }
 
 // ---------- ciphers ----------
@@ -1207,5 +1312,137 @@ pub(crate) mod tests {
         assert!(decode(&v.payload, &name, v.size, &keys).is_err());
         assert!(decode(&v.payload, &v.name, v.size + 1, &keys).is_err());
         assert!(decode(&v.payload, &v.name, v.size, &ArchiveKeys::new()).is_err());
+    }
+    /// An entry of the Chinese variant made by an encoder written from the decoder's code: the
+    /// round trip shows the plumbing (header version 2, 168-byte header, the two body windows,
+    /// the mask), not that real cnRO archives read.
+    fn cn_entry(data: &[u8], name: &[u8], header_cipher: u8) -> Vec<u8> {
+        use aes::cipher::BlockCipherEncrypt;
+        let mut seed = 0x1234_5678u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 24) as u8
+        };
+        let material: [u8; 60] = std::array::from_fn(|_| next());
+        let compressed = crate::codec::tests_support::zlib_level(data, 1);
+        let padded = compressed.len().div_ceil(16) * 16;
+        let mut body = compressed.clone();
+        body.resize(padded, 0);
+        let out_hash = native_hash(data, 0);
+        let mut header = [0u8; HEADER_SIZE];
+        header[0] = 2;
+        header[1] = header_cipher;
+        header[8..10].copy_from_slice(&9u16.to_le_bytes());
+        header[10] = 1;
+        put_le(&mut header, 12, padded as u32);
+        put_le(&mut header, 16, compressed.len() as u32);
+        put_le(&mut header, 20, data.len() as u32);
+        header[24..40].copy_from_slice(&out_hash);
+        header[44..104].copy_from_slice(&material);
+        let sum = xxh32(&header[8..104]);
+        put_le(&mut header, 4, sum);
+
+        // body: mask over all from byte 128, then the window in CFB with the plain feedback
+        let mask = idea_mask(&native_hash(name, 0), &out_hash, &material[50..58]);
+        // a body of up to 128 bytes stays as it is
+        let rest = body.len().saturating_sub(128);
+        if rest > 0 {
+            xor_mask(&mut body[128..], &mask);
+        }
+        let (at, n) = if rest >= 2048 {
+            (1152, 1024)
+        } else {
+            (128, rest & !15)
+        };
+        let keys = rc6_keys(&material[16..32]);
+        let mut feedback: [u8; 16] = material[44..60].try_into().unwrap();
+        for off in (at..at + n).step_by(16) {
+            let stream = rc6_encrypt(&feedback, &keys);
+            for i in 0..16 {
+                body[off + i] ^= stream[i];
+            }
+            feedback = body[off..off + 16].try_into().unwrap();
+        }
+        // header: AES-CBC with the fixed key and the name hash (type 2) or the first constant (1)
+        let key = [
+            0x56, 0xfd, 0x7e, 0x71, 0x2f, 0x6d, 0x36, 0xf5, 0x5c, 0xa5, 0x99, 0xe6, 0x7b, 0x18,
+            0x10, 0x7a,
+        ];
+        let mut prev: [u8; 16] = if header_cipher == 2 {
+            native_hash(name, 0)
+        } else {
+            [
+                0x4c, 0xe8, 0xa1, 0xae, 0x45, 0xb3, 0x21, 0x60, 0x7e, 0x4f, 0x26, 0xa4, 0xbb, 0x14,
+                0x0c, 0x96,
+            ]
+        };
+        let aes = Aes128::new(&Array::from(key));
+        for block in header[8..104].as_chunks_mut::<16>().0 {
+            for i in 0..16 {
+                block[i] ^= prev[i];
+            }
+            let mut b = Array::from(*block);
+            aes.encrypt_block(&mut b);
+            block.copy_from_slice(&b);
+            prev = *block;
+        }
+        let mut payload = header.to_vec();
+        payload.extend([0u8; 64]); // the signature, which is not checked
+        payload.extend(body);
+        payload
+    }
+
+    #[test]
+    fn an_entry_of_the_chinese_variant_round_trips() {
+        let mut seed = 99u32;
+        // small bodies keep the whole tail in the window, big ones use the 1 KiB window at 1152
+        for (len, noisy) in [(3000usize, false), (200usize, false), (40_000usize, true)] {
+            let data: Vec<u8> = (0..len)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    if noisy {
+                        (seed >> 16) as u8
+                    } else {
+                        b"abc def "[i % 8]
+                    }
+                })
+                .collect();
+            for cipher in [1, 2] {
+                let name = b"data\\texture\\cn_a.bmp";
+                let payload = cn_entry(&data, name, cipher);
+                let got = decode(&payload, name, data.len(), &ArchiveKeys::new()).unwrap();
+                assert_eq!(got, data, "{len} bytes, header type {cipher}");
+                // another size or a changed byte of the body is refused; another name too, as soon as
+                // the body has a part that the name masks
+                if noisy {
+                    assert!(
+                        decode(&payload, b"data\\x.bmp", data.len(), &ArchiveKeys::new()).is_err()
+                    );
+                }
+                assert!(decode(&payload, name, data.len() + 1, &ArchiveKeys::new()).is_err());
+                let mut bad = payload.clone();
+                bad[CN_HEADER_SIZE + 3] ^= 1;
+                assert!(decode(&bad, name, data.len(), &ArchiveKeys::new()).is_err());
+            }
+        }
+        // cipher 9 needs the version 2 header
+        let name = b"x";
+        let mut p = cn_entry(&[7u8; 500], name, 2);
+        assert!(decode(&p, name, 500, &ArchiveKeys::new()).is_ok());
+        p[0] = 1;
+        assert!(decode(&p, name, 500, &ArchiveKeys::new()).is_err());
+    }
+
+    #[test]
+    fn the_chinese_key_block_is_only_taken_for_the_two_known_ones() {
+        assert_eq!(cn_archive_keys(&[0u8; 156]), Ok(None));
+        assert_eq!(cn_archive_keys(&[0u8; 20]), Ok(None));
+        let ids: Vec<u32> = CN_KEYS
+            .as_chunks::<68>()
+            .0
+            .iter()
+            .map(|r| word(r, 0))
+            .collect();
+        assert_eq!(ids, [1, 2]);
     }
 }

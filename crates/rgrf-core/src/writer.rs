@@ -119,6 +119,8 @@ pub struct Writer<W: Write + Seek> {
     /// The first 16 bytes of the header instead of the format's ("Master of Magic\0",
     /// "Event Horizon\0c\0"); GRF Editor lets this be edited and reads any.
     magic: Option<[u8; 16]>,
+    /// Encrypts the compressed file table with this key (GRF Editor's "Encrypt File Table").
+    table_key: Option<crate::grfcrypt::Key>,
 }
 
 fn ceil8(n: u32) -> u32 {
@@ -138,7 +140,19 @@ impl<W: Write + Seek> Writer<W> {
             data_len: 0,
             key_block: Vec::new(),
             magic: None,
+            table_key: None,
         })
+    }
+
+    /// Encrypts the file table with `key` (0x200 and 0x300 only); the entries stay as they are.
+    pub fn set_table_key(&mut self, key: crate::grfcrypt::Key) -> Result<()> {
+        if self.format.is_legacy() {
+            return Err(Error::Unsupported(
+                "the file table of the old 0x102/0x103 formats cannot be encrypted".into(),
+            ));
+        }
+        self.table_key = Some(key);
+        Ok(())
     }
 
     /// Writes `magic` as the first 16 bytes of the header instead of the format's own.
@@ -236,7 +250,11 @@ impl<W: Write + Seek> Writer<W> {
             Compression::new(9),
         );
         z.write_all(&table)?;
-        let packed = z.finish()?;
+        let mut packed = z.finish()?;
+        if let Some(key) = &self.table_key {
+            // the counter is the table's size + 8; a result that could pass for zlib stays plain
+            crate::grfcrypt::encrypt_stream(key, &mut packed, table.len() as u64 + 8);
+        }
         let (zsize, size) = (
             u32::try_from(packed.len())
                 .map_err(|_| Error::TooLarge("file table too large".into()))?,

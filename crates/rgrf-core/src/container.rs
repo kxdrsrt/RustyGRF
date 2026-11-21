@@ -446,6 +446,9 @@ pub fn read_container_with(
         .map_err(|e| {
             if encrypted && key.is_none() {
                 Error::EncryptedTable
+            } else if encrypted {
+                // the table was decrypted with the wrong key
+                Error::WrongKey
             } else {
                 Error::CorruptTable(format!("file table does not decompress: {e}"))
             }

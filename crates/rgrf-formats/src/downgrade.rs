@@ -3,8 +3,9 @@
 //! file, the ground file becomes version 1.7.
 //!
 //! The models are written the way GRF Editor's "flat" conversion does: the static pose is baked
-//! into the vertices, so **animations of the nodes are lost** (a flag that waves is a still
-//! flag), and a hidden root node `__RSM2RSM1` with the scale (-1, -1, 1) turns the model around the
+//! into the vertices. A model whose nodes turn (rotation key frames) keeps those, like GRF
+//! Editor's "downgrade" does; position, scale and texture animations are lost (the old format has
+//! no room for them), so a flag that waves with them is a still flag. A hidden root node `__RSM2RSM1` with the scale (-1, -1, 1) turns the model around the
 //! way the old client expects. The map's model entries get the new name (`.rsm`), a changed
 //! position (the old client centres a model on its vertices, the new one does not) and a negative
 //! x scale. All of this is read from GRF Editor's `RenamingService.DowngradeMap`, `Rsm2Converter`
@@ -117,11 +118,13 @@ fn flatten(m: &Model) -> Rsm1 {
     put_i32(&mut o, m.nodes.len() as i32 + 1);
 
     let identity = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    type Keys = [(i32, [f32; 4])];
+    #[allow(clippy::type_complexity)]
     let node = |o: &mut Vec<u8>,
                 name: &[u8],
                 parent: &[u8],
                 tex: &[i32],
-                scale: [f32; 3],
+                (pos, scale, keys): ([f32; 3], [f32; 3], &Keys),
                 verts: &[[f32; 3]],
                 n: Option<&rsm_model::Node>| {
         fixed(o, name, 40);
@@ -130,7 +133,7 @@ fn flatten(m: &Model) -> Rsm1 {
         tex.iter().for_each(|&t| put_i32(o, t));
         put_f32s(o, &identity);
         put_f32s(o, &[0.0; 3]); // offset
-        put_f32s(o, &[0.0; 3]); // position
+        put_f32s(o, &pos);
         put_f32s(o, &[0.0]); // rotation angle
         put_f32s(o, &[0.0; 3]); // rotation axis
         put_f32s(o, &scale);
@@ -160,24 +163,38 @@ fn flatten(m: &Model) -> Rsm1 {
             put_i32(o, i32::from(f.two_sided));
             put_i32(o, f.smooth_group);
         }
-        put_i32(o, 0); // rotation key frames
+        put_i32(o, keys.len() as i32);
+        for (frame, q) in keys {
+            put_i32(o, *frame);
+            put_f32s(o, q);
+        }
     };
-    node(&mut o, ROOT, b"", &[], [-1.0, -1.0, 1.0], &[], None);
+    let turns = m.nodes.iter().any(|n| n.rot_keys.len() > 1);
+    let moving = turns.then(|| rsm_model::rsm1_nodes(m));
+    let still = ([0.0; 3], [1.0; 3], &[][..]);
+    node(
+        &mut o,
+        ROOT,
+        b"",
+        &[],
+        ([0.0; 3], [-1.0, -1.0, 1.0], &[]),
+        &[],
+        None,
+    );
     let names: Vec<&[u8]> = m.nodes.iter().map(|n| n.name.as_slice()).collect();
     for (i, n) in m.nodes.iter().enumerate() {
         // every node without a parent of its own hangs below the new root
         let rooted =
             n.parent.is_empty() || !names.contains(&n.parent.as_slice()) || n.parent == n.name;
         let parent: &[u8] = if rooted { ROOT } else { &n.parent };
-        node(
-            &mut o,
-            &n.name,
-            parent,
-            &ids[i],
-            [1.0, 1.0, 1.0],
-            &baked[i],
-            Some(n),
-        );
+        let (placed, verts) = match &moving {
+            Some(nodes) => (
+                (nodes[i].pos, nodes[i].scale, &nodes[i].rot_keys[..]),
+                &nodes[i].vertices,
+            ),
+            None => (still, &baked[i]),
+        };
+        node(&mut o, &n.name, parent, &ids[i], placed, verts, Some(n));
     }
     put_i32(&mut o, 0); // scale key frames (written after the meshes before version 1.6)
     put_i32(&mut o, 0); // volume boxes
@@ -509,6 +526,51 @@ mod tests {
         // box over everything: x -4..18 (the second node sits 10 further), z -1..5, lowest y 1
         assert_eq!(r.center, [7.0, 1.0, 2.0]);
         assert!(model_to_rsm1(&r.bytes).is_err(), "an RSM1 is not an RSM2");
+    }
+
+    /// Turning nodes keep their rotation key frames: at every time the vertices stand where the
+    /// RSM2 model has them (turned around by the root node), also below a node that is rotated and
+    /// scaled for good.
+    #[test]
+    fn turning_nodes_keep_their_animation() {
+        let mut m2 = rsm_model::parse(&rsm2(&BOX)).unwrap();
+        let quat = |axis: [f32; 3], deg: f32| {
+            let (s, c) = (deg.to_radians() / 2.0).sin_cos();
+            [axis[0] * s, axis[1] * s, axis[2] * s, c]
+        };
+        let mut leaf = m2.nodes[1].clone();
+        leaf.name = b"leaf".to_vec();
+        leaf.parent = b"kid".to_vec();
+        leaf.offset = [2.0, -3.0, 1.0];
+        m2.nodes.push(leaf);
+        m2.nodes[0].rot_keys = vec![
+            (0, quat([0.0, 0.0, 1.0], 0.0)),
+            (30, quat([0.0, 0.0, 1.0], 80.0)),
+            (60, quat([0.0, 1.0, 0.0], 170.0)),
+        ];
+        // a fixed quarter turn about z, scaled by 2 along the way
+        m2.nodes[1].mat3 = [0.0, 2.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, 2.0];
+        m2.nodes[2].rot_keys = vec![
+            (0, quat([1.0, 0.0, 0.0], 0.0)),
+            (45, quat([1.0, 0.0, 0.0], 100.0)),
+        ];
+        let r = flatten(&m2);
+        let m1 = rsm_model::parse(&r.bytes).unwrap();
+        assert!(m1.nodes[1].rot_keys.len() > 1, "the root node's keys stay");
+        assert!(m1.nodes[2].rot_keys.is_empty(), "the fixed node has none");
+        for t in [0.0, 400.0, 1000.0, 1500.0, 2000.0] {
+            let a = rsm_model::baked_vertices_at(&m2, t);
+            let b = rsm_model::baked_vertices_at(&m1, t);
+            assert_eq!(b.len(), a.len() + 1);
+            for (va, vb) in a.iter().zip(&b[1..]) {
+                for (x, y) in va.iter().zip(vb) {
+                    let want = [-x[0], -x[1], x[2]];
+                    for k in 0..3 {
+                        assert!((want[k] - y[k]).abs() < 2e-3, "t {t}: {want:?} vs {y:?}");
+                    }
+                }
+            }
+        }
     }
 
     /// The old client's matrix for an RSM1 object, the new one's for an RSM2 object: the same

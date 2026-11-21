@@ -15,8 +15,13 @@ struct Session {
 
 impl Session {
     fn start(args: &[&str]) -> Self {
+        Self::start_with_env(args, &[])
+    }
+
+    fn start_with_env(args: &[&str], env: &[(&str, &str)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rgrf-mcp"))
             .args(args)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -102,7 +107,7 @@ fn handshake_list_call_and_clean_exit_at_eof() {
     assert_eq!(r["result"]["serverInfo"]["name"], "rgrf-mcp");
     s.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     let r = s.request(2, "tools/list", json!({}));
-    assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 11);
+    assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 12);
     let r = s.request(
         3,
         "tools/call",
@@ -192,4 +197,102 @@ fn progress_is_reported_when_the_client_asks_for_it() {
     assert!(out.join("p.grf").exists());
     assert_eq!(s.finish(), 0);
     std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn single_files_are_encrypted_with_the_password_of_the_environment() {
+    use rgrf_core::build::{BuildOptions, build};
+    use rgrf_core::progress::Control;
+    use rgrf_core::{Archive, GrfPath};
+    let base = tmp("crypt");
+    fill(&base.join("src"), 3, 3000);
+    let plain = base.join("plain.grf");
+    build(
+        &base.join("src"),
+        &plain,
+        &BuildOptions::default(),
+        &Control::default(),
+    )
+    .unwrap();
+    let out = base.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let args = json!({"path": plain.to_str().unwrap(), "output": out.join("mix.grf").to_str().unwrap(), "encrypt_entries": ["f1"]});
+
+    // without a password in the environment the tool refuses
+    let mut s = Session::start(&[
+        "--allow-write",
+        out.to_str().unwrap(),
+        "--allow-read",
+        base.to_str().unwrap(),
+    ]);
+    s.request(1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    let r = s.request(
+        2,
+        "tools/call",
+        json!({"name": "grf_crypt", "arguments": args}),
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("RGRF_PASSWORD")
+    );
+    assert_eq!(s.finish(), 0);
+
+    let mut s = Session::start_with_env(
+        &[
+            "--allow-write",
+            out.to_str().unwrap(),
+            "--allow-read",
+            base.to_str().unwrap(),
+        ],
+        &[("RGRF_PASSWORD", "geheim123")],
+    );
+    s.request(1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    let r = s.request(
+        2,
+        "tools/call",
+        json!({"name": "grf_crypt", "arguments": args}),
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(r["result"]["structuredContent"]["encrypted_entries"], 1);
+    assert_eq!(s.finish(), 0);
+
+    let key = rgrf_core::grfcrypt::key_from_password("geheim123").unwrap();
+    let g = Archive::open(out.join("mix.grf")).unwrap();
+    assert_eq!(g.encryption().unwrap().encrypted_entries, 1);
+    let g = Archive::open_with_key(out.join("mix.grf"), &key).unwrap();
+    let f1 = g.find(&GrfPath::new(&b"data\\f1.txt"[..])).unwrap();
+    assert!(g.entry_encrypted(f1));
+    assert_eq!(g.read(f1).unwrap().data, text(3000, 1));
+    let f0 = g.find(&GrfPath::new(&b"data\\f0.txt"[..])).unwrap();
+    assert!(!g.entry_encrypted(f0));
+
+    // the table too: the archive no longer opens without the key
+    let mut s = Session::start_with_env(
+        &[
+            "--allow-write",
+            out.to_str().unwrap(),
+            "--allow-read",
+            base.to_str().unwrap(),
+        ],
+        &[("RGRF_PASSWORD", "geheim123")],
+    );
+    s.request(1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    let args = json!({"path": out.join("mix.grf").to_str().unwrap(), "output": out.join("table.grf").to_str().unwrap(), "encrypt_table": true});
+    let r = s.request(
+        2,
+        "tools/call",
+        json!({"name": "grf_crypt", "arguments": args}),
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(
+        r["result"]["structuredContent"]["file_table_encrypted"],
+        true
+    );
+    assert_eq!(s.finish(), 0);
+    assert!(Archive::open(out.join("table.grf")).is_err());
+    let t = Archive::open_with_key(out.join("table.grf"), &key).unwrap();
+    assert!(t.table_encrypted() && t.encryption().unwrap().encrypted_entries == 1);
 }

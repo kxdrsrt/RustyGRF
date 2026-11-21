@@ -10,6 +10,8 @@ pub mod gat;
 pub mod gif_io;
 pub mod gnd;
 pub mod gnd_map;
+#[cfg(feature = "lossy-audio")]
+pub mod lossy;
 pub mod lua;
 pub mod luac;
 pub mod luac50;

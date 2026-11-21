@@ -214,3 +214,54 @@ fn an_encrypted_file_table_opens_with_the_key_only() {
     assert_eq!(g.read(a).unwrap().data, text(4000, 1));
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn the_file_table_alone_can_be_encrypted_and_decrypted() {
+    let key = grfcrypt::key_from_password("table only").unwrap();
+    let (dir, enc) = encrypted("crypt-table", &key);
+    let src = Archive::open_with_key(&enc, &key).unwrap();
+    assert!(!src.table_encrypted());
+    // plain entries, encrypted table
+    let out = dir.join("table.grf");
+    let o = RepackOptions {
+        encrypt_table: Some(key),
+        ..RepackOptions::default()
+    };
+    let r = repack(&src, &out, &o, &Control::default()).unwrap();
+    assert!(r.verified);
+    assert!(matches!(Archive::open(&out), Err(Error::EncryptedTable)));
+    let g = Archive::open_with_key(&out, &key).unwrap();
+    assert!(g.table_encrypted() && g.encryption().is_none());
+    let a = g.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap();
+    assert_eq!(g.read(a).unwrap().data, text(4000, 1));
+    // a wrong key does not read the table
+    let wrong = grfcrypt::key_from_password("another").unwrap();
+    assert!(Archive::open_with_key(&out, &wrong).is_err());
+    // entries and table both encrypted, then the table plain again
+    let both = dir.join("both.grf");
+    let o = RepackOptions {
+        encrypt: Some(key),
+        encrypt_table: Some(key),
+        ..RepackOptions::default()
+    };
+    repack(&g, &both, &o, &Control::default()).unwrap();
+    let b = Archive::open_with_key(&both, &key).unwrap();
+    assert!(b.table_encrypted());
+    assert_eq!(b.encryption().unwrap().encrypted_entries, 4);
+    let o = RepackOptions {
+        encrypt: Some(key),
+        ..RepackOptions::default()
+    };
+    let back = dir.join("back.grf");
+    repack(&b, &back, &o, &Control::default()).unwrap();
+    let c = Archive::open(&back).unwrap();
+    assert!(!c.table_encrypted() && c.encryption().is_some());
+    // the old formats cannot hold it
+    let o = RepackOptions {
+        encrypt_table: Some(key),
+        format: Some(Format::V102),
+        ..RepackOptions::default()
+    };
+    assert!(repack(&c, &dir.join("old.grf"), &o, &Control::default()).is_err());
+    let _ = fs::remove_dir_all(dir);
+}

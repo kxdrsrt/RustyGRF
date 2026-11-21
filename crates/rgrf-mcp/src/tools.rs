@@ -552,6 +552,110 @@ pub const TOOLS: &[Tool] = &[
         writes: true,
         run: patch_tool,
     },
+    Tool {
+        name: "grf_downgrade_maps",
+        title: "Downgrade maps for old clients (patch archive)",
+        description: "GRF Editor's Downgrade on maps: writes a small archive with the world file (version 2.1, the water of the ground file), ground file (1.7) and the models of the maps, whose RSM2 models (2.2 and 2.3) become RSM 1.4 (`.rsm`) with the objects moved to fit. Models whose nodes turn keep that animation; position, scale and texture animations are lost. All maps that use RSM2 models, or only `maps`. List the output first in DATA.INI. Not tried in an old client.",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "The archive with the maps and their models (it stays unchanged).",
+            ),
+            opt(
+                "maps",
+                Ty::StrList,
+                "Only these maps: `prontera` or `data\\prontera.rsw` (default: every map with RSM2 models).",
+            ),
+            NAMES,
+            OUTPUT,
+            OVERWRITE,
+            DRY_RUN,
+        ],
+        writes: true,
+        run: downgrade_maps_tool,
+    },
+    Tool {
+        name: "grf_crypt",
+        title: "Encrypt or decrypt single files or the file table (archive)",
+        description: "GRF Editor's Encrypt and Decrypt on single files, and Encrypt File Table: writes a copy in which the files matching `encrypt_entries` are encrypted, those matching `decrypt_entries` are plain, and every other file keeps its state (0x200 only). The key is the server's RGRF_PASSWORD or RGRF_KEY_FILE; it also opens an encrypted source. Blocks are not shared in the result, so it can grow.",
+        params: &[
+            req("path", Ty::Str, "The archive (it stays unchanged)."),
+            opt(
+                "encrypt_entries",
+                Ty::StrList,
+                "Encrypt the files matching these patterns (substring, or glob with * or ?; `/` equals `\\`).",
+            ),
+            opt(
+                "decrypt_entries",
+                Ty::StrList,
+                "Decrypt the files matching these patterns.",
+            ),
+            opt(
+                "encrypt_table",
+                Ty::Bool,
+                "Encrypt the file table (GRF Editor's Encrypt File Table); the archive then needs the key to open. Without it the table keeps its state.",
+            ),
+            opt("decrypt_table", Ty::Bool, "Write the file table plain."),
+            NAMES,
+            OUTPUT,
+            METHOD_OR_COPY,
+            LEVEL,
+            OVERWRITE,
+            DRY_RUN,
+        ],
+        writes: true,
+        run: crypt_tool,
+    },
+    Tool {
+        name: "grf_audio_info",
+        title: "Sound information",
+        description: "Format (wav, mp3, ogg), sample rate, channels, length and peak level of a sound: a loose file, or `entry` of an archive. Reads PCM and ADPCM WAV, MP3 and Ogg Vorbis.",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "A sound file, or an archive when `entry` is given.",
+            ),
+            opt("entry", Ty::Str, "The sound inside the archive `path`."),
+            NAMES,
+        ],
+        writes: false,
+        run: audio_info_tool,
+    },
+    Tool {
+        name: "grf_audio_edit",
+        title: "Edit a sound (new file)",
+        description: "Applies the operations `ops` in order to a sound (a loose file, or `entry` of an archive) and writes the result as a new file, by default in the sound's own format (WAV as 16-bit PCM; MP3 and Ogg are encoded again with about the same bit rate). Operations: trim:A-B, cut:A-B, silence:A-B (times in ms), gain:DB[@A-B], normalize:DB, fadein:MS, fadeout:MS, reverse, mono, resample:HZ, speed:FACTOR, echo:DELAY,FEEDBACK,MIX, reverb:ROOM,MIX, lowpass:HZ, highpass:HZ. Put the result into an archive with grf_edit.",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "A sound file, or an archive when `entry` is given.",
+            ),
+            opt("entry", Ty::Str, "The sound inside the archive `path`."),
+            req(
+                "ops",
+                Ty::StrList,
+                "The operations, e.g. [\"trim:200-900\", \"fadeout:100\"].",
+            ),
+            opt(
+                "to",
+                Ty::Enum(&["wav", "mp3", "ogg"]),
+                "Write this format instead of the sound's own.",
+            ),
+            opt(
+                "kbps",
+                Ty::Int,
+                "Bit rate of an MP3 or Ogg result (default: about that of the source).",
+            ),
+            NAMES,
+            OUTPUT,
+            OVERWRITE,
+        ],
+        writes: true,
+        run: audio_edit_tool,
+    },
 ];
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -1234,9 +1338,6 @@ fn image_reduce_tool(ctx: &Ctx, a: &Args) -> Out {
 
 fn flat_maps_tool(ctx: &Ctx, a: &Args) -> Out {
     use rgrf_formats::flat_map::{FlatOptions, apply_map};
-    let src = ctx.policy.read(a.str("path"))?;
-    let out = output_path(ctx, a, std::slice::from_ref(&src))?;
-    let arc = open(ctx, a.str("path"))?;
     let mut o = FlatOptions {
         flatten: a.flag("flatten"),
         remove_light: a.flag("remove_light"),
@@ -1253,6 +1354,22 @@ fn flat_maps_tool(ctx: &Ctx, a: &Args) -> Out {
     if !o.any() {
         (o.flatten, o.remove_light, o.remove_shadow) = (true, true, true);
     }
+    map_patch_tool(ctx, a, |base, read| apply_map(base, read, &o))
+}
+
+/// What a map tool returns for one map: the files to write with their paths, or why it was left out.
+type MapFiles = Result<Result<Vec<(Vec<u8>, Vec<u8>)>, String>, String>;
+
+/// Runs `per_map` on the maps of the archive `path` (all, or `maps`) and writes what it returns
+/// as one small archive: the shared part of the tools that change maps.
+fn map_patch_tool(
+    ctx: &Ctx,
+    a: &Args,
+    per_map: impl Fn(&[u8], &dyn Fn(&[u8]) -> Result<Option<Vec<u8>>, String>) -> MapFiles + Sync,
+) -> Out {
+    let src = ctx.policy.read(a.str("path"))?;
+    let out = output_path(ctx, a, std::slice::from_ref(&src))?;
+    let arc = open(ctx, a.str("path"))?;
     let mode = names_mode(a);
     let keys = arc.index_by_key();
     let wanted: Vec<String> = a
@@ -1294,7 +1411,7 @@ fn flat_maps_tool(ctx: &Ctx, a: &Args) -> Out {
         .map(|base| {
             ctx.control.check().map_err(err)?;
             let shown = GrfPath::new(base.clone()).display(mode);
-            let changed = match apply_map(base, read, &o)? {
+            let changed = match per_map(base, &read)? {
                 Ok(c) => c,
                 Err(why) => return Ok((vec![], 0, Some(format!("{shown}: {why}")))),
             };
@@ -1337,6 +1454,22 @@ fn flat_maps_tool(ctx: &Ctx, a: &Args) -> Out {
         "problems": problems.iter().take(50).collect::<Vec<_>>(),
         "problem_count": problems.len(),
     }))
+}
+
+fn downgrade_maps_tool(ctx: &Ctx, a: &Args) -> Out {
+    let named = !a.list("maps").is_empty();
+    map_patch_tool(ctx, a, |base, read| {
+        // without names, only the maps that have RSM2 models
+        Ok(
+            rgrf_formats::downgrade::apply_map(base, read)?.map(|(files, d)| {
+                if !named && d.instances == 0 {
+                    Vec::new()
+                } else {
+                    files
+                }
+            }),
+        )
+    })
 }
 
 fn map_files_tool(ctx: &Ctx, a: &Args) -> Out {
@@ -1566,6 +1699,126 @@ fn client_unused_tool(ctx: &Ctx, a: &Args) -> Out {
             "examples": f.examples.iter().map(|e| show(e)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "folders_truncated": r.folders.len() > limit,
+    }))
+}
+
+fn crypt_tool(ctx: &Ctx, a: &Args) -> Out {
+    let (on, off) = (a.list("encrypt_entries"), a.list("decrypt_entries"));
+    let (table_on, table_off) = (a.flag("encrypt_table"), a.flag("decrypt_table"));
+    if on.is_empty() && off.is_empty() && !table_on && !table_off {
+        return Err("nothing to do: give `encrypt_entries`, `decrypt_entries`, `encrypt_table` or `decrypt_table`".into());
+    }
+    if table_on && table_off {
+        return Err("`encrypt_table` and `decrypt_table` exclude each other".into());
+    }
+    let key = env_key()?.ok_or_else(|| {
+        "crypt needs RGRF_PASSWORD or RGRF_KEY_FILE in the server's environment".to_string()
+    })?;
+    let src = ctx.policy.read(a.str("path"))?;
+    let out = output_path(ctx, a, std::slice::from_ref(&src))?;
+    let arc = open(ctx, a.str("path"))?;
+    let mode = names_mode(a);
+    let pick = |patterns: &[&str]| -> Result<Vec<usize>, String> {
+        let mut found = Vec::new();
+        for p in patterns {
+            let hits: Vec<usize> = arc
+                .select(Some(p), mode)
+                .into_iter()
+                .filter(|&i| arc.entries()[i].is_file())
+                .collect();
+            if hits.is_empty() {
+                return Err(format!("no file matches '{p}'"));
+            }
+            found.extend(hits);
+        }
+        Ok(found)
+    };
+    let (on, off) = (pick(&on)?, pick(&off)?);
+    let mut opts = repack_options(a, true)?;
+    opts.encrypt_selected(&arc, key, &on, &off);
+    opts.encrypt_table = (table_on || (!table_off && arc.table_encrypted())).then_some(key);
+    let r = repack(&arc, &out, &opts, &ctx.control).map_err(err)?;
+    let mut v = repack_json(&r, &out);
+    v["encrypted_entries"] = opts.encrypt_only.as_ref().map_or(0, |s| s.len()).into();
+    v["file_table_encrypted"] = opts.encrypt_table.is_some().into();
+    Ok(v)
+}
+
+/// A sound from `entry` of the archive `path`, or from the loose file `path`.
+fn audio_bytes(ctx: &Ctx, a: &Args) -> Result<(Vec<u8>, String), String> {
+    if a.opt_str("entry").is_some() {
+        let (name, data) = entry_data(ctx, a)?;
+        return Ok((data, name));
+    }
+    let p = ctx.policy.read(a.str("path"))?;
+    let len = std::fs::metadata(&p).map_err(err)?.len();
+    if len > MAX_ENTRY_BYTES {
+        return Err(format!("larger than {MAX_ENTRY_BYTES} bytes"));
+    }
+    Ok((
+        std::fs::read(&p).map_err(|e| format!("{}: {e}", a.str("path")))?,
+        a.str("path").to_string(),
+    ))
+}
+
+fn audio_info_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::audio::Audio;
+    let (data, name) = audio_bytes(ctx, a)?;
+    let (audio, source) = Audio::decode(&data).map_err(|e| format!("{name}: {e}"))?;
+    let peak = audio.peak();
+    Ok(json!({
+        "name": name, "format": source.format.extension(), "kbps": source.kbps,
+        "sample_rate": audio.rate, "channels": audio.channels.len(),
+        "samples": audio.len(), "duration_ms": audio.duration_ms(),
+        "peak": peak, "peak_db": (peak > 0.0).then(|| 20.0 * peak.log10()),
+    }))
+}
+
+fn audio_edit_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::audio::{Audio, Format, Op};
+    let ops: Vec<Op> = a
+        .list("ops")
+        .iter()
+        .map(|t| Op::parse(t).map_err(err))
+        .collect::<Result<_, _>>()?;
+    if ops.is_empty() {
+        return Err("give at least one operation in `ops`".into());
+    }
+    let out = ctx
+        .policy
+        .write_file(a.str("output"), a.flag("overwrite"))?;
+    if a.opt_str("entry").is_none() && ctx.policy.read(a.str("path")).is_ok_and(|p| p == out) {
+        return Err("the output must not be the input file".into());
+    }
+    let (data, name) = audio_bytes(ctx, a)?;
+    let (mut audio, mut source) = Audio::decode(&data).map_err(|e| format!("{name}: {e}"))?;
+    if let Some(f) = a.opt_str("to") {
+        let f = match f {
+            "mp3" => Format::Mp3,
+            "ogg" => Format::Ogg,
+            _ => Format::Wav,
+        };
+        if f != source.format {
+            source.kbps = None;
+        }
+        source.format = f;
+    }
+    if let Some(k) = a.opt_u64("kbps") {
+        source.kbps = u32::try_from(k).ok();
+    }
+    audio.apply_all(&ops).map_err(|e| format!("{name}: {e}"))?;
+    let bytes = audio.encode(&source).map_err(|e| format!("{name}: {e}"))?;
+    let tmp = out.with_extension("rgrf-tmp");
+    std::fs::write(&tmp, &bytes).map_err(err)?;
+    std::fs::rename(&tmp, &out).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        err(e)
+    })?;
+    Ok(json!({
+        "output": out.display().to_string(), "format": source.format.extension(),
+        "operations": ops.iter().map(Op::text).collect::<Vec<_>>(),
+        "sample_rate": audio.rate, "channels": audio.channels.len(),
+        "duration_ms": audio.duration_ms(), "bytes": bytes.len(),
     }))
 }
 

@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 11);
+    assert_eq!(ro.len(), 12);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 19);
+    assert_eq!(names(&rw).len(), 23);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -788,4 +788,175 @@ fn flat_maps_writes_only_the_changed_map_files() {
         json!({"path": p, "output": dir.join("y.grf").display().to_string(), "maps": ["nowhere"]}),
     );
     assert!(msg.contains("no matching"), "{msg}");
+}
+
+#[test]
+fn sounds_are_read_and_edited_as_wav_and_mp3() {
+    use rgrf_formats::audio::Audio;
+    let dir = tmp("audio");
+    let tone = Audio {
+        rate: 22050,
+        channels: vec![(0..22050).map(|i| (i as f32 * 0.1).sin() * 0.5).collect()],
+    };
+    let wav = tone.to_wav();
+    put(&dir, "s.wav", &wav);
+    let grf = make_grf(&dir, "snd.grf", &[("data/wav/s.wav", &wav)]);
+    let s = server(std::slice::from_ref(&dir), std::slice::from_ref(&dir));
+    let loose = dir.join("s.wav").display().to_string();
+    let v = ok(&s, "grf_audio_info", json!({"path": loose}));
+    assert_eq!(
+        (
+            v["format"].clone(),
+            v["duration_ms"].clone(),
+            v["channels"].clone()
+        ),
+        ("wav".into(), 1000.into(), 1.into())
+    );
+    // the same sound inside an archive
+    let v = ok(
+        &s,
+        "grf_audio_info",
+        json!({"path": grf.display().to_string(), "entry": "data\\wav\\s.wav"}),
+    );
+    assert_eq!(v["sample_rate"], 22050);
+
+    // trim, then write as MP3, then edit the MP3 (it stays an MP3)
+    let (a, b) = (dir.join("a.mp3"), dir.join("b.mp3"));
+    let v = ok(
+        &s,
+        "grf_audio_edit",
+        json!({"path": loose, "ops": ["trim:0-800"], "to": "mp3", "kbps": 64, "output": a.display().to_string()}),
+    );
+    assert_eq!(v["format"], "mp3");
+    let v = ok(
+        &s,
+        "grf_audio_edit",
+        json!({"path": a.display().to_string(), "ops": ["trim:100-500", "gain:-3"], "output": b.display().to_string()}),
+    );
+    assert_eq!(v["format"], "mp3");
+    assert!(
+        (350..=450).contains(&v["duration_ms"].as_u64().unwrap()),
+        "{v}"
+    );
+    let v = ok(
+        &s,
+        "grf_audio_info",
+        json!({"path": b.display().to_string()}),
+    );
+    assert_eq!(v["format"], "mp3");
+
+    // errors: nothing to do, bad operation, existing output, the input as output
+    assert!(
+        fails(
+            &s,
+            "grf_audio_edit",
+            json!({"path": loose, "ops": [], "output": dir.join("x.wav").display().to_string()})
+        )
+        .contains("ops")
+    );
+    assert!(fails(&s, "grf_audio_edit", json!({"path": loose, "ops": ["wobble"], "output": dir.join("x.wav").display().to_string()})).contains("wobble"));
+    assert!(
+        fails(
+            &s,
+            "grf_audio_edit",
+            json!({"path": loose, "ops": ["reverse"], "output": a.display().to_string()})
+        )
+        .contains("exists")
+    );
+    assert!(
+        fails(
+            &s,
+            "grf_audio_edit",
+            json!({"path": loose, "ops": ["reverse"], "output": loose, "overwrite": true})
+        )
+        .contains("input")
+    );
+}
+
+#[test]
+fn downgrade_maps_writes_the_old_world_and_ground_files() {
+    use rgrf_formats::rsw::{Light, Rsw, Water};
+    use rgrf_formats::version::Version;
+    let dir = tmp("downgrade");
+    let name = |s: &str| {
+        let mut b = [0u8; 40];
+        b[..s.len()].copy_from_slice(s.as_bytes());
+        b
+    };
+    let rsw = Rsw {
+        version: Version::new(1, 9),
+        build_number: 0,
+        unknown_byte: 0,
+        ini: [0; 40],
+        ground: name("m.gnd"),
+        altitude: name("m.gat"),
+        source: [0; 40],
+        water: Some(Water {
+            level: 0.0,
+            kind: 0,
+            wave_height: 1.0,
+            wave_speed: 2.0,
+            wave_pitch: 50.0,
+            texture_cycling: 3,
+        }),
+        light: Some(Light {
+            longitude: 45,
+            latitude: 45,
+            diffuse: [1.0; 3],
+            ambient: [0.3; 3],
+            intensity: 0.5,
+        }),
+        bounds: Some([0; 4]),
+        extra_ints: vec![],
+        objects: vec![],
+        tail: vec![],
+    }
+    .to_bytes();
+    let mut gnd = b"GRGN\x01\x07".to_vec();
+    for v in [1u32, 1, 10.0f32.to_bits(), 1, 80] {
+        gnd.extend(v.to_le_bytes());
+    }
+    gnd.extend([0u8; 80]);
+    for v in [1i32, 8, 8, 1] {
+        gnd.extend(v.to_le_bytes());
+    }
+    gnd.extend([128u8; 256]);
+    gnd.extend(1u32.to_le_bytes());
+    gnd.extend([0u8; 40]);
+    for v in [-4.0f32; 4] {
+        gnd.extend(v.to_le_bytes());
+    }
+    for t in [0i32, -1, -1] {
+        gnd.extend(t.to_le_bytes());
+    }
+    let p = make_grf(
+        &dir,
+        "maps.grf",
+        &[
+            ("data/m.rsw", &rsw),
+            ("data/m.gnd", &gnd),
+            ("data/m.gat", b"GRAT"),
+        ],
+    );
+    let s = server(&[], std::slice::from_ref(&dir));
+    let out = dir.join("old.grf").display().to_string();
+    // without names only maps with RSM2 models count: this one has none
+    let v = ok(&s, "grf_downgrade_maps", json!({"path": p, "output": out}));
+    assert_eq!(
+        (v["changed_maps"].clone(), v["written"].clone()),
+        (0.into(), false.into())
+    );
+    let v = ok(
+        &s,
+        "grf_downgrade_maps",
+        json!({"path": p, "output": out, "maps": ["m"]}),
+    );
+    assert_eq!(
+        (v["files"].clone(), v["written"].clone()),
+        (2.into(), true.into()),
+        "{v}"
+    );
+    let listed = ok(&s, "grf_list", json!({"path": out}));
+    assert_eq!(listed["total"], 2, "{listed}");
+    assert!(fails(&s, "grf_downgrade_maps", json!({"path": p, "output": dir.join("z.grf").display().to_string(), "maps": ["nowhere"]})).contains("no matching"));
 }

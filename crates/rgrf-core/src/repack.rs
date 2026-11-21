@@ -65,6 +65,37 @@ pub struct RepackOptions {
     pub encrypt_only: Option<std::collections::HashSet<Vec<u8>>>,
     /// The first 16 bytes of the header; `None` writes the format's own ("Master of Magic").
     pub magic: Option<[u8; 16]>,
+    /// Encrypt the file table (and only it, unless `encrypt` is set as well) with this key, as
+    /// GRF Editor's "Encrypt File Table" does (0x200 and 0x300). Opening needs the key then.
+    pub encrypt_table: Option<crate::grfcrypt::Key>,
+}
+
+impl RepackOptions {
+    /// Makes the result encrypt exactly the entries the source has encrypted, plus those of `on`,
+    /// minus those of `off` (indices into `src`): GRF Editor's "Encrypt" and "Decrypt" on single
+    /// entries. With nothing left to encrypt, no key is used.
+    pub fn encrypt_selected(
+        &mut self,
+        src: &Archive,
+        key: crate::grfcrypt::Key,
+        on: &[usize],
+        off: &[usize],
+    ) {
+        let key_of = |i: usize| src.entries()[i].name.key();
+        let mut set: std::collections::HashSet<Vec<u8>> = (0..src.entries().len())
+            .filter(|&i| src.entry_encrypted(i))
+            .map(key_of)
+            .collect();
+        set.extend(on.iter().map(|&i| key_of(i)));
+        for &i in off {
+            set.remove(&key_of(i));
+        }
+        (self.encrypt, self.encrypt_only) = if set.is_empty() {
+            (None, None)
+        } else {
+            (Some(key), Some(set))
+        };
+    }
 }
 
 impl Default for RepackOptions {
@@ -83,6 +114,7 @@ impl Default for RepackOptions {
             encrypt: None,
             encrypt_only: None,
             magic: None,
+            encrypt_table: None,
         }
     }
 }
@@ -627,6 +659,9 @@ fn write_all<R: ReadAt>(
         opts.max_file_len,
     )?;
     writer.set_key_block(key_block)?;
+    if let Some(key) = opts.encrypt_table {
+        writer.set_table_key(key)?;
+    }
     if let Some(m) = opts.magic {
         writer.set_magic(m);
     }
@@ -732,7 +767,7 @@ fn write_all<R: ReadAt>(
             &unit_of,
             &expected,
             tmp,
-            opts.encrypt.as_ref(),
+            (opts.encrypt.as_ref(), opts.encrypt_table.as_ref()),
             ctl,
         )?;
         report.verified = true;
@@ -748,11 +783,11 @@ pub(crate) fn verify_output<R: ReadAt>(
     unit_of: &[Option<usize>],
     expected: &[Expected],
     path: &Path,
-    key: Option<&crate::grfcrypt::Key>,
+    (key, table_key): (Option<&crate::grfcrypt::Key>, Option<&crate::grfcrypt::Key>),
     ctl: &Control,
 ) -> Result<()> {
     let fail = |m: String| Err(Error::VerifyFailed(m));
-    let out = match key {
+    let out = match key.or(table_key) {
         Some(k) => Archive::open_with_key(path, k)?,
         None => Archive::open(path)?,
     };

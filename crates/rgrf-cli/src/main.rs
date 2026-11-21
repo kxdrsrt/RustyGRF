@@ -226,6 +226,29 @@ enum Cmd {
         #[command(flatten)]
         write: WriteArgs,
     },
+    /// Encrypt or decrypt single files of an archive (GRF Editor's "Encrypt" and "Decrypt" on
+    /// entries; 0x200 only). Needs --password or --key-file, which also opens an encrypted source.
+    /// The others keep their state. Blocks are not shared in the result, so it may grow
+    Crypt {
+        grf: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Encrypt the files matching this substring or glob (repeat for several)
+        #[arg(long = "encrypt-entry", value_name = "PATTERN")]
+        encrypt_entry: Vec<String>,
+        /// Decrypt the files matching this substring or glob (repeat for several)
+        #[arg(long = "decrypt-entry", value_name = "PATTERN")]
+        decrypt_entry: Vec<String>,
+        /// Encrypt the file table (GRF Editor's "Encrypt File Table"; the archive then needs the
+        /// key to open, also for listing). By default the table keeps the state it has
+        #[arg(long, conflicts_with = "decrypt_table")]
+        encrypt_table: bool,
+        /// Write the file table plain again
+        #[arg(long)]
+        decrypt_table: bool,
+        #[command(flatten)]
+        write: WriteArgs,
+    },
     /// Build an archive from a folder (the folder is the archive root, e.g. it contains `data/`)
     Build {
         folder: PathBuf,
@@ -639,7 +662,7 @@ fn parse_color(s: &str) -> Result<[u8; 4], String> {
 
 #[derive(Subcommand)]
 enum AudioCmd {
-    /// Rate, channels, length and peak level (a loose .wav, or a GRF and the entry path)
+    /// Format, rate, channels, length and peak level (a loose .wav, .mp3 or .ogg, or a GRF and the entry path)
     Info {
         input: PathBuf,
         entry: Option<String>,
@@ -658,7 +681,20 @@ enum AudioCmd {
         output: PathBuf,
         #[arg(long)]
         overwrite: bool,
+        /// Write another format than the input (default: the input's own)
+        #[arg(long = "to", value_enum)]
+        to: Option<AudioFormatArg>,
+        /// Bit rate of an MP3 or Ogg result in kbit/s (default: about the input's)
+        #[arg(long)]
+        kbps: Option<u32>,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AudioFormatArg {
+    Wav,
+    Mp3,
+    Ogg,
 }
 
 #[derive(Subcommand)]
@@ -1187,6 +1223,7 @@ impl WriteArgs {
         Ok(RepackOptions {
             encrypt,
             encrypt_only: None,
+            encrypt_table: None,
             magic: self
                 .magic
                 .as_deref()
@@ -1649,12 +1686,22 @@ fn run(cli: &Cli) -> Result<i32> {
                 ops,
                 output,
                 overwrite,
+                to,
+                kbps,
             } => audio_cmd::edit(
                 input,
                 entry.as_deref(),
                 ops,
                 output,
                 *overwrite,
+                audio_cmd::Output {
+                    format: to.map(|f| match f {
+                        AudioFormatArg::Wav => rgrf_formats::audio::Format::Wav,
+                        AudioFormatArg::Mp3 => rgrf_formats::audio::Format::Mp3,
+                        AudioFormatArg::Ogg => rgrf_formats::audio::Format::Ogg,
+                    }),
+                    kbps: *kbps,
+                },
                 cli.names,
                 cli.json,
             ),
@@ -2219,6 +2266,50 @@ fn run(cli: &Cli) -> Result<i32> {
             remove,
             &write.options(encrypt_key(cli)?)?,
         ),
+        Cmd::Crypt {
+            grf,
+            output,
+            encrypt_entry,
+            decrypt_entry,
+            encrypt_table,
+            decrypt_table,
+            write,
+        } => {
+            let key = crypt_cmd::key()
+                .copied()
+                .ok_or_else(|| anyhow!("crypt needs --password or --key-file"))?;
+            if encrypt_entry.is_empty()
+                && decrypt_entry.is_empty()
+                && !*encrypt_table
+                && !*decrypt_table
+            {
+                bail!(
+                    "nothing to do: give --encrypt-entry, --decrypt-entry, --encrypt-table or --decrypt-table"
+                );
+            }
+            let (a, _) = open(grf)?;
+            let pick = |patterns: &[String]| -> Result<Vec<usize>> {
+                let mut found = Vec::new();
+                for p in patterns {
+                    let hits: Vec<usize> = a
+                        .select(Some(p), cli.names)
+                        .into_iter()
+                        .filter(|&i| a.entries()[i].is_file())
+                        .collect();
+                    if hits.is_empty() {
+                        bail!("no file matches '{p}'");
+                    }
+                    found.extend(hits);
+                }
+                Ok(found)
+            };
+            let (on, off) = (pick(encrypt_entry)?, pick(decrypt_entry)?);
+            let mut opts = write.options(None)?;
+            opts.encrypt_selected(&a, key, &on, &off);
+            opts.encrypt_table =
+                (*encrypt_table || (!*decrypt_table && a.table_encrypted())).then_some(key);
+            repack_cmd(cli, grf, output, &opts)
+        }
         Cmd::Repack {
             grf,
             output,
@@ -2237,6 +2328,7 @@ fn run(cli: &Cli) -> Result<i32> {
             let opts = RepackOptions {
                 magic: None,
                 encrypt_only: None,
+                encrypt_table: None,
                 method,
                 format: *format,
                 align: if *align {
