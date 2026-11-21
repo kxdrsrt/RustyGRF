@@ -789,6 +789,8 @@ pub struct ThorOut {
     pub merge: bool,
     /// Name of the target GRF (empty: the client's default).
     pub target: String,
+    /// The patch has a `data.integrity` hash list.
+    pub integrity: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -3131,6 +3133,35 @@ impl Session {
         })
     }
 
+    /// An effect that makes new pictures (cut, outline, additive colour): the animation and the
+    /// sprite next to it change, both staged.
+    pub fn stage_act_image_fx(
+        &mut self,
+        index: usize,
+        fx: &act_editor::ImageFx,
+        scope: &act_editor::FxScope,
+    ) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, act, mut what) = s.working_bytes(index)?;
+            let spr_index = s.sibling(index, "spr").ok_or_else(|| err!("err-no-spr"))?;
+            let (sname, spr, mut swhat) = s.working_bytes(spr_index)?;
+            let (act_out, spr_out) = act_editor::apply_image_fx(&act, &spr, fx, scope)?;
+            what.push("effect with new pictures".into());
+            swhat.push("pictures added by an effect".into());
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(act_out),
+                what,
+            });
+            s.stage(Change::PutBytes {
+                name: sname,
+                data: Arc::new(spr_out),
+                what: swhat,
+            });
+            Ok(())
+        })
+    }
+
     /// ACT Editor's "Set default anchors" for the male or female head sprite.
     pub fn stage_act_default_anchors(&mut self, index: usize, female: bool) -> Result<(), String> {
         self.transact(|s| {
@@ -3665,6 +3696,10 @@ impl Session {
             thor: self.arc.header().patch.as_ref().map(|p| ThorOut {
                 merge: p.merge_into_grf,
                 target: GrfPath::new(p.target_grf.clone()).display(self.mode),
+                integrity: self
+                    .arc
+                    .find(&GrfPath::new(rgrf_core::thor::INTEGRITY_FILE.as_bytes()))
+                    .is_some(),
             }),
             draft: self
                 .draft_root
@@ -3843,6 +3878,27 @@ impl Session {
         if !st.expanded.remove(&key) {
             st.expanded.insert(key);
         }
+        Ok(self.relayout(view))
+    }
+
+    /// The folders (lower-case paths) that are open in a tree list.
+    pub fn tree_state(&self, view: usize) -> Result<Vec<String>, String> {
+        let st = self.views.get(view).ok_or("no such list")?;
+        let mut keys: Vec<String> = st.expanded.iter().cloned().collect();
+        keys.sort();
+        Ok(keys)
+    }
+
+    /// Opens exactly these folders (a state kept from an earlier session); returns the number of lines.
+    pub fn tree_restore(&mut self, view: usize, keys: &[String]) -> Result<usize, String> {
+        let st = self.views.get_mut(view).ok_or("no such list")?;
+        if st.tree.is_none() {
+            return Err(err!("err-no-folders"));
+        }
+        st.expanded = keys
+            .iter()
+            .map(|k| k.trim_matches('\\').to_lowercase())
+            .collect();
         Ok(self.relayout(view))
     }
 
@@ -5520,6 +5576,48 @@ mod tests {
     }
 
     #[test]
+    fn open_folders_can_be_read_and_restored() {
+        let (dir, grf) = sample("treestate");
+        let mut s = Session::open(&grf).unwrap();
+        s.set_view(
+            0,
+            ViewSpec {
+                layout: "tree".into(),
+                auto_expand: true,
+                ..ViewSpec::default()
+            },
+        )
+        .unwrap();
+        let all = s.page_view(0, 0, 500).len();
+        s.tree_set_all(0, false).unwrap();
+        assert!(s.tree_state(0).unwrap().is_empty());
+        let closed = s.page_view(0, 0, 500).len();
+        assert!(closed < all);
+        let one = s
+            .page_view(0, 0, 10)
+            .into_iter()
+            .find(|r| r.folder)
+            .unwrap();
+        s.tree_toggle(0, &one.name).unwrap();
+        let keys = s.tree_state(0).unwrap();
+        assert_eq!(keys.len(), 1);
+        s.tree_set_all(0, true).unwrap();
+        let rows = s.tree_restore(0, &keys).unwrap();
+        assert_eq!(rows, s.page_view(0, 0, 500).len());
+        assert!(rows < all && rows > closed);
+        s.set_view(
+            0,
+            ViewSpec {
+                layout: "flat".into(),
+                ..ViewSpec::default()
+            },
+        )
+        .unwrap();
+        assert!(s.tree_restore(0, &keys).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn open_search_and_page() {
         let (dir, grf) = sample("open");
         let mut s = Session::open(&grf).unwrap();
@@ -6263,6 +6361,47 @@ mod tests {
         );
         assert!(s.stage_spr_images(spr_i, 0, &[p1], "sideways").is_err());
         assert!(s.stage_spr_images(spr_i, 0, &[], "after").is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn effects_with_new_pictures_change_the_animation_and_its_sprite_together() {
+        let (dir, grf) = sample("image-fx");
+        let mut s = Session::open(&grf).unwrap();
+        let find = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+        let (spr_i, act_i) = (find(&mut s, "a.spr"), find(&mut s, "a.act"));
+        let images = |s: &Session| {
+            let spr = Spr::parse(&s.read_working(spr_i).unwrap()).unwrap();
+            spr.indexed.len() + spr.rgba.len()
+        };
+        let before = images(&s);
+        let scope = act_editor::FxScope {
+            animations: "0".into(),
+            loop_missing: true,
+            ..Default::default()
+        };
+        let fx = act_editor::ImageFx::Additive {
+            color: [255, 0, 0, 255],
+            ease: 0,
+        };
+        s.stage_act_image_fx(act_i, &fx, &scope).unwrap();
+        assert!(images(&s) > before, "the sprite got the new pictures");
+        Act::parse(&s.read_working(act_i).unwrap()).unwrap();
+        assert!(
+            s.pending().len() >= 2,
+            "animation and sprite are both staged"
+        );
+        // an animation that does not exist is an error and changes nothing
+        let far = act_editor::FxScope {
+            animations: "99".into(),
+            ..Default::default()
+        };
+        let n = images(&s);
+        assert!(s.stage_act_image_fx(act_i, &fx, &far).is_err());
+        assert_eq!(images(&s), n);
         let _ = fs::remove_dir_all(dir);
     }
 

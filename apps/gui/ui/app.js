@@ -324,6 +324,7 @@ async function showOpened(info) {
     addRecent(path);
   }
   await runSearch("");
+  await restoreTree();
   setStatus(
     t("open-status", { name: S.info.file_name, format: S.info.format, files: t("pvw-files", { n: S.info.files }), size: fmtBytes(S.info.file_size) }),
   );
@@ -841,6 +842,39 @@ async function runSearch(q) {
   await applyView({ keepSelection: false, autoExpand: true });
 }
 
+const TREE_KEY = "rustygrf-tree";
+const treeStates = () => {
+  try {
+    return JSON.parse(localStorage.getItem(TREE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+};
+
+/** With the setting "Remember tree expansion": keeps which folders are open for this archive. */
+async function rememberTree() {
+  if (!SET.rememberTree || !S.info || S.untitled || S.query || V.layout !== "tree") return;
+  try {
+    const keys = await invoke("tree_state", { view: 0 });
+    const all = treeStates();
+    delete all[S.info.path];
+    // newest last; only the latest 20 archives are kept
+    const kept = Object.entries(all).slice(-19);
+    kept.push([S.info.path, keys.slice(0, 5000)]);
+    localStorage.setItem(TREE_KEY, JSON.stringify(Object.fromEntries(kept)));
+  } catch {}
+}
+
+async function restoreTree() {
+  if (!SET.rememberTree || S.untitled || V.layout !== "tree") return;
+  const keys = treeStates()[S.info.path];
+  if (!Array.isArray(keys)) return;
+  try {
+    const rows = await invoke("tree_restore", { view: 0, keys });
+    await mainList.reset(rows);
+  } catch {}
+}
+
 async function toggleFolder(list, pos) {
   const r = list.row(pos);
   if (!r?.folder) return;
@@ -853,6 +887,7 @@ async function toggleFolder(list, pos) {
   await list.load();
   const cur = list === mainList && list.st.selected != null ? list.row(list.st.selected) : null;
   if (cur?.folder && V.preview !== "off") showFolderPreview(cur);
+  if (list === mainList) rememberTree();
 }
 
 async function expandAll(open, which) {
@@ -866,6 +901,7 @@ async function expandAll(open, which) {
   if (list === mainList) {
     S.selected = null;
     updateEditBar();
+    rememberTree();
   }
 }
 
@@ -2511,6 +2547,56 @@ async function actScriptEffect(kind, v) {
   await actScript(title, { op: "effect", kind, animations: groups.value, layers: layers.value, start: Number(start.value), length: Number(length.value), ease: Number(ease.value), loop_missing: loop.checked, add_empty: empty.checked, color: [...colourValue(colour), Number(alpha.value)], scale_x: Number(sx.value), scale_y: Number(sy.value) });
 }
 
+/** The effects that make new pictures: the animation and the sprite next to it are staged together. */
+async function actScriptImageFx(kind) {
+  const title = t(`as-fx-${kind}`);
+  const groups = el("input", { class: "field", value: String(Math.floor(E.action / 8)) });
+  const layers = el("input", { class: "field", value: "", placeholder: "0" });
+  const start = numberField(0, { min: "0" });
+  const length = numberField(0, { min: "0" });
+  const loop = el("input", { type: "checkbox", checked: true });
+  const seed = numberField(1234, { min: "0" });
+  const body = [el("p", { text: t(`as-fx-${kind}-intro`) }), formRow(t("as-animations"), groups), formRow(t("as-layers"), layers), formRow(t("as-start"), start), formRow(t("as-length"), length)];
+  let fx;
+  if (kind === "additive") {
+    const colour = el("input", { type: "color", value: "#ff0000" });
+    const alpha = numberField(255, { min: "0", max: "255" });
+    const ease = numberField(0, { min: "-100", max: "100" });
+    body.push(formRow(t("as-colour"), colour), formRow("α", alpha), formRow(t("as-ease"), ease));
+    fx = () => ({ kind, color: [...colourValue(colour), Number(alpha.value)], ease: Number(ease.value) });
+  } else if (kind === "cut") {
+    const sx = numberField(0);
+    const sy = numberField(0);
+    const angle = numberField(0);
+    const half = numberField(24);
+    body.push(formRow(t("as-cut-source") + " x", sx), formRow(t("as-cut-source") + " y", sy), formRow(t("as-cut-angle"), angle), formRow(t("as-cut-half"), half), formRow(t("as-seed"), seed));
+    fx = () => ({ kind, source_x: Number(sx.value), source_y: Number(sy.value), angle: Number(angle.value), half_angle: Number(half.value), seed: Number(seed.value) });
+  } else {
+    const min = numberField(0, { min: "0", max: "50" });
+    const max = numberField(4, { min: "1", max: "50" });
+    const dead = numberField(0.5, { step: "0.05", min: "0", max: "1" });
+    const colour = el("input", { type: "color", value: "#fff0d1" });
+    const alpha = numberField(220, { min: "0", max: "255" });
+    body.push(formRow(t("as-outline-min"), min), formRow(t("as-outline-max"), max), formRow(t("as-outline-dead"), dead), formRow(t("as-colour"), colour), formRow("α", alpha), formRow(t("as-seed"), seed));
+    fx = () => ({ kind, min_height: Number(min.value), max_height: Number(max.value), dead_rate: Number(dead.value), color: [...colourValue(colour), Number(alpha.value)], seed: Number(seed.value) });
+  }
+  body.push(el("label", { class: "check" }, loop, ` ${t("as-loop")}`));
+  const go = await ask(title, body, [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go || E.busy) return;
+  stopActPlay();
+  E.busy = true;
+  try {
+    const scope = { animations: groups.value, layers: layers.value, start: Number(start.value), length: Number(length.value), loop_missing: loop.checked };
+    setPending(await invoke("stage_act_image_fx", { index: E.row.index, fx: fx(), scope }));
+  } catch (e) {
+    E.busy = false;
+    await note(title, errText(e), true);
+    return loadActFrame();
+  }
+  E.busy = false;
+  await loadActFrame();
+}
+
 async function actDefaultAnchors(female) {
   if (E.busy) return;
   stopActPlay();
@@ -2550,6 +2636,9 @@ function actScriptsMenu(ev, v) {
       { label: t("as-fx-fade"), run: () => actScriptEffect("fade", v) },
       { label: t("as-fx-breathing"), run: () => actScriptEffect("breathing", v) },
       { label: t("as-fx-overlay"), run: () => actScriptEffect("overlay", v) },
+      { label: t("as-fx-additive"), run: () => actScriptImageFx("additive") },
+      { label: t("as-fx-cut"), run: () => actScriptImageFx("cut") },
+      { label: t("as-fx-outline"), run: () => actScriptImageFx("outline") },
       "-",
       { label: t("as-anchors-male"), run: () => actDefaultAnchors(false) },
       { label: t("as-anchors-female"), run: () => actDefaultAnchors(true) },
@@ -2617,6 +2706,22 @@ function soundField(v) {
   return el("span", { class: "soundfield" }, el("label", { class: "muted", text: `${t("act-sound")} ` }, input, list), hear, note);
 }
 
+const ACT_ZOOMS = [1, 2, 3, 4, 6, 8];
+const actZoom = () => E.zoom || 1;
+
+/** Zoom one step in or out (0 = back to 1:1); the zoom stays while playing and between frames. */
+function setActZoom(step) {
+  const i = Math.max(0, ACT_ZOOMS.indexOf(actZoom()));
+  E.zoom = step === 0 ? 1 : ACT_ZOOMS[Math.max(0, Math.min(ACT_ZOOMS.length - 1, i + step))];
+  drawActEditor();
+}
+
+/** The box around the selected layer, in screen pixels at the current zoom. */
+function layerBox(b) {
+  const z = actZoom();
+  return el("div", { class: "layerbox", style: `left:${b[0] * z}px;top:${b[1] * z}px;width:${(b[2] - b[0]) * z}px;height:${(b[3] - b[1]) * z}px` });
+}
+
 /** Picks, drags and nudges layers on the frame picture; each finished move is one staged change. */
 function wireStage(stage, v) {
   // picture pixels per screen pixel (the picture may be shown smaller than it is)
@@ -2651,7 +2756,7 @@ function wireStage(stage, v) {
       // show the new selection without losing the pointer: only the box and the table change
       const b = d.layer != null ? v.layers[d.layer]?.bounds : null;
       stage.querySelector(".layerbox")?.remove();
-      if (b) stage.append(el("div", { class: "layerbox", style: `left:${b[0]}px;top:${b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px` }));
+      if (b) stage.append(layerBox(b));
     }
   });
   stage.addEventListener("pointermove", (e) => {
@@ -2742,13 +2847,27 @@ function drawActEditor() {
   if (E.layer != null && E.layer >= v.layers.length) E.layer = null;
   const stage = el("div", { class: "stage checker", tabindex: "0", "data-act-stage": "", role: "group", "aria-roledescription": t("act-stage-role"), "aria-label": `${t("act-stage-aria", { n: v.frame + 1 })}${E.layer != null ? ` ${t("act-stage-sel", { n: E.layer })}` : ""}` });
   if (v.png) {
-    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width, height: v.height, alt: "", draggable: "false" }), el("div", { class: "cross-h", style: `top:${v.origin_y}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x}px` }));
-    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: t("act-anchor-title", { n: i }), "data-anchor": String(i), style: `left:${v.origin_x + a.x * v.scale}px;top:${v.origin_y + a.y * v.scale}px` })));
+    const z = actZoom();
+    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width * z, height: v.height * z, alt: "", draggable: "false" }), el("div", { class: "cross-h", style: `top:${v.origin_y * z}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x * z}px` }));
+    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: t("act-anchor-title", { n: i }), "data-anchor": String(i), style: `left:${(v.origin_x + a.x * v.scale) * z}px;top:${(v.origin_y + a.y * v.scale) * z}px` })));
     const b = E.layer != null ? v.layers[E.layer]?.bounds : null;
-    if (b) stage.append(el("div", { class: "layerbox", style: `left:${b[0]}px;top:${b[1]}px;width:${b[2] - b[0]}px;height:${b[3] - b[1]}px` }));
+    if (b) stage.append(layerBox(b));
     wireStage(stage, v);
   }
-  const left = el("div", {}, stage, v.error ? el("p", { class: "muted", text: t("act-no-picture", { error: v.error }) }) : null, el("p", { class: "muted", text: t("act-stage-note") }));
+  const zoomBar = el(
+    "div",
+    { class: "bar" },
+    el("button", { type: "button", class: "small", text: "−", title: t("act-zoom-out"), "aria-label": t("act-zoom-out"), disabled: actZoom() <= ACT_ZOOMS[0], onclick: () => setActZoom(-1) }),
+    el("span", { class: "muted", text: `${actZoom() * 100}%`, role: "status" }),
+    el("button", { type: "button", class: "small", text: "+", title: t("act-zoom-in"), "aria-label": t("act-zoom-in"), disabled: actZoom() >= ACT_ZOOMS[ACT_ZOOMS.length - 1], onclick: () => setActZoom(1) }),
+    el("button", { type: "button", class: "small", text: "1:1", title: t("act-zoom-reset"), "aria-label": t("act-zoom-reset"), disabled: actZoom() === 1, onclick: () => setActZoom(0) }),
+  );
+  stage.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setActZoom(e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+  const left = el("div", {}, zoomBar, el("div", { class: "stagewrap" }, stage), v.error ? el("p", { class: "muted", text: t("act-no-picture", { error: v.error }) }) : null, el("p", { class: "muted", text: t("act-stage-note") }));
   const head = ["#", t("act-th-type"), t("act-th-image"), "x", "y", t("act-th-mirror"), v.separate_scale ? t("act-th-scale-xy") : t("act-th-scale"), t("act-th-rot"), t("act-th-colour"), "α", ""];
   const rows = v.layers.map((l, i) => {
     const typeSel = el("select", { onchange: () => setL(i, { sprite_type: Number(typeSel.value) }) }, el("option", { value: 0, text: t("act-type-palette", { n: v.indexed_images }), selected: l.sprite_type === 0 }), el("option", { value: 1, text: t("act-type-rgba", { n: v.rgba_images }), selected: l.sprite_type === 1 }));
@@ -2784,7 +2903,11 @@ function drawActEditor() {
   // every frame is drawn anew: keep the keyboard on Play/Stop while it plays
   const keepPlay = document.activeElement?.hasAttribute("data-act-play");
   const keepStage = document.activeElement?.hasAttribute("data-act-stage");
+  const scrolled = $("act-body").querySelector(".stagewrap");
+  const [sl, st] = scrolled ? [scrolled.scrollLeft, scrolled.scrollTop] : [0, 0];
   $("act-body").replaceChildren(el("div", { class: "acted" }, bar, referenceRow(v), left, el("div", {}, layers, anchors)));
+  const wrap = $("act-body").querySelector(".stagewrap");
+  if (wrap) Object.assign(wrap, { scrollLeft: sl, scrollTop: st });
   if (keepPlay) $("act-body").querySelector("[data-act-play]")?.focus();
   if (keepStage) $("act-body").querySelector("[data-act-stage]")?.focus();
   updateEditBar();
@@ -3010,11 +3133,13 @@ async function saveDialog(preset = "as") {
   // a Thor patch applies either to the client folder or inside a GRF
   const thorMerge = el("input", { type: "checkbox", checked: !!info.thor?.merge });
   const thorTarget = el("input", { type: "text", class: "field", value: info.thor?.target || "", placeholder: t("sa-thor-target-ph"), spellcheck: "false", "aria-label": t("sa-thor-target") });
+  const thorHash = el("input", { type: "checkbox", checked: info.thor ? !!info.thor.integrity : !!SET.thorIntegrity });
   thorMerge.addEventListener("change", () => (thorTarget.disabled = !thorMerge.checked));
   thorTarget.disabled = !thorMerge.checked;
   const thorRow = el("div", { class: "form" },
     el("label", { class: "check" }, thorMerge, ` ${t("sa-thor-merge")}`),
     el("label", {}, el("span", { class: "fl", text: t("sa-thor-target") }), thorTarget),
+    el("label", { class: "check" }, thorHash, ` ${t("sa-thor-hash")}`),
     el("p", { class: "hint", text: t("sa-thor-hint") }));
   thorRow.hidden = kind !== "thor";
   const body = [
@@ -3053,6 +3178,7 @@ async function saveDialog(preset = "as") {
       magic: magic.value && magic.value !== info.magic ? magic.value : null,
       thor_merge: kind === "thor" ? thorMerge.checked : null,
       thor_target: kind === "thor" ? thorTarget.value : null,
+      thor_integrity: kind === "thor" ? thorHash.checked : null,
     };
     if (act === "here") return saveInPlace(req);
     const base = S.untitled ? t("untitled") : info.file_name.replace(/\.[^.]+$/, "");
@@ -3559,7 +3685,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, openAfterExtract: false, extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, openAfterExtract: false, extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -3687,6 +3813,8 @@ function openSettings() {
       row(t("set-changes"), check("warnDiscard", t("set-warn-discard"))),
       row(t("set-audio"), check("autoplay", t("set-autoplay"))),
       row(t("set-tabs"), check("tabs", t("set-tabs-open"))),
+      row(t("set-thor-hash"), check("thorIntegrity", t("set-thor-hash-on")), t("set-thor-hash-hint")),
+      row(t("set-tree"), check("rememberTree", t("set-tree-remember")), t("set-tree-hint")),
       el("h3", { text: t("set-extracting") }),
       row(t("set-decompile"), check("decompileLub", t("set-decompile-on")), t("set-decompile-hint")),
       row(t("set-open-after"), check("openAfterExtract", t("set-open-after-on"))),

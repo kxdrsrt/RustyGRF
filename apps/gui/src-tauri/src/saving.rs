@@ -51,6 +51,9 @@ pub struct SaveRequest {
     /// Thor only: name of the target GRF (empty: the client's default); none keeps the source's.
     #[serde(default)]
     pub thor_target: Option<String>,
+    /// Thor only: write the `data.integrity` hash list; none keeps what the source Thor has.
+    #[serde(default)]
+    pub thor_integrity: Option<bool>,
 }
 
 /// How a Thor written from `src` applies: the request's choice, else the source Thor's own.
@@ -220,6 +223,11 @@ pub fn save_as(
             // a path that is to be deleted has no file in the patch
             let doomed: HashSet<Vec<u8>> = by_hand.iter().map(GrfPath::key).collect();
             files.retain(|(n, _)| !doomed.contains(&n.key()));
+            // the hash list is made again from the files (or left out), never copied
+            let had_integrity = files
+                .iter()
+                .any(|(n, _)| n.key() == thor::INTEGRITY_FILE.as_bytes());
+            files.retain(|(n, _)| n.key() != thor::INTEGRITY_FILE.as_bytes());
             if files.is_empty() && removals.is_empty() {
                 return Err(err!("err-patch-empty"));
             }
@@ -241,7 +249,7 @@ pub fn save_as(
                     target_grf,
                     method,
                     overwrite,
-                    ..ThorOptions::default()
+                    integrity: req.thor_integrity.unwrap_or(had_integrity),
                 };
                 thor::write(&req.dst, &list, &opts).map_err(|e| e.to_string())?;
             } else {
@@ -842,6 +850,46 @@ mod tests {
         let t = Archive::open(&patch).unwrap();
         assert_eq!(t.entries().iter().filter(|e| !e.is_marker()).count(), 3);
         assert_eq!(t.entries().iter().filter(|e| e.is_removal()).count(), 1);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn the_thor_hash_list_follows_the_choice_and_is_never_copied_stale() {
+        let d = dir("integrity");
+        let src = d.join("a.grf");
+        create_empty(&src).unwrap();
+        let f = d.join("f");
+        std::fs::write(&f, b"x").unwrap();
+        let mut s = Session::open(&src).unwrap();
+        s.stage_add(r"data\keep.txt", &f).unwrap();
+        let save = |s: &Session, name: &str, hash: Option<bool>| {
+            let req = SaveRequest {
+                dst: d.join(name),
+                thor_integrity: hash,
+                ..SaveRequest::default()
+            };
+            save_as(&s.edit_plan().unwrap(), &req, true, &Control::default()).unwrap();
+            let a = Archive::open(&req.dst).unwrap();
+            a.find(&GrfPath::new(*b"data.integrity")).is_some()
+        };
+        assert!(
+            !save(&s, "p0.thor", None),
+            "a new patch has none unless asked"
+        );
+        assert!(save(&s, "p1.thor", Some(true)));
+        // a patch that has it keeps it, can drop it, and the list is made again from the files
+        let mut t = Session::open(&d.join("p1.thor")).unwrap();
+        assert!(t.info().thor.is_some_and(|p| p.integrity));
+        t.stage_add(r"data\more.txt", &f).unwrap();
+        assert!(save(&t, "p2.thor", None));
+        assert!(!save(&t, "p3.thor", Some(false)));
+        let a = Archive::open(d.join("p2.thor")).unwrap();
+        let i = a.find(&GrfPath::new(*b"data.integrity")).unwrap();
+        let text = String::from_utf8(a.read(i).unwrap().data).unwrap();
+        assert!(
+            text.contains("more.txt") && text.matches("keep.txt").count() == 1,
+            "{text}"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 

@@ -488,6 +488,27 @@ async fn tree_toggle(
     with_session(&state, &window, move |s| s.tree_toggle(view, &path)).await
 }
 
+/// The folders that are open in a tree list (to remember them).
+#[tauri::command]
+async fn tree_state(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    view: usize,
+) -> Res<Vec<String>> {
+    with_session(&state, &window, move |s| s.tree_state(view)).await
+}
+
+/// Opens exactly these folders of a tree list.
+#[tauri::command]
+async fn tree_restore(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    view: usize,
+    keys: Vec<String>,
+) -> Res<usize> {
+    with_session(&state, &window, move |s| s.tree_restore(view, &keys)).await
+}
+
 #[tauri::command]
 async fn tree_set_all(
     window: WebviewWindow,
@@ -920,6 +941,22 @@ async fn stage_act_anchors(
 ) -> Res<Vec<PendingRow>> {
     with_session(&state, &window, move |s| {
         s.stage_act_anchors(index, std::path::Path::new(&path), adjust)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// An effect that makes new pictures in the sprite next to the animation (staged).
+#[tauri::command]
+async fn stage_act_image_fx(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    fx: act_editor::ImageFx,
+    scope: act_editor::FxScope,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_act_image_fx(index, &fx, &scope)?;
         Ok(s.pending())
     })
     .await
@@ -1940,6 +1977,8 @@ pub fn run() {
             set_menu_labels,
             tree_toggle,
             tree_set_all,
+            tree_state,
+            tree_restore,
             locate,
             folder_entries,
             details,
@@ -1995,6 +2034,7 @@ pub fn run() {
             stage_act_edit,
             stage_act_anchors,
             stage_act_default_anchors,
+            stage_act_image_fx,
             stage_new_act,
             stage_removals,
             open_folder,

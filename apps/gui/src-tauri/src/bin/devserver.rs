@@ -96,6 +96,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             let folder: Option<String> = arg(a, "folder")?;
             to_json(s.locate(arg(a, "view")?, arg(a, "entry")?, folder.as_deref())?)
         }),
+        "tree_state" => with(state, |s| to_json(s.tree_state(arg(a, "view")?)?)),
+        "tree_restore" => with(state, |s| {
+            let keys: Vec<String> = arg(a, "keys")?;
+            to_json(s.tree_restore(arg(a, "view")?, &keys)?)
+        }),
         "folder_entries" => with(state, |s| {
             to_json(s.folder_entries(
                 arg(a, "view")?,
@@ -284,6 +289,12 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 std::path::Path::new(&arg::<String>(a, "path")?),
                 arg(a, "adjust")?,
             )?;
+            to_json(s.pending())
+        }),
+        "stage_act_image_fx" => with(state, |s| {
+            let fx: rustygrf_gui_lib::act_editor::ImageFx = arg(a, "fx")?;
+            let scope: rustygrf_gui_lib::act_editor::FxScope = arg(a, "scope")?;
+            s.stage_act_image_fx(arg(a, "index")?, &fx, &scope)?;
             to_json(s.pending())
         }),
         "stage_act_default_anchors" => with(state, |s| {
