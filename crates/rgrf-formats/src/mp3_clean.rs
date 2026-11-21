@@ -165,7 +165,7 @@ pub fn clean(data: &[u8]) -> Option<Cleaned> {
                 // junk: look for the next place where frames of this kind follow each other
                 let mut next = pos + 1;
                 while next + 4 <= body.len()
-                    && chain(&body[..], next, 3).map(|h| (h.version, h.rate))
+                    && chain(body, next, 3).map(|h| (h.version, h.rate))
                         != Some((kind.version, kind.rate))
                 {
                     next += 1;
