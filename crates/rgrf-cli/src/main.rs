@@ -38,6 +38,7 @@ mod pal_cmd;
 mod patch_cmd;
 mod rare_cmd;
 mod refs_cmd;
+mod slim_cmd;
 mod spr_cmd;
 mod unused_cmd;
 
@@ -709,6 +710,38 @@ enum ClientCmd {
         recompress: bool,
         #[command(flatten)]
         write: WriteArgs,
+    },
+    /// A smaller copy of everything in a client folder except the archives: the music (MP3 at a
+    /// lower bit rate), skin pictures (24-bit BMP as 8 bits), PNG and JPEG without a change of
+    /// the picture, and without file manager files, backups of edited files and screenshots.
+    /// The client folder itself is never changed
+    Slim {
+        /// The client folder
+        folder: PathBuf,
+        /// The new folder (must be empty or not exist, unless --overwrite)
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Re-encode music above this bit rate in kbit/s (0.75 times it below 32 kHz; 0 keeps it)
+        #[arg(long, default_value_t = 0)]
+        bgm_kbps: u32,
+        /// Store 24-bit BMPs as 8 bits where the picture keeps this many dB (0 keeps them)
+        #[arg(long, default_value_t = 0.0)]
+        min_psnr: f64,
+        /// Lossless PNG pass with this many Zopfli iterations (0 leaves PNGs)
+        #[arg(long, default_value_t = 0)]
+        png: u64,
+        /// Lossless JPEG pass with this `jpegtran`
+        #[arg(long)]
+        jpegtran: Option<PathBuf>,
+        /// Also copy the archives of the folder
+        #[arg(long)]
+        keep_grf: bool,
+        /// Replace files of an existing output folder
+        #[arg(long)]
+        overwrite: bool,
+        /// Write a CSV list of everything that was made smaller to this file
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// Files of the archives (textures, sprites, sounds, models) that no map, animation, effect,
     /// text, Lua table or program names: candidates to leave out of a smaller client. Names put
@@ -1886,6 +1919,30 @@ fn run(cli: &Cli) -> Result<i32> {
                 opts.copy_streams = !*recompress;
                 optimize_client(cli, folder, output, *min_psnr, &opts)
             }
+            ClientCmd::Slim {
+                folder,
+                output,
+                bgm_kbps,
+                min_psnr,
+                png,
+                jpegtran,
+                keep_grf,
+                overwrite,
+                report,
+            } => slim_cmd::slim(
+                folder,
+                output,
+                &slim_cmd::SlimArgs {
+                    bgm_kbps: (*bgm_kbps > 0).then_some(*bgm_kbps),
+                    min_psnr: (*min_psnr > 0.0).then_some(*min_psnr),
+                    png: (*png > 0).then_some(*png),
+                    jpegtran: jpegtran.as_deref(),
+                    keep_grf: *keep_grf,
+                    overwrite: *overwrite,
+                    report: report.as_deref(),
+                },
+                cli.json,
+            ),
             ClientCmd::Unused {
                 input,
                 limit,

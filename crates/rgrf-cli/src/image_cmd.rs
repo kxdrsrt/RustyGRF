@@ -221,7 +221,7 @@ enum Dealt {
 /// A JPEG with optimal Huffman tables and no metadata, through `jpegtran`: the same picture,
 /// since only the coding of the coefficients changes. Baseline stays baseline (the client's
 /// loader is not known to read progressive files).
-fn jpegtran_optimize(program: &Path, data: &[u8]) -> Result<Option<Vec<u8>>> {
+pub fn jpegtran_optimize(program: &Path, data: &[u8]) -> Result<Option<Vec<u8>>> {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let mut child = Command::new(program)

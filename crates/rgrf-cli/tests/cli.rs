@@ -2725,6 +2725,102 @@ fn grf_editor_encryption_end_to_end() {
 }
 
 #[test]
+fn client_slim_copies_what_the_client_reads_and_makes_the_music_and_skins_smaller() {
+    use rgrf_formats::lossy::{decode, encode_mp3};
+    use rgrf_formats::spr::RgbaImage;
+    let dir = tmpdir("slim");
+    let full = dir.join("full");
+    for d in ["BGM", "skin", "Emblem", "ScreenShot", "System"] {
+        std::fs::create_dir_all(full.join(d)).unwrap();
+    }
+    // two seconds of noise-like sound at 44.1 kHz stereo, 192 kbit/s
+    let wave: Vec<f32> = (0..88200u32)
+        .map(|i| {
+            ((i.wrapping_mul(2654435761) >> 16) as f32 / 65536.0 - 0.5) * 0.4
+                + (i as f32 * 0.05).sin() * 0.3
+        })
+        .collect();
+    let mp3 = encode_mp3(44100, &[wave.clone(), wave], Some(192)).unwrap();
+    std::fs::write(full.join("BGM/a.mp3"), &mp3).unwrap();
+    let mut pixels = Vec::new();
+    for i in 0..64 * 64u32 {
+        let r = (i % 200) as u8;
+        pixels.extend([r, r / 2, 255 - r, 255]);
+    }
+    let bmp = rgrf_formats::bmp::write_rgb(&RgbaImage {
+        width: 64,
+        height: 64,
+        pixels,
+    });
+    std::fs::write(full.join("skin/a.bmp"), &bmp).unwrap();
+    std::fs::write(full.join("Emblem/e.bmp"), &bmp).unwrap();
+    std::fs::write(full.join("ScreenShot/s.jpg"), b"x").unwrap();
+    std::fs::write(full.join("System/a.lub"), b"lua").unwrap();
+    std::fs::write(full.join("System/a.lub.bak"), b"old").unwrap();
+    std::fs::write(full.join(".DS_Store"), b"x").unwrap();
+    std::fs::write(full.join("data.grf"), b"not really an archive").unwrap();
+    std::fs::write(full.join("DATA.INI"), b"[Data]\r\n1=data.grf\r\n").unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    let o = rgrf(&[
+        "--json",
+        "client",
+        "slim",
+        &p("full"),
+        "-o",
+        &p("out"),
+        "--bgm-kbps",
+        "64",
+        "--min-psnr",
+        "40",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = dir.join("out");
+    // the music is smaller, still stereo at 44.1 kHz and as long
+    let small = std::fs::read(out.join("BGM/a.mp3")).unwrap();
+    assert!(
+        small.len() * 2 < mp3.len(),
+        "{} vs {}",
+        small.len(),
+        mp3.len()
+    );
+    let (a, b) = (decode(&mp3, "mp3").unwrap(), decode(&small, "mp3").unwrap());
+    assert_eq!((a.rate, a.channels.len()), (b.rate, b.channels.len()));
+    assert!(a.channels[0].len().abs_diff(b.channels[0].len()) < 4000);
+    // the skin picture is 8-bit, the emblem is left as it is
+    assert_eq!(
+        rgrf_formats::bmp::info(&std::fs::read(out.join("skin/a.bmp")).unwrap())
+            .unwrap()
+            .bits,
+        8
+    );
+    assert_eq!(std::fs::read(out.join("Emblem/e.bmp")).unwrap(), bmp);
+    // what the client reads is copied; the archive, the backup, the file manager file and the screenshot are not
+    assert_eq!(std::fs::read(out.join("System/a.lub")).unwrap(), b"lua");
+    assert_eq!(
+        std::fs::read(out.join("DATA.INI")).unwrap(),
+        b"[Data]\r\n1=data.grf\r\n"
+    );
+    for gone in [
+        "data.grf",
+        "System/a.lub.bak",
+        ".DS_Store",
+        "ScreenShot/s.jpg",
+    ] {
+        assert!(!out.join(gone).exists(), "{gone}");
+    }
+    assert!(out.join("ScreenShot").is_dir());
+    // the source is untouched; the output may not be inside it
+    assert_eq!(std::fs::read(full.join("BGM/a.mp3")).unwrap(), mp3);
+    assert_eq!(
+        rgrf(&["client", "slim", &p("full"), "-o", &p("full/inner")])
+            .status
+            .code(),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn image_reduce_dir_makes_pngs_smaller_without_changing_a_pixel() {
     use rgrf_formats::png_io::{frame_from_png, rgba_to_png_fast};
     use rgrf_formats::spr::RgbaImage;

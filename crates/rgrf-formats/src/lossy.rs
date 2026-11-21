@@ -179,6 +179,9 @@ pub fn encode_mp3(
     b.set_num_channels(channels.len() as u8)
         .map_err(setup("channels"))?;
     b.set_sample_rate(rate).map_err(setup("rate"))?;
+    // LAME otherwise picks a lower rate for a low bit rate (24 kHz at 64 kbit/s): the sound keeps its own
+    b.set_output_sample_rate(std::num::NonZeroU32::new(rate))
+        .map_err(setup("output rate"))?;
     b.set_brate(snap(kbps.unwrap_or(192)))
         .map_err(setup("bit rate"))?;
     b.set_quality(Quality::Best).map_err(setup("quality"))?;
