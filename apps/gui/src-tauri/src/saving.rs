@@ -36,6 +36,10 @@ pub struct SaveRequest {
     pub encryption: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
+    /// Encrypt the file table too (`true`), write it plain (`false`) or keep what the archive has
+    /// (none). `encryption: "table"` encrypts the table alone.
+    #[serde(default)]
+    pub encrypt_table: Option<bool>,
     /// The magic of the GRF header (up to 16 ASCII characters); none keeps the archive's own
     /// when it is not the usual one, else the format's.
     #[serde(default)]
@@ -114,22 +118,42 @@ fn method_of(name: Option<&str>) -> Result<Method, String> {
     })
 }
 
-/// The key the result is encrypted with.
-fn key_of(plan: &EditPlan, req: &SaveRequest) -> Result<Option<rgrf_core::grfcrypt::Key>, String> {
-    match req.encryption.as_deref().unwrap_or("keep") {
-        "keep" => Ok(plan.key),
-        "none" => Ok(None),
-        "password" => {
-            let p = req.password.as_deref().unwrap_or("");
-            if p.is_empty() {
-                return Err(err!("err-password-empty"));
-            }
-            rgrf_core::grfcrypt::key_from_password(p)
-                .map(Some)
-                .map_err(|e| e.to_string())
-        }
-        other => Err(format!("unknown encryption choice '{other}'")),
+fn password_key(req: &SaveRequest) -> Result<rgrf_core::grfcrypt::Key, String> {
+    let p = req.password.as_deref().unwrap_or("");
+    if p.is_empty() {
+        return Err(err!("err-password-empty"));
     }
+    rgrf_core::grfcrypt::key_from_password(p).map_err(|e| e.to_string())
+}
+
+/// The keys the result is encrypted with: for the files and for the file table.
+type Keys = (
+    Option<rgrf_core::grfcrypt::Key>,
+    Option<rgrf_core::grfcrypt::Key>,
+);
+
+fn keys_of(plan: &EditPlan, src: &Archive, req: &SaveRequest) -> Result<Keys, String> {
+    let mode = req.encryption.as_deref().unwrap_or("keep");
+    // an archive with an encrypted table alone has a key in the session but plain files
+    let files = match mode {
+        "keep" => plan.key.filter(|_| src.encryption().is_some()),
+        "none" | "table" => None,
+        "password" => Some(password_key(req)?),
+        other => return Err(format!("unknown encryption choice '{other}'")),
+    };
+    let table_wanted = match (mode, req.encrypt_table) {
+        ("table", _) => true,
+        ("none", _) => false,
+        (_, Some(on)) => on,
+        _ => src.table_encrypted(),
+    };
+    let table = match (table_wanted, files) {
+        (false, _) => None,
+        (true, Some(k)) => Some(k),
+        (true, None) if mode == "table" => Some(password_key(req)?),
+        (true, None) => Some(plan.key.ok_or_else(|| err!("err-password-empty"))?),
+    };
+    Ok((files, table))
 }
 
 /// Writes the archive of `plan` with its changes to `req.dst`.
@@ -141,7 +165,7 @@ pub fn save_as(
 ) -> Result<EditSummary, String> {
     let src = plan.open()?;
     let edits = plan.edits()?;
-    let key = key_of(plan, req)?;
+    let (key, table_key) = keys_of(plan, &src, req)?;
     let method = method_of(req.method.as_deref())?;
     match container_of(&req.dst) {
         Container::Grf => {
@@ -152,6 +176,9 @@ pub fn save_as(
             if key.is_some() && format.is_some_and(|f| f != Format::V200) {
                 return Err(err!("err-encrypt-format"));
             }
+            if table_key.is_some() && format.is_some_and(|f| f.is_legacy()) {
+                return Err(err!("err-encrypt-format"));
+            }
             let mut opts = RepackOptions {
                 magic: magic_for(&src, req)?,
                 overwrite,
@@ -160,6 +187,7 @@ pub fn save_as(
                 copy_streams: !req.recompress,
                 recompress_all: req.recompress,
                 encrypt: key,
+                encrypt_table: table_key,
                 ..RepackOptions::default()
             };
             plan.apply_crypt(&src, &mut opts);
@@ -175,7 +203,7 @@ pub fn save_as(
             })
         }
         kind => {
-            if key.is_some() {
+            if key.is_some() || table_key.is_some() {
                 return Err(err!("err-encrypt-format"));
             }
             let (files, counts) = final_files(&src, &edits, ctl)?;
@@ -248,7 +276,10 @@ pub fn save_in_place(
         .unwrap_or_else(|| "grf".into());
     let tmp = path.with_file_name(format!(".{name}.rgrf-saving.{ext}"));
     req.dst = tmp.clone();
-    let new_key = key_of(&plan, &req)?;
+    let new_key = {
+        let (files, table) = keys_of(&plan, &plan.open()?, &req)?;
+        files.or(table)
+    };
     let summary = match save_as(&plan, &req, true, ctl) {
         Ok(s) if s.verified => s,
         Ok(_) => {

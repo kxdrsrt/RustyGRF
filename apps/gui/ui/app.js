@@ -59,10 +59,110 @@ function fmtBytes(n) {
 
 const fmtNum = (n) => n.toLocaleString("en-US");
 const setStatus = (t) => ($("status").textContent = t);
-/** An error from the backend as text; coded ones (a sentinel, then JSON) are translated. */
-const errText = (e) => {
+/**
+ * The libraries report in English. Known messages (matched by their text, the translations are the
+ * `le-*` keys) are shown in the user's language; what is not known stays as it is. Free text inside
+ * a message (`reason`) is translated the same way.
+ */
+const LIB_ERRORS = [
+  [/^I\/O error: ([\s\S]*)$/, "le-io", ["reason"]],
+  [/^not a GRF archive: ([\s\S]*)$/, "le-not-grf", ["reason"]],
+  [/^unsupported GRF version 0x([0-9a-f]+) \(supported: [^)]*\)$/, "le-grf-version", ["v"]],
+  [/^corrupt file table: ([\s\S]*)$/, "le-corrupt-table", ["reason"]],
+  [/^entry index (\d+) out of range$/, "le-no-entry", ["n"]],
+  [/^entry (\d+) lies outside the archive \(offset (\d+), size (\d+), file size (\d+)\)$/, "le-entry-range", ["n", "offset", "size", "file"]],
+  [/^unsafe or invalid path in archive: ([\s\S]*)$/, "le-unsafe-path", ["path"]],
+  [/^target already exists: ([\s\S]*)$/, "le-exists", ["path"]],
+  [/^cannot repack: ([\s\S]*)$/, "le-repack", ["reason"]],
+  [/^this key does not belong to the archive \([^)]*\)$/, "le-wrong-key", []],
+  [/^the file table is encrypted \(GRF Editor scheme\): a key is needed to open the archive$/, "le-table-encrypted", []],
+  [/^verification of the written archive failed: ([\s\S]*)$/, "le-verify", ["reason"]],
+  [/^magic "Master of Magic" or "Event Horizon" not found$/, "le-r-magic", []],
+  [/^file has only (\d+) bytes$/, "le-r-small", ["n"]],
+  [/^Thor magic not found$/, "le-r-thor", []],
+  [/^file table (?:too large|claims \d+ bytes|of \d+ bytes)$/, "le-r-table-big", []],
+  [/^(?:compressed )?file table (?:exceeds the file|lies outside the file)$/, "le-r-table-out", []],
+  [/^file table does not decompress: ([\s\S]*)$/, "le-r-table-z", ["reason"]],
+  [/^file table is (\d+) bytes, header says (\d+)$/, "le-r-table-size", ["got", "want"]],
+  [/^(\d+) unexpected bytes after (\d+) entries$/, "le-r-trailing", ["n", "count"]],
+  [/^entry (\d+): truncated$/, "le-r-entry-cut", ["n"]],
+  [/^entry (\d+): name not terminated$/, "le-r-entry-name", ["n"]],
+  [/^not an? ([A-Z]{3}) file \(missing "([A-Z]+)" signature\)$/, "le-sig", ["format", "sig"]],
+  [/^not an? (BMP|STR|RIFF\/WAVE) file$/, "le-not-fmt", ["format"]],
+  [/^([A-Z]{3}) data ends too early \(needed (\d+) bytes at offset (\d+), file has (\d+)\)$/, "le-early", ["format", "need", "at", "len"]],
+  [/^GND data ends too early \(needed (\d+) bytes, file has (\d+)\)$/, "le-early-gnd", ["need", "len"]],
+  [/^the (SPR|ACT|GND|STR|BMP|TGA)(?: file)? is truncated(?: or damaged)?$/, "le-truncated", ["format"]],
+  [/^the bytecode is truncated or damaged$/, "le-bytecode-cut", []],
+  [/^not Lua bytecode$/, "le-not-lua", []],
+  [/^unsupported Lua bytecode: ([\s\S]*)$/, "le-lua-unsupported", ["reason"]],
+  [/^unsupported (SPR|ACT|RSM|STR) version (\S+?)(?: \(0x94 is supported\))?$/, "le-version", ["format", "v"]],
+  [/^world file: ([\s\S]*)$/, "le-prefix-world", ["reason"]],
+  [/^ground file: ([\s\S]*)$/, "le-prefix-ground", ["reason"]],
+  [/^model: ([\s\S]*)$/, "le-prefix-model", ["reason"]],
+  [/^(.+) is not an RSM2 model \(version 2\.2 or 2\.3\)$/, "le-not-rsm2", ["name"]],
+  [/^GND header is not valid \(([\s\S]*)\)$/, "le-gnd-header", ["reason"]],
+  [/^GAT size (\d+) x (\d+) is not valid$/, "le-gat-size", ["w", "h"]],
+  [/^(\d+) bytes of unused data after the cells$/, "le-gat-extra", ["n"]],
+  [/^cell \((\d+), (\d+)\) is outside the (\d+) x (\d+) map$/, "le-gat-cell", ["x", "y", "w", "h"]],
+  [/^the map would need more than 65 536 different lightmaps$/, "le-lightmaps", []],
+  [/^shadows from the walk grid need the map's GAT$/, "le-gat-shadows", []],
+  [/^object (\d+) has the unknown type (-?\d+)$/, "le-object-type", ["n", "kind"]],
+  [/^the SPR has no (palette|true-colour) image (\d+) \((\d+) images of that kind\)$/, "le-spr-no-image", ["kind", "index", "count"]],
+  [/^the SPR has no palette \(it holds no palette images\)$/, "le-spr-no-palette", []],
+  [/^the sprite has no true-colour images$/, "le-spr-no-true", []],
+  [/^the sprite has no palette images$/, "le-spr-no-pal-img", []],
+  [/^indexed images need a palette$/, "le-spr-need-pal", []],
+  [/^too many images \((?:(\d+), )?at most 65535 of (?:each|one) kind\)$/, "le-spr-too-many", ["n"]],
+  [/^image is (\d+) x (\d+), SPR images are at most 65535 x 65535$/, "le-spr-big", ["w", "h"]],
+  [/^the ACT has no action (\d+)(?: \((\d+) actions\))?$/, "le-act-no-action", ["index", "count"]],
+  [/^action (\d+) has no frame (\d+)(?: \((\d+) frames\))?$/, "le-act-no-frame", ["action", "frame", "count"]],
+  [/^action (\d+) has no frame after frame (\d+) to blend with$/, "le-act-no-next", ["action", "frame"]],
+  [/^nothing selected: no layer matches$/, "le-act-nothing", []],
+  [/^the sound name must be at most 39 Latin-1 characters$/, "le-act-sound-name", []],
+  [/^unsupported WAV format tag (0x[0-9a-f]+)$/, "le-wav-tag", ["tag"]],
+  [/^the WAV has no usable fmt or data chunk$/, "le-wav-chunks", []],
+  [/^the ADPCM data is inconsistent$/, "le-adpcm", []],
+  [/^unknown operation '([^']*)'$/, "le-audio-op", ["name"]],
+  [/^the range (\d+)-(\d+) ms is empty or outside the sound \((\d+) ms long\)$/, "le-audio-range", ["a", "b", "len"]],
+  [/^MP3 and Ogg Vorbis sounds can only be edited in a build with the feature lossy-audio$/, "le-no-lossy", []],
+  [/^MP3 cannot hold (\d+) Hz \([^)]*\)$/, "le-mp3-rate", ["rate"]],
+  [/^MP3 holds one or two channels$/, "le-mp3-channels", []],
+  [/^not a readable sound: ([\s\S]*)$/, "le-lossy-read", ["reason"]],
+  [/^the (?:TGA )?image has no pixels$/, "le-img-none", []],
+  [/^image size does not match its pixel data$/, "le-img-size", []],
+  [/^the file is too short for a TGA image$/, "le-tga-short", []],
+  [/^unsupported TGA pixel depth (\d+)$/, "le-tga-depth", ["n"]],
+  [/^unsupported TGA image type (\d+)$/, "le-tga-type", ["n"]],
+  [/^unsupported BMP \(compression (\d+), (\d+) bits per pixel\)$/, "le-bmp-unsupported", ["compression", "bits"]],
+  [/^the BMP has an invalid size$/, "le-bmp-size", []],
+  [/^PNG (encoding|decoding) failed: ([\s\S]*)$/, "le-png-fail", ["how", "reason"]],
+  [/^GIF encoding failed: ([\s\S]*)$/, "le-gif-fail", ["reason"]],
+  [/^a PAL file is (\d+) bytes, this one has (\d+)$/, "le-pal-size", ["want", "got"]],
+];
+
+function libText(text) {
+  if (typeof text !== "string" || !text) return text;
+  const plain = text.trim();
+  for (const [re, key, names] of LIB_ERRORS) {
+    const m = re.exec(plain);
+    if (!m) continue;
+    const args = {};
+    names.forEach((n, i) => (args[n] = n === "reason" ? libText(m[i + 1] ?? "") : (m[i + 1] ?? "")));
+    return t(key, args);
+  }
+  return text;
+}
+
+/** An error from the backend as text, in English where the backend has no translation; coded ones (a sentinel, then JSON) are translated. */
+const plainErr = (e) => {
   const text = typeof e === "string" ? e : e?.message || JSON.stringify(e);
   return text.startsWith("\u0001") ? noteText(text) : text;
+};
+
+/** An error for the user: coded ones and the known messages of the libraries are translated. */
+const errText = (e) => {
+  const text = typeof e === "string" ? e : e?.message || JSON.stringify(e);
+  return text.startsWith("\u0001") ? noteText(text) : libText(text);
 };
 
 // ---------- dialogs ----------
@@ -131,8 +231,8 @@ async function openWithKey(path) {
       if (!info.encryption?.key_needed) return info;
     } catch (e) {
       // only a missing or wrong key is asked about again
-      if (!/key/i.test(errText(e)) || !/encrypted|CRC32/i.test(errText(e))) throw e;
-      problem = /CRC32/.test(errText(e)) ? t("enc-wrong") : "";
+      if (!/key/i.test(plainErr(e)) || !/encrypted|CRC32/i.test(plainErr(e))) throw e;
+      problem = /CRC32/.test(plainErr(e)) ? t("enc-wrong") : "";
     }
     if (info && !problem && password !== null) problem = t("enc-wrong");
     const input = el("input", { type: "password", class: "field", autocomplete: "off", spellcheck: "false" });
@@ -1077,6 +1177,8 @@ function noteText(n) {
     }
   }
   const args = { ...n.args };
+  // the text of a library error inside a message
+  for (const k of ["error", "reason"]) if (typeof args[k] === "string") args[k] = libText(args[k]);
   const units = { ...NOTE_UNITS, ...NOTE_UNIT_OVERRIDES[n.key] };
   for (const [name, unit] of Object.entries(units)) {
     if (name in args) args[name] = t(`un-${unit}`, { n: args[name] });
@@ -1137,7 +1239,7 @@ function renderPreview(p, row, meta) {
       PLAYER.el = a;
       // a click or an arrow key selected the entry, so the webview lets it start by itself
       if (SET.autoplay !== false) a.play().catch(() => {});
-      const editable = extOf(row.name).toLowerCase() === "wav";
+      const editable = ["wav", "mp3", "ogg"].includes(extOf(row.name).toLowerCase());
       return [editable ? el("div", { class: "controls" }, el("button", { type: "button", class: "small", icon: "edit", text: t("ctx-audio"), onclick: () => (stopAudio(), openAudioEditor(row)) })) : null, a];
     }
     case "text": {
@@ -1398,7 +1500,7 @@ async function doFlatMaps() {
     if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("flats-cancelled") : t("flat-failed"));
     await note(cancelled ? t("flats-cancelled") : t("flat-failed"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -1449,7 +1551,7 @@ async function doExtractMap(row, shown = {}) {
     try {
       r = await invoke("extract_map", { index: row.index, dest, rename: false, skip, flat });
     } catch (e) {
-      if (!/exists/i.test(errText(e))) throw e;
+      if (!/exists/i.test(plainErr(e))) throw e;
       const go = await ask(t("em-exists-title"), el("p", { text: t("em-exists-body", { error: errText(e) }) }), [{ label: t("em-keep-both"), value: true, primary: true }, { label: "Cancel", value: null }]);
       if (!go) return setStatus(t("em-nothing"));
       r = await invoke("extract_map", { index: row.index, dest, rename: true, skip, flat });
@@ -2600,7 +2702,7 @@ async function saveInPlace(req) {
     setStatus(t("save-here-done", { name: r.info.file_name, files: t("pvw-files", { n: r.summary.files }), size: fmtBytes(r.summary.file_bytes) }));
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("save-cancelled") : t("save-failed"));
     await note(cancelled ? t("save-cancelled") : t("save-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -2619,13 +2721,17 @@ async function saveDialog(preset = "as") {
   const info = S.info;
   const kind = S.untitled || extOfPath(info.path);
   const encrypted = !!info.encryption;
+  const tableEnc = !!info.table_encrypted;
   const method = el("select", {}, ["zlib", "zopfli", "lzma"].map((k) => el("option", { value: k, text: t(`method-${k}`) })));
   method.value = SET.method;
   const store = el("select", {}, el("option", { value: "copy", text: t("sa-store-copy") }), el("option", { value: "recompress", text: t("sa-store-recompress") }));
   store.value = preset === "repack" ? "recompress" : "copy";
   const format = el("select", {}, el("option", { value: "keep", text: t("sa-format-keep", { format: info.format }) }), ...["0x200", "0x300", "0x103", "0x102"].map((k) => el("option", { value: k, text: t(`format-${k}`) })));
-  const enc = el("select", {}, encrypted ? el("option", { value: "keep", text: t("sa-enc-keep") }) : null, el("option", { value: "none", text: encrypted ? t("sa-enc-none") : t("sa-enc-plain") }), el("option", { value: "password", text: t("sa-enc-password") }));
-  enc.value = preset === "encrypt" ? "password" : preset === "decrypt" ? "none" : encrypted ? "keep" : "none";
+  const enc = el("select", {}, encrypted || tableEnc ? el("option", { value: "keep", text: t("sa-enc-keep") }) : null, el("option", { value: "none", text: encrypted || tableEnc ? t("sa-enc-none") : t("sa-enc-plain") }), el("option", { value: "password", text: t("sa-enc-password") }), el("option", { value: "table", text: t("sa-enc-table") }));
+  enc.value = preset === "encrypt" ? "password" : preset === "decrypt" ? "none" : encrypted || tableEnc ? "keep" : "none";
+  // GRF Editor's "Encrypt File Table": the table can be encrypted along with the files
+  const tbl = el("input", { type: "checkbox", checked: tableEnc });
+  const tblRow = el("label", { class: "check" }, tbl, ` ${t("sa-enc-table-also")}`);
   const pass = el("input", { type: "password", class: "field", autocomplete: "new-password", placeholder: t("sa-password"), "aria-label": t("sa-password") });
   const pass2 = el("input", { type: "password", class: "field", autocomplete: "new-password", placeholder: t("sa-password-again"), "aria-label": t("sa-password-again") });
   const passRow = el("div", { class: "form" }, pass, pass2);
@@ -2633,7 +2739,8 @@ async function saveDialog(preset = "as") {
   const grfTarget = kind !== "thor" && kind !== "rgz";
   const sync = () => {
     method.disabled = store.value !== "recompress";
-    passRow.hidden = !grfTarget || enc.value !== "password";
+    passRow.hidden = !grfTarget || !["password", "table"].includes(enc.value);
+    tblRow.hidden = !grfTarget || !(enc.value === "password" || (enc.value === "keep" && encrypted));
   };
   for (const c of [store, enc]) c.addEventListener("change", sync);
   sync();
@@ -2641,7 +2748,7 @@ async function saveDialog(preset = "as") {
     el("dt", { text: t("as-path") }), el("dd", { text: S.untitled ? t("as-unsaved") : info.path }),
     el("dt", { text: t("as-type") }), el("dd", { text: info.format }),
     el("dt", { text: t("as-content") }), el("dd", { text: `${t("pvw-files", { n: info.files })} · ${fmtBytes(info.file_size)}` }),
-    el("dt", { text: t("as-encryption") }), el("dd", { text: encrypted ? t("as-encrypted") : t("as-plain") }),
+    el("dt", { text: t("as-encryption") }), el("dd", { text: encrypted ? t("as-encrypted") : tableEnc ? t("as-table-encrypted") : t("as-plain") }),
     el("dt", { text: t("as-names") }), el("dd", { text: $("names").selectedOptions[0]?.textContent || "" }),
     info.magic ? el("dt", { text: t("as-magic") }) : null, info.magic ? el("dd", {}, el("code", { text: info.magic })) : null,
   );
@@ -2673,6 +2780,7 @@ async function saveDialog(preset = "as") {
       preset === "settings" || preset === "as" ? magicLabel : null,
     ),
     passRow,
+    tblRow,
     thorRow,
     el("p", { class: "hint", text: t("sa-hint") }),
   ];
@@ -2683,7 +2791,7 @@ async function saveDialog(preset = "as") {
   for (;;) {
     const act = await ask(t(titles[preset] || "sa-title"), body, buttons, preset === "settings" ? "info" : undefined);
     if (!act) return;
-    if (enc.value === "password" && (!pass.value || pass.value !== pass2.value)) {
+    if (["password", "table"].includes(enc.value) && (!pass.value || pass.value !== pass2.value)) {
       await note(t("sa-title-encrypt"), pass.value ? t("sa-password-mismatch") : t("err-password-empty"), true);
       continue;
     }
@@ -2693,7 +2801,8 @@ async function saveDialog(preset = "as") {
       method: method.value,
       format: format.value === "keep" ? null : format.value,
       encryption: enc.value,
-      password: enc.value === "password" ? pass.value : null,
+      password: ["password", "table"].includes(enc.value) ? pass.value : null,
+      encrypt_table: !tblRow.hidden ? tbl.checked : null,
       magic: magic.value && magic.value !== info.magic ? magic.value : null,
       thor_merge: kind === "thor" ? thorMerge.checked : null,
       thor_target: kind === "thor" ? thorTarget.value : null,
@@ -2721,7 +2830,7 @@ async function saveAs(req) {
     setStatus(t("save-as-done", { dst: req.dst }));
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("save-cancelled") : t("save-failed"));
     await note(cancelled ? t("save-cancelled") : t("save-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -2940,7 +3049,7 @@ async function saveEdited() {
     if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("save-cancelled") : t("save-failed"));
     await note(cancelled ? t("save-cancelled") : t("save-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -2999,7 +3108,7 @@ async function doBuild() {
     if (open) await openPath(dst);
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("build-cancelled") : t("build-failed"));
     await note(cancelled ? t("build-cancelled") : t("build-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -3048,7 +3157,7 @@ async function doMerge() {
     if (open) await openPath(dst);
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("merge-cancelled") : t("merge-failed"));
     await note(cancelled ? t("merge-cancelled") : t("merge-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -3139,7 +3248,7 @@ async function doReduceImages() {
     if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("reduce-cancelled") : t("reduce-failed"));
     await note(cancelled ? t("reduce-cancelled") : t("reduce-could-not"), cancelled ? t("nothing-written") : errText(e), !cancelled);
   }
@@ -3459,7 +3568,7 @@ function entryMenu(list, row) {
   if (["rsw", "gnd", "gat"].includes(ext)) items.push({ label: t("ctx-map-extract"), icon: "map", run: guard(() => doExtractMap(row)) }, { label: t("pvw-flat-map"), icon: "edit", run: guard(() => doFlatMap(row)) }, { label: t("ctx-downgrade"), icon: "map", run: guard(() => doDowngradeMap(row)) });
   const edit = [];
   if (row.kind === "text") edit.push({ label: t("ctx-edit"), icon: "edit", run: guard(() => openTextEditor(row)) });
-  if (ext === "wav") edit.push({ label: t("ctx-audio"), icon: "audio", run: guard(() => openAudioEditor(row)) });
+  if (["wav", "mp3", "ogg"].includes(ext)) edit.push({ label: t("ctx-audio"), icon: "audio", run: guard(() => openAudioEditor(row)) });
   if (ext === "bmp") edit.push({ label: t("ctx-reduce"), icon: "image", run: guard(() => openReduceDialog(row)) });
   edit.push({ label: t("ctx-hex"), icon: "file", run: guard(async () => openHexEditor(row, (await invoke("details", { index: row.index })).name)) });
   items.push("-", ...edit, "-");
@@ -3861,7 +3970,7 @@ async function exportRows(list, row) {
     if (open) await openPath(dst, true);
   } catch (e) {
     job.close();
-    const cancelled = /cancel/i.test(errText(e));
+    const cancelled = /cancel/i.test(plainErr(e));
     setStatus(cancelled ? t("nothing-written") : t("exp-failed"));
     await note(cancelled ? t("nothing-written") : t("exp-failed"), cancelled ? "" : errText(e), !cancelled);
   }

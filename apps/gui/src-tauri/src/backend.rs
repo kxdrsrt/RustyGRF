@@ -437,6 +437,20 @@ impl EditPlan {
         Some(set)
     }
 
+    /// The key the files of a save are encrypted with. An archive with only its table encrypted
+    /// has a key but plain files, unless single files were marked for encryption.
+    pub(crate) fn files_key(&self, src: &Archive) -> Option<rgrf_core::grfcrypt::Key> {
+        let marked = self
+            .changes
+            .iter()
+            .any(|c| matches!(c, Change::Crypt { on: true, .. }));
+        if src.encryption().is_none() && src.table_encrypted() && !marked {
+            None
+        } else {
+            self.key
+        }
+    }
+
     /// Sets the key and the selection of encrypted entries of a save (see [`Self::crypt_only`]).
     pub(crate) fn apply_crypt(&self, src: &Archive, opts: &mut RepackOptions) {
         if opts.encrypt.is_none() {
@@ -553,7 +567,8 @@ pub fn reduce_images(
     let mut opts = RepackOptions {
         overwrite: true,
         copy_streams: true,
-        encrypt: plan.key,
+        encrypt: plan.files_key(&src),
+        encrypt_table: plan.key.filter(|_| src.table_encrypted()),
         ..RepackOptions::default()
     };
     plan.apply_crypt(&src, &mut opts);
@@ -701,6 +716,8 @@ pub struct ArchiveInfo {
     pub file_size: u64,
     /// Set for an archive with GRF Editor's encryption.
     pub encryption: Option<EncryptionOut>,
+    /// The file table is encrypted (the archive was opened with its key).
+    pub table_encrypted: bool,
     /// The magic at the start of a GRF header ("Master of Magic", "Event Horizon" or another).
     pub magic: String,
     /// Set for a Thor patch: how it applies.
@@ -1551,7 +1568,8 @@ pub fn save_edited(
     let mut opts = RepackOptions {
         overwrite,
         copy_streams: true,
-        encrypt: plan.key,
+        encrypt: plan.files_key(&src),
+        encrypt_table: plan.key.filter(|_| src.table_encrypted()),
         ..RepackOptions::default()
     };
     plan.apply_crypt(&src, &mut opts);
@@ -1692,14 +1710,22 @@ fn png_frame(img: &RgbaImage, label: Note) -> Option<Frame> {
 
 /// Text of a file whose encoding is unknown: UTF-8 if it is, else Korean (CP949) if that decodes
 /// without errors, else Windows-1252.
-/// A sound read from WAV bytes with the operations applied; the operations as text again.
+/// A sound read from WAV, MP3 or Ogg bytes with the operations applied, what it was read from;
+/// the operations as text again.
 fn edited_audio(
     data: &[u8],
     ops: &[String],
-) -> Result<(rgrf_formats::audio::Audio, Vec<String>), String> {
+) -> Result<
+    (
+        rgrf_formats::audio::Audio,
+        rgrf_formats::audio::Source,
+        Vec<String>,
+    ),
+    String,
+> {
     use rgrf_formats::audio::{Audio, Op};
-    let mut audio =
-        Audio::from_wav(data).map_err(|e| err!("err-audio-read", "error": e.to_string()))?;
+    let (mut audio, source) =
+        Audio::decode(data).map_err(|e| err!("err-audio-read", "error": e.to_string()))?;
     let ops: Vec<Op> = ops
         .iter()
         .map(|t| Op::parse(t))
@@ -1708,7 +1734,7 @@ fn edited_audio(
     audio
         .apply_all(&ops)
         .map_err(|e| err!("err-audio-op", "error": e.to_string()))?;
-    Ok((audio, ops.iter().map(Op::text).collect()))
+    Ok((audio, source, ops.iter().map(Op::text).collect()))
 }
 
 /// The decompiled text of a compiled Lua file (`None` when it cannot be read).
@@ -2730,7 +2756,7 @@ impl Session {
         buckets: usize,
     ) -> Result<AudioView, String> {
         let (_, data, _) = self.working_bytes(index)?;
-        let (audio, ops) = edited_audio(&data, ops)?;
+        let (audio, _, ops) = edited_audio(&data, ops)?;
         let peak = audio.peak();
         Ok(AudioView {
             rate: audio.rate,
@@ -2751,15 +2777,19 @@ impl Session {
         })
     }
 
-    /// Replaces a sound by the result of the operations (one undo step); it is written as 16-bit PCM.
+    /// Replaces a sound by the result of the operations (one undo step); a WAV is written as 16-bit
+    /// PCM, an MP3 or Ogg as the same kind again (about the same bit rate).
     pub fn stage_audio(&mut self, index: usize, ops: &[String]) -> Result<(), String> {
         self.transact(|s| {
             let (name, data, mut what) = s.working_bytes(index)?;
-            let (audio, texts) = edited_audio(&data, ops)?;
+            let (audio, source, texts) = edited_audio(&data, ops)?;
+            let bytes = audio
+                .encode(&source)
+                .map_err(|e| err!("err-audio-write", "error": e.to_string()))?;
             what.push(format!("sound: {}", texts.join(", ")));
             s.stage(Change::PutBytes {
                 name,
-                data: Arc::new(audio.to_wav()),
+                data: Arc::new(bytes),
                 what,
             });
             Ok(())
@@ -3291,6 +3321,7 @@ impl Session {
                 encrypted_entries: e.encrypted_entries,
                 key_needed: !e.key_set,
             }),
+            table_encrypted: self.arc.table_encrypted(),
             magic: if self.arc.header().kind == rgrf_core::container::Kind::Grf {
                 rgrf_core::writer::magic_to_text(&self.arc.header().magic)
             } else {
@@ -5259,6 +5290,45 @@ mod tests {
     }
 
     #[test]
+    fn an_mp3_is_edited_and_stays_an_mp3() {
+        use rgrf_formats::audio::{Audio, Format};
+        let dir = tmp("audio-mp3");
+        fs::create_dir_all(dir.join("src/data")).unwrap();
+        let tone: Vec<f32> = (0..22050).map(|i| (i as f32 * 0.1).sin() * 0.5).collect();
+        let mp3 = rgrf_formats::lossy::encode_mp3(22050, &[tone], Some(64)).unwrap();
+        fs::write(dir.join("src/data/m.mp3"), mp3).unwrap();
+        let grf = dir.join("a.grf");
+        build(
+            &dir.join("src"),
+            &grf,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let mut s = Session::open(&grf).unwrap();
+        let i = find(&s, "m.mp3");
+        let ops = vec!["trim:200-700".to_string()];
+        let v = s.audio_render(i, &ops, 50).unwrap();
+        assert!((480..=520).contains(&v.duration_ms), "{}", v.duration_ms);
+        s.stage_audio(i, &ops).unwrap();
+        let out = dir.join("out.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let o = Archive::open(&out).unwrap();
+        let data = o
+            .read(o.find(&GrfPath::new(&b"data\\m.mp3"[..])).unwrap())
+            .unwrap()
+            .data;
+        let (a, src) = Audio::decode(&data).unwrap();
+        assert_eq!(src.format, Format::Mp3);
+        assert!(
+            (480..=560).contains(&a.duration_ms()),
+            "{}",
+            a.duration_ms()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn single_entries_are_marked_for_encryption_and_decryption() {
         let dir = tmp("crypt-single");
         fs::create_dir_all(dir.join("src/data")).unwrap();
@@ -5374,6 +5444,65 @@ mod tests {
         let o = Archive::open_with_key(&out, &key).unwrap();
         let ia = o.find(&GrfPath::new(&b"data\\a.txt"[..])).unwrap();
         assert_eq!(o.read(ia).unwrap().data, b"changed\n");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_archive_with_only_its_table_encrypted_opens_saves_and_keeps_it() {
+        use crate::saving::{SaveRequest, save_as};
+        let key = rgrf_core::grfcrypt::key_from_password("table pw").unwrap();
+        let dir = tmp("crypt-table");
+        fs::create_dir_all(dir.join("src/data")).unwrap();
+        fs::write(dir.join("src/data/a.txt"), "hello hello hello hello\n").unwrap();
+        let plain = dir.join("p.grf");
+        build(
+            &dir.join("src"),
+            &plain,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let s = Session::open(&plain).unwrap();
+        assert!(!s.info().table_encrypted);
+        // only the table: the files stay readable without any marker
+        let tab = dir.join("t.grf");
+        let req = SaveRequest {
+            dst: tab.clone(),
+            encryption: Some("table".into()),
+            password: Some("table pw".into()),
+            ..SaveRequest::default()
+        };
+        let sum = save_as(&s.plan(), &req, false, &Control::default()).unwrap();
+        assert!(sum.verified);
+        let err = Session::open(&tab).err().unwrap();
+        assert!(err.contains("key"), "{err}");
+        let wrong = rgrf_core::grfcrypt::key_from_password("wrong").unwrap();
+        let err = Session::open_with(&tab, Some(&wrong)).err().unwrap();
+        assert!(err.contains("CRC32"), "{err}");
+        let mut s = Session::open_with(&tab, Some(&key)).unwrap();
+        let info = s.info();
+        assert!(
+            info.table_encrypted && info.encryption.is_none(),
+            "{info:?}"
+        );
+        // an edit saved with the quick save keeps the table encrypted and the files plain
+        let new = dir.join("new.txt");
+        fs::write(&new, "changed\n").unwrap();
+        s.stage_replace(find(&s, "a.txt"), &new).unwrap();
+        let out = dir.join("out.grf");
+        save_edited(&s.edit_plan().unwrap(), &out, false, &Control::default()).unwrap();
+        let o = Archive::open_with_key(&out, &key).unwrap();
+        assert!(o.table_encrypted() && o.encryption().is_none());
+        assert_eq!(o.read(0).unwrap().data, b"changed\n");
+        // "none" writes the table plain again
+        let back = dir.join("back.grf");
+        let req = SaveRequest {
+            dst: back.clone(),
+            encryption: Some("none".into()),
+            ..SaveRequest::default()
+        };
+        save_as(&s.plan(), &req, false, &Control::default()).unwrap();
+        assert!(!Archive::open(&back).unwrap().table_encrypted());
         let _ = fs::remove_dir_all(dir);
     }
 

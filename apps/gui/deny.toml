@@ -36,6 +36,17 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# The sound editor for MP3 and Ogg (feature lossy-audio, see docs/05-licensing.md): LAME is
+# LGPL, Symphonia is MPL-2.0 (file-level copyleft, used unmodified). The permissive default build
+# of the libraries does not contain them.
+[[licenses.exceptions]]
+allow = ["LGPL-3.0"]
+crate = "mp3lame-encoder"
+
+[[licenses.exceptions]]
+allow = ["LGPL-3.0"]
+crate = "mp3lame-sys"
+
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"

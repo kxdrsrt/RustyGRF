@@ -22,6 +22,9 @@ Jede Abhängigkeit wird vor der Aufnahme auf Lizenz geprüft (`cargo deny check 
 | `aes` | 0.9.4 | MIT OR Apache-2.0 | AES-128 für Gravitys geschützte Einträge (`gravity.rs`); bringt `cipher`, `inout`, `cpubits` (MIT OR Apache-2.0) mit | M6 (2026-11-19) |
 | `twox-hash` | 2.1.5 | MIT | XXH32 und XXH3-128 für Gravitys geschützte Einträge (`xxhash-rust` wäre BSL-1.0 gewesen, nicht in `deny.toml`) | M6 (2026-11-19) |
 | `lz4_flex` | 0.14.2 | MIT | LZ4-Blöcke in Gravitys geschützten Einträgen (nur Entpacken, `safe-decode`) | M6 (2026-11-19) |
+| `symphonia` (mit `-core`, `-bundle-mp3`, `-codec-vorbis`, `-format-ogg`, `-metadata`, `-common`) | 0.6.1 | MPL-2.0 | MP3 und Ogg Vorbis lesen (Merkmal `lossy-audio`) | 2026-11-21 |
+| `mp3lame-encoder` / `mp3lame-sys` | 0.3.0 / 0.2.0 | LGPL-3.0 (LAME) | MP3 schreiben, C-Quelltext wird mitgebaut (Merkmal `lossy-audio`) | 2026-11-21 |
+| `vorbis_rs` (mit `aotuv_lancer_vorbis_sys`, `ogg_next_sys`) | 0.5.6 | BSD-3-Clause | Ogg Vorbis schreiben, C-Quelltext wird mitgebaut (Merkmal `lossy-audio`) | 2026-11-21 |
 
 **Testdaten aus GRF Editor:** `crates/rgrf-core/tests/fixtures/protected-grf.bin` (59.280 Byte, SHA-256 `e6d1ff95…1c4f`) ist GRF Editors `Tests/fixtures/protected-grf.bin` unverändert: laut dessen `Tests/README.md` nur erzeugte Bytes, keine Client-Dateien; übernommen mit Tokeiburus Erlaubnis (siehe `docs/05-licensing.md`).
 
