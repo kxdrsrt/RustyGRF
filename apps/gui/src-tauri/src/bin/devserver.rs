@@ -137,6 +137,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             staged.pending = s.pending();
             to_json(staged)
         }),
+        "stage_model_downgrade" => with(state, |s| {
+            let mut staged = s.stage_model_downgrade(&arg::<Vec<usize>>(a, "indices")?)?;
+            staged.pending = s.pending();
+            to_json(staged)
+        }),
         "audio_render" => with(state, |s| {
             to_json(s.audio_render(
                 arg::<usize>(a, "index")?,
@@ -256,6 +261,14 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 arg(a, "frame")?,
                 &refs.unwrap_or_default(),
             )?)
+        }),
+        "stage_act_anchors" => with(state, |s| {
+            s.stage_act_anchors(
+                arg(a, "index")?,
+                std::path::Path::new(&arg::<String>(a, "path")?),
+                arg(a, "adjust")?,
+            )?;
+            to_json(s.pending())
         }),
         "stage_act_edit" => with(state, |s| {
             let edit: rustygrf_gui_lib::act_editor::ActEdit = arg(a, "edit")?;

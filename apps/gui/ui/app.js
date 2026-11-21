@@ -2379,6 +2379,25 @@ async function actEdit(edit) {
   await loadActFrame();
 }
 
+/** ACT Editor's "Set anchors from file" and "Adjust anchors from file" (the latter moves the layers along). */
+async function actAnchorsFromFile() {
+  const mode = el("select", { class: "field" }, el("option", { value: "set", text: t("act-anchors-set") }), el("option", { value: "adjust", text: t("act-anchors-adjust") }));
+  const go = await ask(t("act-anchors-title"), [el("p", { text: t("act-anchors-intro") }), mode], [{ label: t("act-anchors-pick"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const path = await T.dialog.open({ multiple: false, filters: [{ name: "ACT", extensions: ["act"] }] });
+  if (!path) return;
+  if (E.busy) return;
+  E.busy = true;
+  stopActPlay();
+  try {
+    setPending(await invoke("stage_act_anchors", { index: E.row.index, path: Array.isArray(path) ? path[0] : path, adjust: mode.value === "adjust" }));
+  } catch (e) {
+    await note(t("act-anchors-title"), errText(e), true);
+  }
+  E.busy = false;
+  await loadActFrame();
+}
+
 /** Asks how many in-between frames to add, then stages them (see `Act::interpolate`). */
 async function openInterpolate(v) {
   const count = el("input", { type: "number", min: "1", max: "20", value: "1", class: "narrow", "aria-label": t("ip-count") });
@@ -2549,6 +2568,12 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", text: t("act-copy-action"), title: t("act-copy-action-title"), onclick: () => actEdit({ op: "copy_action" }) }),
     el("button", { type: "button", class: "small", text: t("act-action-up"), title: t("act-action-up-title"), disabled: v.action === 0, onclick: () => actEdit({ op: "move_action", to: v.action - 1 }) }),
     el("button", { type: "button", class: "small", text: t("act-action-down"), title: t("act-action-down-title"), disabled: v.action >= v.actions - 1, onclick: () => actEdit({ op: "move_action", to: v.action + 1 }) }),
+    el("button", { type: "button", class: "small", text: t("act-flip-frame"), title: t("act-flip-frame-title"), onclick: () => actEdit({ op: "flip" }) }),
+    el("button", { type: "button", class: "small", text: t("act-flip-frame-v"), title: t("act-flip-frame-v-title"), onclick: () => actEdit({ op: "flip", up_down: true }) }),
+    el("button", { type: "button", class: "small", text: t("act-flip-action"), title: t("act-flip-action-title"), onclick: () => actEdit({ op: "flip", whole_action: true }) }),
+    el("button", { type: "button", class: "small", text: t("act-mirror-action"), title: t("act-mirror-action-title"), onclick: () => actEdit({ op: "mirror_action" }) }),
+    el("button", { type: "button", class: "small", text: t("act-reverse"), title: t("act-reverse-title"), disabled: v.frames <= 1, onclick: () => actEdit({ op: "reverse_frames" }) }),
+    el("button", { type: "button", class: "small", text: t("act-anchors-file"), title: t("act-anchors-file-title"), onclick: () => actAnchorsFromFile() }),
     el("button", { type: "button", class: "small", text: t("act-remove-action"), disabled: v.actions <= 1, onclick: () => removeAction(v.action) }),
     el("button", { type: "button", class: "small", text: t("act-remove-frame"), disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
   );
@@ -3574,6 +3599,7 @@ function entryMenu(list, row) {
   items.push({ label: t("ctx-export"), icon: "export", run: guard(() => exportRows(list, row)) });
   if (["rsw", "gnd", "gat"].includes(ext)) items.push({ label: t("ctx-map-extract"), icon: "map", run: guard(() => doExtractMap(row)) }, { label: t("pvw-flat-map"), icon: "edit", run: guard(() => doFlatMap(row)) }, { label: t("ctx-downgrade"), icon: "map", run: guard(() => doDowngradeMap(row)) });
   const edit = [];
+  if (ext === "rsm2") edit.push({ label: t("ctx-rsm-downgrade"), icon: "map", run: guard(() => doDowngradeModels(list, row)) });
   if (row.kind === "text") edit.push({ label: t("ctx-edit"), icon: "edit", run: guard(() => openTextEditor(row)) });
   if (["wav", "mp3", "ogg"].includes(ext)) edit.push({ label: t("ctx-audio"), icon: "audio", run: guard(() => openAudioEditor(row)) });
   if (ext === "bmp") edit.push({ label: t("ctx-reduce"), icon: "image", run: guard(() => openReduceDialog(row)) });
@@ -3784,6 +3810,20 @@ async function doDowngradeMap(row) {
     refreshPreview();
     const problems = [...r.missing.map((m) => `${t("dg-missing")}: ${m}`), ...r.failed];
     if (problems.length) await note(t("dg-title"), problems.slice(0, 12).join("\n") + (problems.length > 12 ? `\n… ${problems.length - 12}` : ""));
+  } catch (e) {
+    await note(t("dg-failed"), errText(e), true);
+  }
+}
+
+/** GRF Editor's "RSM2 to RSM1": the selected models (or the one clicked) become RSM 1.4 next to the originals. */
+async function doDowngradeModels(list, row) {
+  try {
+    const indices = await entriesIn(list, row);
+    const r = await invoke("stage_model_downgrade", { indices });
+    setPending(r.pending);
+    setStatus(t("dgm-status", { n: fmtNum(r.models) }));
+    refreshPreview();
+    if (r.failed.length) await note(t("dg-title"), r.failed.slice(0, 12).join("\n"));
   } catch (e) {
     await note(t("dg-failed"), errText(e), true);
   }

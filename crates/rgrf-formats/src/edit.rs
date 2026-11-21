@@ -572,6 +572,113 @@ impl Act {
         Ok(())
     }
 
+    /// Mirrors the layers of one frame (`frame` is `Some`) or of a whole action: `up_down` turns the
+    /// picture over (y), else left to right (x, around the origin). `odd_width` tells whether the
+    /// image of a layer has an odd width (the origin is then half a pixel off). The rules of ACT
+    /// Editor's `FlipCommand`.
+    pub fn flip(
+        &mut self,
+        action: usize,
+        frame: Option<usize>,
+        up_down: bool,
+        odd_width: &dyn Fn(&Layer) -> bool,
+    ) -> Result<(), EditError> {
+        self.check_action(action)?;
+        let count = self.actions[action].frames.len();
+        if let Some(f) = frame
+            && f >= count
+        {
+            return Err(EditError::NoFrame {
+                action,
+                frame: f,
+                count,
+            });
+        }
+        let frames = self.actions[action].frames.iter_mut().enumerate();
+        for (i, fr) in frames {
+            if frame.is_some_and(|f| f != i) {
+                continue;
+            }
+            for l in &mut fr.layers {
+                flip_layer(l, up_down, odd_width(l));
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes a mirrored copy of `action` over its opposite direction (1 and 7, 2 and 6, 3 and 5 of
+    /// each group of 8; ACT Editor's "Mirror action from left/right to right/left"). Returns the
+    /// number of the action that was written, `None` when `action` faces straight up or down.
+    pub fn mirror_action(
+        &mut self,
+        action: usize,
+        odd_width: &dyn Fn(&Layer) -> bool,
+    ) -> Result<Option<usize>, EditError> {
+        self.check_action(action)?;
+        let opposite = match action % 8 {
+            d @ 1..=3 => 8 - d,
+            d @ 5..=7 => 8 - d,
+            _ => return Ok(None),
+        } + action / 8 * 8;
+        self.check_action(opposite)?;
+        let mut copy = self.actions[action].clone();
+        for fr in &mut copy.frames {
+            for l in &mut fr.layers {
+                flip_layer(l, false, odd_width(l));
+            }
+            for a in &mut fr.anchors {
+                a.x = -(a.x - 1);
+            }
+        }
+        self.actions[opposite] = copy;
+        Ok(Some(opposite))
+    }
+
+    /// Plays the frames of an action backwards.
+    pub fn reverse_action(&mut self, action: usize) -> Result<(), EditError> {
+        self.check_action(action)?;
+        self.actions[action].frames.reverse();
+        Ok(())
+    }
+
+    /// ACT Editor's "Set anchors from file" (`adjust` false) and "Adjust anchors from file"
+    /// (`adjust` true). Actions 0 to 7 and 16 to 23 (the body directions) take the frame at the
+    /// same relative place of the other action, the rest the frame with the same number (the last
+    /// one when there are fewer). Setting copies the anchors; adjusting makes the first anchor
+    /// the other file's and moves all layers of the frame by the difference, so a headgear stays
+    /// where it was seen (for example from the male to the female head).
+    pub fn anchors_from(&mut self, other: &Act, adjust: bool) {
+        for i in 0..self.actions.len().min(other.actions.len()) {
+            let body = i < 8 || (16..24).contains(&i);
+            let n = self.actions[i].frames.len();
+            for j in 0..n {
+                let theirs = &other.actions[i].frames;
+                let reference = if body {
+                    (!theirs.is_empty()).then(|| &theirs[j * theirs.len() / n])
+                } else {
+                    theirs.get(j).or(theirs.last())
+                };
+                let fr = &mut self.actions[i].frames[j];
+                match reference {
+                    None => fr.anchors.clear(),
+                    Some(r) if !adjust => fr.anchors = r.anchors.clone(),
+                    Some(r) => match (fr.anchors.first().cloned(), r.anchors.first()) {
+                        (Some(own), Some(want)) => {
+                            let (dx, dy) = ((want.x - own.x) as f32, (want.y - own.y) as f32);
+                            fr.anchors[0] = want.clone();
+                            for l in &mut fr.layers {
+                                l.offset_x += dx;
+                                l.offset_y += dy;
+                            }
+                        }
+                        (None, None) => {}
+                        _ => fr.anchors.clear(),
+                    },
+                }
+            }
+        }
+    }
+
     /// Copies action `src` and inserts the copy at `at` (0 to the number of actions).
     pub fn copy_action(&mut self, src: usize, at: usize) -> Result<(), EditError> {
         self.check_action(src)?;
@@ -739,6 +846,18 @@ fn blend_layer(a: &Layer, b: &Layer, t: f32, s: f32) -> Layer {
         color,
         ..near.clone()
     }
+}
+
+/// One layer mirrored (see [`Act::flip`]).
+fn flip_layer(l: &mut Layer, up_down: bool, odd: bool) {
+    if up_down {
+        l.offset_y = -l.offset_y;
+        l.rotation = (180 - l.rotation).rem_euclid(360);
+    } else {
+        l.offset_x = -(l.offset_x - if odd { 1.0 } else { 0.0 });
+        l.rotation = (360 - l.rotation).rem_euclid(360);
+    }
+    l.mirror = !l.mirror;
 }
 
 #[cfg(test)]
@@ -1164,5 +1283,99 @@ mod tests {
         a.interpolate(0, Some(0), 3, Ease::Linear, false).unwrap();
         let counts: Vec<usize> = a.actions[0].frames.iter().map(|f| f.layers.len()).collect();
         assert_eq!(counts, [1, 1, 2, 2, 2]);
+    }
+
+    fn eight_actions() -> Act {
+        let mut a = act();
+        a.actions = (0..9)
+            .map(|i| Action {
+                frames: vec![Frame {
+                    layers: vec![Layer {
+                        sprite_index: i,
+                        offset_x: 5.0,
+                        offset_y: 3.0,
+                        rotation: 30,
+                        ..Layer::default()
+                    }],
+                    anchors: vec![Anchor {
+                        unknown: [0; 4],
+                        x: 4,
+                        y: 7,
+                        other: 0,
+                    }],
+                    ..Frame::default()
+                }],
+                interval: 4.0,
+            })
+            .collect();
+        a
+    }
+
+    #[test]
+    fn mirroring_flips_layers_and_twice_gives_the_original() {
+        let mut a = eight_actions();
+        let before = a.clone();
+        a.flip(1, Some(0), false, &|_| false).unwrap();
+        let l = &a.actions[1].frames[0].layers[0];
+        assert_eq!(
+            (l.offset_x, l.offset_y, l.rotation, l.mirror),
+            (-5.0, 3.0, 330, true)
+        );
+        a.flip(1, None, false, &|_| false).unwrap();
+        assert_eq!(a, before);
+        // an odd-width image sits half a pixel off
+        a.flip(2, None, false, &|_| true).unwrap();
+        assert_eq!(a.actions[2].frames[0].layers[0].offset_x, -4.0);
+        // upside down: y flips and the angle runs from 180 degrees
+        a.flip(3, None, true, &|_| false).unwrap();
+        let l = &a.actions[3].frames[0].layers[0];
+        assert_eq!((l.offset_x, l.offset_y, l.rotation), (5.0, -3.0, 150));
+        assert!(a.flip(1, Some(4), false, &|_| false).is_err());
+    }
+
+    #[test]
+    fn an_action_is_mirrored_onto_its_opposite_and_frames_reverse() {
+        let mut a = eight_actions();
+        assert_eq!(a.mirror_action(1, &|_| false), Ok(Some(7)));
+        assert_eq!(a.mirror_action(6, &|_| false), Ok(Some(2)));
+        let w = &a.actions[7].frames[0];
+        assert_eq!(
+            w.layers[0].sprite_index, 1,
+            "the copy of action 1 lies on 7"
+        );
+        assert_eq!((w.layers[0].offset_x, w.anchors[0].x), (-5.0, -3));
+        // straight up and down have no opposite; 8 + 1 has none because action 15 does not exist
+        assert_eq!(a.mirror_action(0, &|_| false), Ok(None));
+        assert_eq!(a.mirror_action(4, &|_| false), Ok(None));
+        assert!(a.mirror_action(8 + 1, &|_| false).is_err());
+        let mut b = act();
+        b.actions[0].frames.push(Frame {
+            layers: vec![],
+            ..Frame::default()
+        });
+        b.reverse_action(0).unwrap();
+        assert!(b.actions[0].frames[0].layers.is_empty());
+    }
+
+    #[test]
+    fn anchors_are_set_or_adjusted_from_another_animation() {
+        let mut mine = eight_actions();
+        let mut theirs = eight_actions();
+        for a in &mut theirs.actions {
+            a.frames[0].anchors[0].x = 10;
+            a.frames[0].anchors[0].y = 1;
+        }
+        let mut set = mine.clone();
+        set.anchors_from(&theirs, false);
+        assert_eq!(set.actions[3].frames[0].anchors[0].x, 10);
+        mine.anchors_from(&theirs, true);
+        let f = &mine.actions[3].frames[0];
+        assert_eq!((f.anchors[0].x, f.anchors[0].y), (10, 1));
+        // the layers moved by the difference (6, -6), so the headgear is where it was
+        assert_eq!((f.layers[0].offset_x, f.layers[0].offset_y), (11.0, -3.0));
+        // without anchors on their side, mine are dropped
+        theirs.actions[0].frames[0].anchors.clear();
+        mine.anchors_from(&theirs, true);
+        assert!(mine.actions[0].frames[0].anchors.is_empty());
     }
 }

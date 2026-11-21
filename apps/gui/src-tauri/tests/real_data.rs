@@ -660,3 +660,27 @@ fn a_real_map_is_downgraded_in_one_undoable_step() {
     );
     assert!(s.undo() && s.pending().is_empty());
 }
+
+#[test]
+fn single_rsm2_models_become_rsm_in_one_undoable_step() {
+    let Some(mut s) = open() else { return };
+    let n = s.search("*.rsm2");
+    let rows = s.page(0, n.min(5));
+    assert!(!rows.is_empty(), "no RSM2 model");
+    let indices: Vec<usize> = rows.iter().map(|r| r.index).collect();
+    let d = s.stage_model_downgrade(&indices).unwrap();
+    assert_eq!((d.models, d.failed.len()), (indices.len(), 0));
+    let names: Vec<String> = s.pending().into_iter().map(|p| p.name).collect();
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| n.to_ascii_lowercase().ends_with(".rsm"))
+            .count(),
+        indices.len()
+    );
+    assert!(s.undo() && s.pending().is_empty());
+    // something that is no model stages nothing
+    let t = s.search("*.rsw");
+    let r = s.page(0, t.min(1));
+    assert!(s.stage_model_downgrade(&[r[0].index]).is_err() && s.pending().is_empty());
+}

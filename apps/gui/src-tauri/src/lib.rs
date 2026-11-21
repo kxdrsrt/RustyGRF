@@ -880,6 +880,22 @@ async fn stage_act_edit(
     .await
 }
 
+/// Sets or adjusts the anchors of the animation `index` from another animation on disk (staged).
+#[tauri::command]
+async fn stage_act_anchors(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    path: String,
+    adjust: bool,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_act_anchors(index, std::path::Path::new(&path), adjust)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Sets the type and/or height of a rectangle of cells of the map `index` (staged).
 #[tauri::command]
 async fn stage_gat_edit(
@@ -1046,6 +1062,21 @@ async fn stage_map_downgrade(
 ) -> Res<backend::DowngradeStaged> {
     with_session(&state, &window, move |s| {
         let mut staged = s.stage_map_downgrade(index)?;
+        staged.pending = s.pending();
+        Ok(staged)
+    })
+    .await
+}
+
+/// Converts RSM2 models to RSM 1.4 next to the originals.
+#[tauri::command]
+async fn stage_model_downgrade(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    indices: Vec<usize>,
+) -> Res<backend::DowngradeStaged> {
+    with_session(&state, &window, move |s| {
+        let mut staged = s.stage_model_downgrade(&indices)?;
         staged.pending = s.pending();
         Ok(staged)
     })
@@ -1840,6 +1871,7 @@ pub fn run() {
             stage_rename,
             stage_crypt,
             stage_map_downgrade,
+            stage_model_downgrade,
             tabs::tab_set_info,
             tabs::tab_list,
             tabs::tab_activate,
@@ -1873,6 +1905,7 @@ pub fn run() {
             stage_pal_edit,
             act_frame,
             stage_act_edit,
+            stage_act_anchors,
             text_for_edit,
             stage_text_edit,
             pending,

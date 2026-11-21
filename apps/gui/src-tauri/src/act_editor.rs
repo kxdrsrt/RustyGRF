@@ -152,6 +152,17 @@ pub enum ActEdit {
     SetInterval {
         ms: f32,
     },
+    /// Mirrors the layers of the frame (or of the whole action): left to right, or `up_down`.
+    Flip {
+        #[serde(default)]
+        whole_action: bool,
+        #[serde(default)]
+        up_down: bool,
+    },
+    /// Writes a mirrored copy of the action over its opposite direction.
+    MirrorAction,
+    /// Plays the frames of the action backwards.
+    ReverseFrames,
 }
 
 fn finite(v: f32, what: &str) -> Result<f32, String> {
@@ -163,6 +174,18 @@ fn finite(v: f32, what: &str) -> Result<f32, String> {
 }
 
 pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result<Vec<u8>, String> {
+    apply_with(data, action, frame, edit, &|_| false)
+}
+
+/// Like [`apply`]; `odd_width` says whether the image of a layer is an odd number of pixels wide
+/// (mirroring needs it, see `Act::flip`).
+pub fn apply_with(
+    data: &[u8],
+    action: usize,
+    frame: usize,
+    edit: &ActEdit,
+    odd_width: &dyn Fn(&Layer) -> bool,
+) -> Result<Vec<u8>, String> {
     let mut act = Act::parse(data).map_err(|e| e.to_string())?;
     let version = act.version;
     let n_actions = act.actions.len();
@@ -215,8 +238,38 @@ pub fn apply(data: &[u8], action: usize, frame: usize, edit: &ActEdit) -> Result
             act.set_frame_sound(action, frame, name)
                 .map_err(|e| e.to_string())?;
         }
+        ActEdit::Flip {
+            whole_action,
+            up_down,
+        } => act
+            .flip(
+                action,
+                (!whole_action).then_some(frame),
+                *up_down,
+                odd_width,
+            )
+            .map_err(|e| e.to_string())?,
+        ActEdit::MirrorAction => {
+            if act
+                .mirror_action(action, odd_width)
+                .map_err(|e| e.to_string())?
+                .is_none()
+            {
+                return Err(err!("err-act-no-opposite"));
+            }
+        }
+        ActEdit::ReverseFrames => act.reverse_action(action).map_err(|e| e.to_string())?,
         _ => return apply_in_action(act, action, frame, edit),
     }
+    act.to_bytes(version).map_err(|e| e.to_string())
+}
+
+/// The animation with its anchors set (or adjusted, see `Act::anchors_from`) from another one.
+pub fn anchors_from(data: &[u8], other: &[u8], adjust: bool) -> Result<Vec<u8>, String> {
+    let mut act = Act::parse(data).map_err(|e| e.to_string())?;
+    let version = act.version;
+    let other = Act::parse(other).map_err(|e| e.to_string())?;
+    act.anchors_from(&other, adjust);
     act.to_bytes(version).map_err(|e| e.to_string())
 }
 
@@ -625,6 +678,60 @@ mod tests {
 
     fn parsed(data: &[u8]) -> Act {
         Act::parse(data).unwrap()
+    }
+
+    #[test]
+    fn frames_are_mirrored_reversed_and_anchors_come_from_another_animation() {
+        let (act, _) = sample();
+        let moved = apply(
+            &act,
+            0,
+            0,
+            &edit(
+                serde_json::json!({"op": "set_layer", "layer": 0, "offset_x": 7, "rotation": 20}),
+            ),
+        )
+        .unwrap();
+        // an image of odd width sits half a pixel off: 4 pixels wide here, so no correction
+        let flipped = apply(&moved, 0, 0, &edit(serde_json::json!({"op": "flip"}))).unwrap();
+        let l = &parsed(&flipped).actions[0].frames[0].layers[0];
+        assert_eq!((l.offset_x, l.rotation, l.mirror), (-7.0, 340, true));
+        let odd = apply_with(
+            &moved,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "flip", "whole_action": true})),
+            &|_| true,
+        )
+        .unwrap();
+        assert_eq!(parsed(&odd).actions[0].frames[0].layers[0].offset_x, -6.0);
+        // one action cannot be mirrored onto an opposite side
+        let err = apply(
+            &moved,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "mirror_action"})),
+        );
+        assert!(err.unwrap_err().contains("err-act-no-opposite"));
+        let two = apply(&moved, 0, 0, &edit(serde_json::json!({"op": "copy_frame"}))).unwrap();
+        let back = apply(
+            &two,
+            0,
+            0,
+            &edit(serde_json::json!({"op": "reverse_frames"})),
+        )
+        .unwrap();
+        assert_eq!(parsed(&back).actions[0].frames.len(), 2);
+        // anchors
+        let mut other = parsed(&moved);
+        other.actions[0].frames[0].anchors.push(Anchor {
+            unknown: [0; 4],
+            x: 3,
+            y: 4,
+            other: 0,
+        });
+        let out = anchors_from(&moved, &other.to_bytes(V2_5).unwrap(), false).unwrap();
+        assert_eq!(parsed(&out).actions[0].frames[0].anchors[0].x, 3);
     }
 
     #[test]

@@ -122,3 +122,28 @@ Rechtsklick, Menü-Taste oder Umschalt+F10 auf Dateien und Ordnern in Baum, Deta
 ## Offene Fragen an dich
 1. **Skripte im ACT Editor:** Wollen wir eine Skriptsprache (z. B. Lua) für Massenbearbeitung, oder reichen feste Funktionen (Palette tauschen, Offset verschieben, kopieren)? Empfehlung: erst feste Funktionen.
 2. **Audio/Video/Hex-Ansicht:** brauchbar oder weglassen? Empfehlung: weglassen, bis Bedarf da ist.
+
+## Vergleich mit dem Quelltext, 2. Durchgang (2026-11-21)
+Gelesen: `EMenuInteraction.cs`, `ETreeViewInteraction.cs`, `EListViewInteraction.cs`, `SettingsDialog.xaml`, `GrfCL/CommandLineOptions.cs`, `WPF/PreviewTabs/*`, ACT Editors `changelog.txt` und `Core/Scripting/Scripts/*`. Ein erster, automatischer Durchlauf (Hilfsprogramm) nannte vieles als fehlend, das längst da ist (Herabstufen, Einträge verschlüsseln, „Verwendung suchen“, flache Karten); die Liste unten ist von Hand geprüft.
+
+**Neu gebaut in diesem Durchgang:**
+
+| Funktion in GRF/ACT Editor | RustyGRF | Stand |
+| --- | --- | --- |
+| „RSM2 to RSM1 (anim/flat)“ auf einzelnen Modellen | Kontextmenü „RSM2 → RSM1…“ auf `.rsm2` (eine Auswahl oder ein Ordner), schreibt `.rsm` daneben, ein Rückgängig-Schritt; Drehanimationen bleiben, sonst wie bei „flat“ | ✅ (Test auf echten Modellen) |
+| ACT: „Mirror vertical/horizontal“ (Frame, Aktion) | Schaltflächen „Frame spiegeln ↔“, „Frame kippen ↕“, „Aktion spiegeln ↔“ (`Act::flip`, Regeln von `FlipCommand`, Halbpixel-Ausgleich bei ungerader Bildbreite aus der Sprite-Datei daneben) | ✅ (Kern- und GUI-Tests) |
+| ACT: „Mirror action from left/right to right/left“ | „Auf die Gegenseite“ (1↔7, 2↔6, 3↔5 je 8, Anker mitgespiegelt) | ✅ |
+| ACT: „Reverse animation“ | „Umkehren“ | ✅ |
+| ACT: Anker „Set from file…“ und „Adjust from file…“ (z. B. Kopfbedeckung männlich ↔ weiblich) | „Anker aus Datei…“: kopieren, oder angleichen (erster Anker wie in der Datei, alle Ebenen um den Unterschied verschoben) | ✅ (Kern- und GUI-Test); die eingebauten Vorlagen `ref_head_m/f.act` fehlen, man wählt eine Datei |
+
+**Noch offen (nach Nutzen):**
+
+| Funktion in GRF/ACT Editor | Stand bei uns |
+| --- | --- |
+| ACT: „Setup Headgear/Head/Garment“ (Hilfen, die eine Animation für Kopfbedeckung, Kopf oder Umhang aus einer Vorlage aufbauen), „Duplicate frames…“, „Add sprite to all frames…“, „Edit frames/actions…“ (Dialoge mit Mehrfachauswahl), Effekte (Ein-/Ausblenden, Atmen, Umriss, Farbüberlagerung, „Cut sprite“) | ❌ |
+| ACT: „New ACT“ aus Vorlagen; Sprite-Liste: Einfügen/Ersetzen für einen Bereich von Bildern; Hintergrundfarbe der Vorschau; Zoomen und Verschieben während der Wiedergabe | ❌ |
+| Thor/GPF: „Add files to remove…“ / „Set as removed“ (Löschanweisungen von Hand hinzufügen) | ◐ `thor create --remove` und Vergleich→Thor schreiben sie; im GUI nicht von Hand |
+| Baum: „New folder…“, „Extract root files only“ | ❌ (gering) |
+| Einstellungen: .lub beim Extrahieren dekompilieren, Ordner nach dem Extrahieren öffnen, Hintergrund der Vorschau, Extraktionspfad überschreiben, Baumzustand merken, Thor-Hash anhängen | ❌ (`thor create --integrity` gibt es in der CLI) |
+| GrfCL: `thorPack`/`thorUnpack` (Konfiguration in ein Thor-Patcher-Programm packen), `addFakeClientinfo`, `hash` über einen Ordner | ❌ (Patcher-Zubehör; `client` kennt Serveradresse und Hash je Eintrag) |
+| Dateiformate: BSON/JSON, ThumbDB, ICO, IMF, EBM, FNA, `Effects2Str` | ❌ (kaum Nutzen für den Client-Bau) |

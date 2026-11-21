@@ -2215,6 +2215,59 @@ impl Session {
         })
     }
 
+    /// GRF Editor's "RSM2 to RSM1" on single models: every `.rsm2` among `indices` becomes an RSM 1.4
+    /// `.rsm` next to it (turning nodes keep their animation, see `rgrf_formats::downgrade`).
+    pub fn stage_model_downgrade(&mut self, indices: &[usize]) -> Result<DowngradeStaged, String> {
+        let models: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.arc
+                    .entries()
+                    .get(i)
+                    .is_some_and(|e| e.name.as_bytes().to_ascii_lowercase().ends_with(b".rsm2"))
+            })
+            .collect();
+        if models.is_empty() {
+            return Err(err!("err-downgrade-nothing"));
+        }
+        self.transact(|s| {
+            let (mut done, mut failed) = (0, Vec::new());
+            for i in models {
+                let (name, data, _) = s.working_bytes(i)?;
+                let shown = name.display(s.mode);
+                match rgrf_formats::downgrade::model_to_rsm1(&data) {
+                    Ok(r) => {
+                        let mut bytes = name.as_bytes().to_vec();
+                        bytes.pop();
+                        let new = GrfPath::new(bytes);
+                        let name = s
+                            .arc
+                            .find(&new)
+                            .map_or(new, |at| s.arc.entries()[at].name.clone());
+                        s.stage(Change::PutBytes {
+                            name,
+                            data: Arc::new(r.bytes),
+                            what: vec!["model converted to RSM1".into()],
+                        });
+                        done += 1;
+                    }
+                    Err(e) => failed.push(format!("{shown}: {e}")),
+                }
+            }
+            if done == 0 {
+                return Err(err!("err-downgrade-failed", "error": failed.join("; ")));
+            }
+            Ok(DowngradeStaged {
+                models: done,
+                instances: 0,
+                missing: Vec::new(),
+                failed,
+                pending: Vec::new(),
+            })
+        })
+    }
+
     /// Paths without extension of the maps among `indices` (world, ground or altitude files,
     /// also inside folders the page resolved).
     pub fn map_bases(&self, indices: &[usize]) -> Vec<Vec<u8>> {
@@ -2805,8 +2858,24 @@ impl Session {
         edit: &ActEdit,
     ) -> Result<(), String> {
         let (name, data, mut what) = self.working_bytes(index)?;
-        let out = act_editor::apply(&data, action, frame, edit)?;
+        // mirroring needs to know which images are an odd number of pixels wide: those of the
+        // sprite next to the animation
+        let spr = matches!(edit, ActEdit::Flip { .. } | ActEdit::MirrorAction)
+            .then(|| self.sibling_spr(&name))
+            .flatten();
+        let odd = |l: &rgrf_formats::act::Layer| {
+            let Some(spr) = &spr else { return false };
+            let width = match l.sprite_type {
+                0 => spr.indexed.get(l.sprite_index as usize).map(|i| i.width),
+                _ => spr.rgba.get(l.sprite_index as usize).map(|i| i.width),
+            };
+            width.is_some_and(|w| w % 2 == 1)
+        };
+        let out = act_editor::apply_with(&data, action, frame, edit, &odd)?;
         let kind = match edit {
+            ActEdit::Flip { .. } => "mirrored",
+            ActEdit::MirrorAction => "action mirrored",
+            ActEdit::ReverseFrames => "frames reversed",
             ActEdit::SetLayer { .. } => "layers edited",
             ActEdit::AddLayer => "layer added",
             ActEdit::RemoveLayer { .. } => "layer removed",
@@ -2834,6 +2903,45 @@ impl Session {
             what,
         });
         Ok(())
+    }
+
+    /// The sprite that belongs to the animation `name` (same path, `.spr`), with pending edits.
+    fn sibling_spr(&self, name: &GrfPath) -> Option<Spr> {
+        let mut bytes = name.as_bytes().to_vec();
+        let n = bytes.len();
+        if n < 4 || !bytes[n - 4..].eq_ignore_ascii_case(b".act") {
+            return None;
+        }
+        bytes[n - 3..].copy_from_slice(b"spr");
+        let key = GrfPath::new(bytes).key();
+        let at = *self.key_index().get(&key)?;
+        Spr::parse(&self.read_working(at).ok()?).ok()
+    }
+
+    /// ACT Editor's "Set anchors from file" and "Adjust anchors from file": `other` is an
+    /// animation read from disk.
+    pub fn stage_act_anchors(
+        &mut self,
+        index: usize,
+        other: &Path,
+        adjust: bool,
+    ) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, data, mut what) = s.working_bytes(index)?;
+            let theirs = std::fs::read(other).map_err(|e| e.to_string())?;
+            let out = act_editor::anchors_from(&data, &theirs, adjust)?;
+            what.push(if adjust {
+                "anchors adjusted from a file".into()
+            } else {
+                "anchors set from a file".into()
+            });
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(out),
+                what,
+            });
+            Ok(())
+        })
     }
 
     /// Sets the frame interval of an action of an animation, in milliseconds.
