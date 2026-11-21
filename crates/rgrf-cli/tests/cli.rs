@@ -2725,6 +2725,55 @@ fn grf_editor_encryption_end_to_end() {
 }
 
 #[test]
+fn image_reduce_dir_makes_pngs_smaller_without_changing_a_pixel() {
+    use rgrf_formats::png_io::{frame_from_png, rgba_to_png_fast};
+    use rgrf_formats::spr::RgbaImage;
+    let dir = tmpdir("reduce-png");
+    let src = dir.join("grf/data/texture");
+    std::fs::create_dir_all(&src).unwrap();
+    let mut pixels = Vec::new();
+    for y in 0..96u32 {
+        for x in 0..96u32 {
+            pixels.extend([(x * 2) as u8, (y * 2) as u8, ((x + y) % 251) as u8, 200]);
+        }
+    }
+    let png = rgba_to_png_fast(&RgbaImage {
+        width: 96,
+        height: 96,
+        pixels,
+    })
+    .unwrap();
+    std::fs::write(src.join("a.png"), &png).unwrap();
+    let p = |n: &str| dir.join(n).to_str().unwrap().to_owned();
+    let o = rgrf(&[
+        "--json",
+        "image",
+        "reduce-dir",
+        &p("grf"),
+        "-o",
+        &p("grf-opt"),
+        "--png",
+        "3",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(v["png_files"], 1);
+    assert!(v["png_bytes_after"].as_u64() < v["png_bytes_before"].as_u64());
+    let out = std::fs::read(dir.join("grf-opt/data/texture/a.png")).unwrap();
+    assert!(out.len() < png.len());
+    let (a, b) = (frame_from_png(&png).unwrap(), frame_from_png(&out).unwrap());
+    assert_eq!(a, b);
+    // without --png the file is copied as it is
+    let o = rgrf(&["image", "reduce-dir", &p("grf"), "-o", &p("plain")]);
+    assert!(o.status.success());
+    assert_eq!(
+        std::fs::read(dir.join("plain/data/texture/a.png")).unwrap(),
+        png
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn image_reduce_dir_writes_an_optimised_copy_and_leaves_the_source_alone() {
     use rgrf_formats::spr::RgbaImage;
     let dir = tmpdir("reduce-dir");

@@ -194,6 +194,10 @@ pub struct ReduceDirArgs<'a> {
     pub method: Method,
     pub report: Option<&'a Path>,
     pub overwrite: bool,
+    /// Effort of the lossless PNG pass (Zopfli iterations); `None` leaves the PNGs alone.
+    pub png: Option<u64>,
+    /// The `jpegtran` program for the lossless JPEG pass; `None` leaves the JPEGs alone.
+    pub jpegtran: Option<&'a Path>,
 }
 
 /// What became of one file of the source folder.
@@ -206,6 +210,37 @@ enum Dealt {
     },
     Kept(&'static str),
     Copied,
+    /// A PNG or JPEG with the same picture and fewer bytes (the file sizes).
+    Lossless {
+        png: bool,
+        before: u64,
+        after: u64,
+    },
+}
+
+/// A JPEG with optimal Huffman tables and no metadata, through `jpegtran`: the same picture,
+/// since only the coding of the coefficients changes. Baseline stays baseline (the client's
+/// loader is not known to read progressive files).
+fn jpegtran_optimize(program: &Path, data: &[u8]) -> Result<Option<Vec<u8>>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .args(["-copy", "none", "-optimize"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("cannot run {}", program.display()))?;
+    let mut stdin = child.stdin.take().context("no stdin")?;
+    let input = data.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let out = child.wait_with_output()?;
+    let _ = writer.join();
+    let ok = out.status.success()
+        && out.stdout.len() < data.len()
+        && out.stdout.starts_with(&[0xff, 0xd8])
+        && out.stdout.ends_with(&[0xff, 0xd9]);
+    Ok(ok.then_some(out.stdout))
 }
 
 fn walk_files(
@@ -280,6 +315,39 @@ pub fn reduce_dir(src: &Path, dst: &Path, args: &ReduceDirArgs, json: bool) -> R
                 fs::copy(&from, &to).with_context(|| format!("cannot copy {shown}"))?;
                 Ok(kept.map_or(Dealt::Copied, Dealt::Kept))
             };
+            let lower = shown.to_ascii_lowercase();
+            if let (Some(iterations), true) = (args.png, lower.ends_with(".png")) {
+                let data = fs::read(&from).with_context(|| format!("cannot read {shown}"))?;
+                let deflate = |d: &[u8]| encode(Method::Zopfli { iterations }, d);
+                if let rgrf_formats::png_opt::Outcome::Smaller(small) =
+                    rgrf_formats::png_opt::optimize(&data, &deflate)
+                {
+                    fs::write(&to, &small).with_context(|| format!("cannot write {shown}"))?;
+                    return Ok(Dealt::Lossless {
+                        png: true,
+                        before: data.len() as u64,
+                        after: small.len() as u64,
+                    });
+                }
+                fs::write(&to, &data).with_context(|| format!("cannot write {shown}"))?;
+                return Ok(Dealt::Copied);
+            }
+            if let (Some(tool), true) = (
+                args.jpegtran,
+                lower.ends_with(".jpg") || lower.ends_with(".jpeg"),
+            ) {
+                let data = fs::read(&from).with_context(|| format!("cannot read {shown}"))?;
+                if let Some(small) = jpegtran_optimize(tool, &data)? {
+                    fs::write(&to, &small).with_context(|| format!("cannot write {shown}"))?;
+                    return Ok(Dealt::Lossless {
+                        png: false,
+                        before: data.len() as u64,
+                        after: small.len() as u64,
+                    });
+                }
+                fs::write(&to, &data).with_context(|| format!("cannot write {shown}"))?;
+                return Ok(Dealt::Copied);
+            }
             if !rgrf_core::name::glob_match(args.only, &shown) {
                 return copy(None);
             }
@@ -305,6 +373,8 @@ pub fn reduce_dir(src: &Path, dst: &Path, args: &ReduceDirArgs, json: bool) -> R
         .collect();
     let mut kept: BTreeMap<&str, usize> = BTreeMap::new();
     let mut rows = Vec::new();
+    // PNG and JPEG passes: files, bytes before, bytes after
+    let (mut png_pass, mut jpeg_pass) = ([0u64; 3], [0u64; 3]);
     let (mut before, mut after, mut worst, mut lossless, mut copied) =
         (0u64, 0u64, f64::INFINITY, 0usize, 0usize);
     for r in results {
@@ -323,6 +393,16 @@ pub fn reduce_dir(src: &Path, dst: &Path, args: &ReduceDirArgs, json: bool) -> R
             }
             Dealt::Kept(why) => *kept.entry(why).or_default() += 1,
             Dealt::Copied => copied += 1,
+            Dealt::Lossless {
+                png,
+                before: b,
+                after: a,
+            } => {
+                let pass = if png { &mut png_pass } else { &mut jpeg_pass };
+                pass[0] += 1;
+                pass[1] += b;
+                pass[2] += a;
+            }
         }
     }
     if let Some(path) = args.report {
@@ -353,6 +433,8 @@ pub fn reduce_dir(src: &Path, dst: &Path, args: &ReduceDirArgs, json: bool) -> R
             "copied": copied + kept.values().sum::<usize>(),
             "compressed_bytes_before": before,
             "compressed_bytes_after": after,
+            "png_files": png_pass[0], "png_bytes_before": png_pass[1], "png_bytes_after": png_pass[2],
+            "jpeg_files": jpeg_pass[0], "jpeg_bytes_before": jpeg_pass[1], "jpeg_bytes_after": jpeg_pass[2],
             "worst_psnr_db": (reduced > 0 && worst.is_finite()).then_some(worst),
             "min_psnr_db": args.min_psnr,
             "seconds": secs,
@@ -379,6 +461,17 @@ pub fn reduce_dir(src: &Path, dst: &Path, args: &ReduceDirArgs, json: bool) -> R
             mib(after),
             mib(before - after)
         );
+        for (name, pass) in [("PNG", png_pass), ("JPEG", jpeg_pass)] {
+            if pass[0] > 0 {
+                println!(
+                    "{name}:      {} files made smaller without changing the picture: {:.1} -> {:.1} MiB (saves {:.1} MiB)",
+                    pass[0],
+                    mib(pass[1]),
+                    mib(pass[2]),
+                    mib(pass[1] - pass[2])
+                );
+            }
+        }
         let kept: Vec<String> = kept
             .iter()
             .map(|(k, n)| format!("{n} {}", k.replace('_', " ")))

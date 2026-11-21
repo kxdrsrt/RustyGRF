@@ -16,6 +16,7 @@ workspace = true
 lossy-audio = ["dep:mp3lame-encoder", "dep:symphonia", "dep:vorbis_rs"]
 
 [dependencies]
+crc32fast = "1.5"
 flate2 = "1.1.11"
 gif = "0.14.2"
 mp3lame-encoder = { version = "0.3.0", optional = true }

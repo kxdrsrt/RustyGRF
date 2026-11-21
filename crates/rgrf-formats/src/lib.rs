@@ -31,6 +31,7 @@ pub mod luadec;
 pub mod map_files;
 pub mod pal;
 pub mod png_io;
+pub mod png_opt;
 pub mod quantize;
 pub mod refs;
 pub mod render;

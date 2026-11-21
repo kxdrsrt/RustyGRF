@@ -1195,6 +1195,14 @@ enum ImageCmd {
         /// Replace files of an existing output folder
         #[arg(long)]
         overwrite: bool,
+        /// Also make PNGs smaller without changing a pixel (better filters, Zopfli with this many
+        /// iterations, no text chunks); 0 leaves them alone
+        #[arg(long, default_value_t = 0)]
+        png: u64,
+        /// Also make JPEGs smaller without changing the picture, with this `jpegtran` program
+        /// (optimal Huffman tables, no metadata, still baseline)
+        #[arg(long)]
+        jpegtran: Option<PathBuf>,
     },
 }
 
@@ -2319,6 +2327,8 @@ fn run(cli: &Cli) -> Result<i32> {
                 level,
                 report,
                 overwrite,
+                png,
+                jpegtran,
             } => image_cmd::reduce_dir(
                 src,
                 output,
@@ -2328,6 +2338,8 @@ fn run(cli: &Cli) -> Result<i32> {
                     method: method_from(*method, Some(level.unwrap_or(6)))?,
                     report: report.as_deref(),
                     overwrite: *overwrite,
+                    png: (*png > 0).then_some(*png),
+                    jpegtran: jpegtran.as_deref(),
                 },
                 cli.json,
             ),
