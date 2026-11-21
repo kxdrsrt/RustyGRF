@@ -91,6 +91,28 @@ pub struct EffectScope {
     pub add_empty: bool,
 }
 
+/// Pads the action with frames up to the end of the scope (looping from the start or repeating the
+/// last one) and returns the number of frames of the scope and the frame number it ends at.
+pub(crate) fn frame_span(action: &mut Action, scope: &EffectScope) -> (usize, usize) {
+    let mut len = if scope.length == 0 {
+        action.frames.len().saturating_sub(scope.start)
+    } else {
+        scope.length
+    };
+    if len == 0 {
+        len = action.frames.len();
+    }
+    let need = scope.start + len;
+    let had = action.frames.len();
+    let mut b = 0;
+    while action.frames.len() < need {
+        let src = if scope.loop_missing { b } else { had - 1 };
+        action.frames.push(action.frames[src].clone());
+        b = (b + 1) % had;
+    }
+    (len, need)
+}
+
 fn lerp_color(from: [u8; 4], to: [u8; 4], t: f32) -> [u8; 4] {
     std::array::from_fn(|i| {
         let a = f32::from(from[i]);
@@ -206,22 +228,7 @@ impl Act {
             if !scope.groups.contains(&(aid / 8)) || action.frames.is_empty() {
                 continue;
             }
-            let mut len = if scope.length == 0 {
-                action.frames.len().saturating_sub(scope.start)
-            } else {
-                scope.length
-            };
-            if len == 0 {
-                len = action.frames.len();
-            }
-            let need = scope.start + len;
-            let had = action.frames.len();
-            let mut b = 0;
-            while action.frames.len() < need {
-                let src = if scope.loop_missing { b } else { had - 1 };
-                action.frames.push(action.frames[src].clone());
-                b = (b + 1) % had;
-            }
+            let (len, need) = frame_span(action, scope);
             for (step, frame) in action.frames[scope.start..need].iter_mut().enumerate() {
                 let t = step as f32 / len as f32;
                 let triangle = if t > 0.5 { (1.0 - t) * 2.0 } else { t * 2.0 };

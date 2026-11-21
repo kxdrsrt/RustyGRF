@@ -4,6 +4,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
+use rgrf_formats::act_fx;
 use rgrf_formats::act_ops::{EffectKind, EffectScope, RotationCopy, Template, parse_indexes};
 use rgrf_formats::edit::EditError;
 use rgrf_formats::gif_io::upscale;
@@ -224,6 +225,148 @@ pub enum ActEdit {
         #[serde(default = "one")]
         scale_y: f32,
     },
+}
+
+/// The effects that make new pictures in the sprite next to the animation.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ImageFx {
+    /// Additive "Fade in/out color": a white copy of the layers, coloured and faded.
+    Additive {
+        #[serde(default = "white")]
+        color: [u8; 4],
+        #[serde(default)]
+        ease: i32,
+    },
+    /// "Cut sprite": a cone is cut out of every layer.
+    Cut {
+        #[serde(default)]
+        source_x: f32,
+        #[serde(default)]
+        source_y: f32,
+        #[serde(default)]
+        angle: f32,
+        #[serde(default = "half_angle")]
+        half_angle: f32,
+        #[serde(default = "seed")]
+        seed: u64,
+    },
+    /// "Ash/Bleeding outline": a fringe over the top edge of the chosen layers.
+    Outline {
+        #[serde(default)]
+        min_height: i32,
+        #[serde(default = "four")]
+        max_height: i32,
+        #[serde(default = "half")]
+        dead_rate: f32,
+        #[serde(default = "pink")]
+        color: [u8; 4],
+        #[serde(default = "seed")]
+        seed: u64,
+    },
+}
+
+/// The scope of an effect: animations, layers, first frame, number of frames, looping, empty frame.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct FxScope {
+    pub animations: String,
+    #[serde(default)]
+    pub layers: String,
+    #[serde(default)]
+    pub start: usize,
+    #[serde(default)]
+    pub length: usize,
+    #[serde(default)]
+    pub loop_missing: bool,
+}
+
+fn half_angle() -> f32 {
+    24.0
+}
+fn seed() -> u64 {
+    1234
+}
+fn four() -> i32 {
+    4
+}
+fn half() -> f32 {
+    0.5
+}
+fn pink() -> [u8; 4] {
+    [255, 240, 209, 220]
+}
+
+/// Applies an effect that changes pictures to the animation and the sprite next to it; returns
+/// both files.
+pub fn apply_image_fx(
+    act_bytes: &[u8],
+    spr_bytes: &[u8],
+    fx: &ImageFx,
+    scope: &FxScope,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut act = Act::parse(act_bytes).map_err(|e| e.to_string())?;
+    let mut spr = Spr::parse(spr_bytes).map_err(|e| e.to_string())?;
+    let (av, sv) = (act.version, spr.version);
+    let sc = EffectScope {
+        groups: parse_indexes(&scope.animations).map_err(ed)?,
+        layers: if scope.layers.trim().is_empty() {
+            Default::default()
+        } else {
+            parse_indexes(&scope.layers).map_err(ed)?
+        },
+        start: scope.start,
+        length: scope.length,
+        loop_missing: scope.loop_missing,
+        add_empty: false,
+    };
+    let n = match fx {
+        ImageFx::Additive { color, ease } => {
+            act_fx::additive_overlay(&mut act, &mut spr, *color, *ease, &sc)
+        }
+        ImageFx::Cut {
+            source_x,
+            source_y,
+            angle,
+            half_angle,
+            seed,
+        } => act_fx::cut_sprite(
+            &mut act,
+            &mut spr,
+            &act_fx::CutOptions {
+                source: (finite(*source_x, "source")?, finite(*source_y, "source")?),
+                angle: finite(*angle, "angle")?,
+                half_angle: finite(*half_angle, "angle")?,
+                seed: *seed,
+            },
+            &sc,
+        ),
+        ImageFx::Outline {
+            min_height,
+            max_height,
+            dead_rate,
+            color,
+            seed,
+        } => act_fx::bleeding_outline(
+            &mut act,
+            &mut spr,
+            &act_fx::OutlineOptions {
+                min_height: (*min_height).clamp(0, 50),
+                max_height: (*max_height).clamp(1, 50),
+                dead_rate: finite(*dead_rate, "rate")?,
+                color: *color,
+                seed: *seed,
+            },
+            &sc,
+        ),
+    }
+    .map_err(ed)?;
+    if n == 0 {
+        return Err(err!("err-act-no-match"));
+    }
+    Ok((
+        act.to_bytes(av).map_err(|e| e.to_string())?,
+        spr.to_bytes(sv).map_err(|e| e.to_string())?,
+    ))
 }
 
 fn one() -> f32 {
