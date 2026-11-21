@@ -17,6 +17,8 @@ use serde_json::json;
 pub struct SlimArgs<'a> {
     /// Re-encode MP3s above this bit rate (0.75 times it below 32 kHz); `None` leaves them.
     pub bgm_kbps: Option<u32>,
+    /// Clean MP3s without changing a frame: tags, junk and cut-off frames go (see `mp3_clean`).
+    pub mp3_clean: bool,
     /// Store 24-bit BMPs as 8 bits where the picture keeps this PSNR; `None` leaves them.
     pub min_psnr: Option<f64>,
     /// Zopfli iterations of the lossless PNG pass; `None` leaves PNGs.
@@ -192,6 +194,30 @@ pub fn slim(folder: &Path, output: &Path, args: &SlimArgs, json: bool) -> Result
                         }
                         Ok(None) => copy("music kept (already low enough or no gain)"),
                         Err(_) => copy("music kept (not readable)"),
+                    };
+                }
+                if bgm.is_none() && args.mp3_clean && l.ends_with(".mp3") {
+                    let data = fs::read(&from)?;
+                    return match rgrf_formats::mp3_clean::clean(&data) {
+                        Some(c) if c.data.len() < data.len() => {
+                            fs::write(&to, &c.data)?;
+                            let r = &c.removed;
+                            Ok(Dealt::Changed {
+                                kind: "music",
+                                before: size,
+                                after: c.data.len() as u64,
+                                note: format!(
+                                    "tags {} + {} + {}, junk {} bytes, {} frames unchanged",
+                                    r.id3v2_bytes,
+                                    r.id3v1_bytes,
+                                    r.ape_bytes,
+                                    r.junk_bytes,
+                                    c.frames
+                                ),
+                            })
+                        }
+                        Some(_) => copy(""),
+                        None => copy("music kept (no MP3 frames found)"),
                     };
                 }
                 // the guild emblems must stay the 24-bit pictures the client asks for

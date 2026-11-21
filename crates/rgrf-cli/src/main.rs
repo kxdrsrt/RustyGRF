@@ -727,6 +727,10 @@ enum ClientCmd {
         /// Store 24-bit BMPs as 8 bits where the picture keeps this many dB (0 keeps them)
         #[arg(long, default_value_t = 0.0)]
         min_psnr: f64,
+        /// Clean MP3s without changing a frame (tags, junk and cut-off frames removed); the music
+        /// stays exactly as it sounds. Not used for files that --bgm-kbps encodes again
+        #[arg(long)]
+        mp3_clean: bool,
         /// Lossless PNG pass with this many Zopfli iterations (0 leaves PNGs)
         #[arg(long, default_value_t = 0)]
         png: u64,
@@ -1924,6 +1928,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 output,
                 bgm_kbps,
                 min_psnr,
+                mp3_clean,
                 png,
                 jpegtran,
                 keep_grf,
@@ -1935,6 +1940,7 @@ fn run(cli: &Cli) -> Result<i32> {
                 &slim_cmd::SlimArgs {
                     bgm_kbps: (*bgm_kbps > 0).then_some(*bgm_kbps),
                     min_psnr: (*min_psnr > 0.0).then_some(*min_psnr),
+                    mp3_clean: *mp3_clean,
                     png: (*png > 0).then_some(*png),
                     jpegtran: jpegtran.as_deref(),
                     keep_grf: *keep_grf,

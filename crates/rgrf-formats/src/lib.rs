@@ -29,6 +29,7 @@ pub mod luacomp;
 pub mod luacomp50;
 pub mod luadec;
 pub mod map_files;
+pub mod mp3_clean;
 pub mod pal;
 pub mod png_io;
 pub mod png_opt;
