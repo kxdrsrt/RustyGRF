@@ -97,7 +97,11 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.locate(arg(a, "view")?, arg(a, "entry")?, folder.as_deref())?)
         }),
         "folder_entries" => with(state, |s| {
-            to_json(s.folder_entries(arg(a, "view")?, &arg::<String>(a, "path")?)?)
+            to_json(s.folder_entries(
+                arg(a, "view")?,
+                &arg::<String>(a, "path")?,
+                arg::<Option<bool>>(a, "root_only")?.unwrap_or(false),
+            )?)
         }),
         "page" => with(state, |s| {
             to_json(s.page(arg(a, "offset")?, arg::<usize>(a, "limit")?.min(500)))
@@ -209,6 +213,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 &list,
                 &PathBuf::from(arg::<String>(a, "dest")?),
                 arg(a, "rename")?,
+                arg::<Option<bool>>(a, "decompile_lub")?.unwrap_or(false),
             )?)
         }),
         "verify" => with(state, |s| to_json(s.verify(arg(a, "decode")?)?)),
@@ -241,6 +246,17 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             )?;
             to_json(s.pending())
         }),
+        "stage_spr_images" => with(state, |s| {
+            let pngs: Vec<String> = arg(a, "pngs")?;
+            let files: Vec<PathBuf> = pngs.into_iter().map(PathBuf::from).collect();
+            s.stage_spr_images(
+                arg(a, "index")?,
+                arg(a, "frame")?,
+                &files,
+                &arg::<String>(a, "mode")?,
+            )?;
+            to_json(s.pending())
+        }),
         "stage_spr_add" => with(state, |s| {
             s.stage_spr_add(arg(a, "index")?, &PathBuf::from(arg::<String>(a, "png")?))?;
             to_json(s.pending())
@@ -268,6 +284,19 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 std::path::Path::new(&arg::<String>(a, "path")?),
                 arg(a, "adjust")?,
             )?;
+            to_json(s.pending())
+        }),
+        "stage_act_default_anchors" => with(state, |s| {
+            s.stage_act_default_anchors(arg(a, "index")?, arg(a, "female")?)?;
+            to_json(s.pending())
+        }),
+        "open_folder" => Ok(Value::Null),
+        "stage_removals" => with(state, |s| {
+            s.stage_removals(&arg::<String>(a, "text")?)?;
+            to_json(s.pending())
+        }),
+        "stage_new_act" => with(state, |s| {
+            s.stage_new_act(&arg::<String>(a, "path")?, &arg::<String>(a, "kind")?)?;
             to_json(s.pending())
         }),
         "stage_act_edit" => with(state, |s| {

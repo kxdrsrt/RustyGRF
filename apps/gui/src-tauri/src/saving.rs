@@ -2,7 +2,7 @@
 //! choices of GRF Editor's "Save advanced"; new empty archives; hashes of an entry; comparing two
 //! archives and writing their differences as a patch.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rgrf_core::edit::{self, Edit};
@@ -167,7 +167,12 @@ pub fn save_as(
     let edits = plan.edits()?;
     let (key, table_key) = keys_of(plan, &src, req)?;
     let method = method_of(req.method.as_deref())?;
-    match container_of(&req.dst) {
+    let container = container_of(&req.dst);
+    let by_hand = plan.removals();
+    if container != Container::Thor && !by_hand.is_empty() {
+        return Err(err!("err-removal-thor"));
+    }
+    match container {
         Container::Grf => {
             let format = match req.format.as_deref() {
                 None | Some("") | Some("keep") => None,
@@ -206,8 +211,16 @@ pub fn save_as(
             if key.is_some() || table_key.is_some() {
                 return Err(err!("err-encrypt-format"));
             }
-            let (files, counts) = final_files(&src, &edits, ctl)?;
-            if files.is_empty() {
+            let (mut files, counts) = final_files(&src, &edits, ctl)?;
+            let removals = if kind == Container::Thor {
+                thor_removals(&src, &edits, &by_hand)
+            } else {
+                Vec::new()
+            };
+            // a path that is to be deleted has no file in the patch
+            let doomed: HashSet<Vec<u8>> = by_hand.iter().map(GrfPath::key).collect();
+            files.retain(|(n, _)| !doomed.contains(&n.key()));
+            if files.is_empty() && removals.is_empty() {
                 return Err(err!("err-patch-empty"));
             }
             if kind == Container::Thor {
@@ -217,6 +230,10 @@ pub fn save_as(
                         name: n.clone(),
                         data: Some(d.clone()),
                     })
+                    .chain(removals.iter().map(|n| ThorFile {
+                        name: n.clone(),
+                        data: None,
+                    }))
                     .collect();
                 let (merge_into_grf, target_grf) = thor_apply(&src, req)?;
                 let opts = ThorOptions {
@@ -381,6 +398,28 @@ fn final_files(
         }
     }
     Ok((out, (added, replaced, removed)))
+}
+
+/// The delete directives a patch has after the edits: those it had (unless removed or replaced by
+/// a file) and those added by hand, each path once.
+fn thor_removals(src: &Archive, edits: &[Edit], by_hand: &[GrfPath]) -> Vec<GrfPath> {
+    let mut gone: HashSet<Vec<u8>> = HashSet::new();
+    let mut files: HashSet<Vec<u8>> = HashSet::new();
+    for e in edits {
+        match e {
+            Edit::Remove { name } => gone.insert(name.key()),
+            Edit::Put { name, .. } => files.insert(name.key()),
+        };
+    }
+    let mut seen = HashSet::new();
+    src.entries()
+        .iter()
+        .filter(|e| e.is_removal())
+        .map(|e| e.name.clone())
+        .filter(|n| !gone.contains(&n.key()) && !files.contains(&n.key()))
+        .chain(by_hand.iter().cloned())
+        .filter(|n| seen.insert(n.key()))
+        .collect()
 }
 
 /// Opens the written patch and compares every file with what should be in it.
@@ -803,6 +842,61 @@ mod tests {
         let t = Archive::open(&patch).unwrap();
         assert_eq!(t.entries().iter().filter(|e| !e.is_marker()).count(), 3);
         assert_eq!(t.entries().iter().filter(|e| e.is_removal()).count(), 1);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn delete_directives_added_by_hand_are_written_kept_and_refused_elsewhere() {
+        let d = dir("byhand");
+        let src = d.join("a.grf");
+        create_empty(&src).unwrap();
+        let f = d.join("f");
+        std::fs::write(&f, b"x").unwrap();
+        let mut s = Session::open(&src).unwrap();
+        s.stage_add(r"data\keep.txt", &f).unwrap();
+        s.stage_add(r"dataoth.txt", &f).unwrap();
+        assert_eq!(
+            s.stage_removals("data/old.txt\n\n  data\\both.txt ")
+                .unwrap(),
+            2
+        );
+        assert!(s.stage_removals("data\\folder\\").is_err() && s.stage_removals("  \n").is_err());
+        let thor = SaveRequest {
+            dst: d.join("p.thor"),
+            ..SaveRequest::default()
+        };
+        save_as(&s.edit_plan().unwrap(), &thor, true, &Control::default()).unwrap();
+        let t = Archive::open(&thor.dst).unwrap();
+        let names = |removal: bool| -> Vec<String> {
+            t.entries()
+                .iter()
+                .filter(|e| e.is_removal() == removal && !e.is_marker() == !removal)
+                .map(|e| e.name.display(rgrf_core::NameMode::Cp949))
+                .collect()
+        };
+        assert!(names(false).contains(&r"data\keep.txt".to_string()));
+        assert!(
+            !names(false).contains(&r"data\both.txt".to_string()),
+            "deleted, so no file"
+        );
+        assert_eq!(names(true).len(), 2);
+        // the saved patch keeps its directives when it is edited and saved again
+        let mut s = Session::open(&thor.dst).unwrap();
+        s.stage_removals("data\\more.txt").unwrap();
+        let again = SaveRequest {
+            dst: d.join("p2.thor"),
+            ..SaveRequest::default()
+        };
+        save_as(&s.edit_plan().unwrap(), &again, true, &Control::default()).unwrap();
+        let t2 = Archive::open(&again.dst).unwrap();
+        assert_eq!(t2.entries().iter().filter(|e| e.is_removal()).count(), 3);
+        // a GRF cannot hold them
+        let grf = SaveRequest {
+            dst: d.join("x.grf"),
+            ..SaveRequest::default()
+        };
+        let e = save_as(&s.edit_plan().unwrap(), &grf, true, &Control::default()).unwrap_err();
+        assert!(e.contains("err-removal-thor"), "{e}");
         let _ = std::fs::remove_dir_all(d);
     }
 

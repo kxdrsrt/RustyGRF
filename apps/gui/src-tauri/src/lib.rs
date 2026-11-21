@@ -520,8 +520,12 @@ async fn folder_entries(
     state: State<'_, AppState>,
     view: usize,
     path: String,
+    root_only: Option<bool>,
 ) -> Res<Vec<usize>> {
-    with_session(&state, &window, move |s| s.folder_entries(view, &path)).await
+    with_session(&state, &window, move |s| {
+        s.folder_entries(view, &path, root_only.unwrap_or(false))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -633,6 +637,7 @@ async fn extract(
     indices: Vec<usize>,
     dest: String,
     rename: bool,
+    decompile_lub: Option<bool>,
 ) -> Res<ExtractSummary> {
     with_session(&state, &window, move |s| {
         let all;
@@ -642,7 +647,12 @@ async fn extract(
         } else {
             &indices
         };
-        s.extract(list, &PathBuf::from(dest), rename)
+        s.extract(
+            list,
+            &PathBuf::from(dest),
+            rename,
+            decompile_lub.unwrap_or(false),
+        )
     })
     .await
 }
@@ -785,6 +795,25 @@ async fn stage_spr_image(
     .await
 }
 
+/// ACT Editor's range commands: PNG files go one after the other from image `frame` on (`mode`
+/// `replace`, `before` or `after`); the animation next to the sprite follows (staged).
+#[tauri::command]
+async fn stage_spr_images(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    frame: usize,
+    pngs: Vec<String>,
+    mode: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        let files: Vec<PathBuf> = pngs.into_iter().map(PathBuf::from).collect();
+        s.stage_spr_images(index, frame, &files, &mode)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
 /// Appends a PNG file to the sprite `index` as a new image.
 #[tauri::command]
 async fn stage_spr_add(
@@ -891,6 +920,61 @@ async fn stage_act_anchors(
 ) -> Res<Vec<PendingRow>> {
     with_session(&state, &window, move |s| {
         s.stage_act_anchors(index, std::path::Path::new(&path), adjust)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// ACT Editor's "Set default anchors" for a head sprite (staged).
+#[tauri::command]
+async fn stage_act_default_anchors(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    female: bool,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_act_default_anchors(index, female)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Opens a folder in the system's file manager.
+#[tauri::command]
+fn open_folder(path: String) -> Res<()> {
+    let p = PathBuf::from(&path);
+    if !p.is_dir() {
+        return Err(err!("err-no-folder", "path": path));
+    }
+    backend::open_with_system(&p)?;
+    Ok(())
+}
+
+/// Adds delete directives (one path per line) to a Thor patch (staged).
+#[tauri::command]
+async fn stage_removals(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    text: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_removals(&text)?;
+        Ok(s.pending())
+    })
+    .await
+}
+
+/// Adds a new animation shaped like a template under the archive path `path` (staged).
+#[tauri::command]
+async fn stage_new_act(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: String,
+    kind: String,
+) -> Res<Vec<PendingRow>> {
+    with_session(&state, &window, move |s| {
+        s.stage_new_act(&path, &kind)?;
         Ok(s.pending())
     })
     .await
@@ -1678,6 +1762,9 @@ fn build_menu(
         Box::new(PredefinedMenuItem::select_all(app, None)?),
         sep()?,
         item("add", "Add File...", None)?,
+        item("new-folder", "New Folder...", None)?,
+        item("new-act", "New Animation from Template...", None)?,
+        item("thor-removals", "Add Delete Directives (Thor)...", None)?,
         item("replace", "Replace...", None)?,
         item("remove", "Remove", None)?,
         item("changes", "Review Changes...", None)?,
@@ -1895,6 +1982,7 @@ pub fn run() {
             stage_remove,
             stage_spr_image,
             stage_spr_add,
+            stage_spr_images,
             stage_spr_remove,
             stage_spr_palette,
             stage_act_interval,
@@ -1906,6 +1994,10 @@ pub fn run() {
             act_frame,
             stage_act_edit,
             stage_act_anchors,
+            stage_act_default_anchors,
+            stage_new_act,
+            stage_removals,
+            open_folder,
             text_for_edit,
             stage_text_edit,
             pending,

@@ -295,6 +295,12 @@ enum Change {
         tag: GrfPath,
         on: bool,
     },
+    /// A delete directive of a Thor patch: the path is deleted in the target when the patch is
+    /// applied. `tag` is a path of its own, so the mark does not replace a change of the content.
+    Removal {
+        name: GrfPath,
+        tag: GrfPath,
+    },
 }
 
 /// One step of the undo history: what it did (`add`, `replace`, `edit`, `remove`, `discard`,
@@ -314,6 +320,7 @@ fn same_change(a: &Change, b: &Change) -> bool {
         (Change::PutBytes { data: x, .. }, Change::PutBytes { data: y, .. }) => Arc::ptr_eq(x, y),
         (Change::Remove { .. }, Change::Remove { .. }) => true,
         (Change::Crypt { on: x, .. }, Change::Crypt { on: y, .. }) => x == y,
+        (Change::Removal { .. }, Change::Removal { .. }) => true,
         _ => false,
     }
 }
@@ -322,16 +329,21 @@ impl Change {
     fn name(&self) -> &GrfPath {
         match self {
             Self::Put { name, .. } | Self::PutBytes { name, .. } | Self::Remove { name } => name,
-            Self::Crypt { tag, .. } => tag,
+            Self::Crypt { tag, .. } | Self::Removal { tag, .. } => tag,
         }
     }
 
     /// The entry the change is about (what is shown).
     fn shown(&self) -> &GrfPath {
         match self {
-            Self::Crypt { name, .. } => name,
+            Self::Crypt { name, .. } | Self::Removal { name, .. } => name,
             c => c.name(),
         }
+    }
+
+    fn removal(name: GrfPath) -> Self {
+        let tag = GrfPath::new([b"\x01removal\\", name.as_bytes()].concat());
+        Self::Removal { name, tag }
     }
 
     fn crypt(name: GrfPath, on: bool) -> Self {
@@ -378,7 +390,7 @@ impl EditPlan {
     pub(crate) fn edits(&self) -> Result<Vec<Edit>, String> {
         self.changes
             .iter()
-            .filter(|c| !matches!(c, Change::Crypt { .. }))
+            .filter(|c| !matches!(c, Change::Crypt { .. } | Change::Removal { .. }))
             .map(|c| {
                 Ok(match c {
                     Change::Put { name, file } => Edit::Put {
@@ -391,8 +403,19 @@ impl EditPlan {
                         data: (**data).clone(),
                     },
                     Change::Remove { name } => Edit::Remove { name: name.clone() },
-                    Change::Crypt { .. } => unreachable!("filtered above"),
+                    Change::Crypt { .. } | Change::Removal { .. } => unreachable!("filtered above"),
                 })
+            })
+            .collect()
+    }
+
+    /// The paths a Thor patch is to delete in its target, by hand.
+    pub(crate) fn removals(&self) -> Vec<GrfPath> {
+        self.changes
+            .iter()
+            .filter_map(|c| match c {
+                Change::Removal { name, .. } => Some(name.clone()),
+                _ => None,
             })
             .collect()
     }
@@ -1061,6 +1084,9 @@ pub struct Details {
 #[derive(Serialize, Debug)]
 pub struct Frame {
     pub png: String,
+    /// The type of the picture when it is not a PNG (a JPEG thumbnail).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<&'static str>,
     pub width: u32,
     pub height: u32,
     pub label: Note,
@@ -1496,6 +1522,54 @@ pub fn add_spr_image(data: &[u8], png: &[u8]) -> Result<Vec<u8>, String> {
     spr.to_bytes(spr.version).map_err(|e| e.to_string())
 }
 
+/// ACT Editor's range commands of the sprite list: the PNGs go one after the other from image
+/// `frame` on, `mode` being `replace` (images past the end are appended), `before` (each takes
+/// the next number, the old ones move up) or `after` (the same, behind `frame`). The animation
+/// (when given) is changed so that its layers keep their images.
+pub fn spr_images_from(
+    data: &[u8],
+    frame: usize,
+    pngs: &[Vec<u8>],
+    mode: &str,
+    act: Option<&[u8]>,
+) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    if !["replace", "before", "after"].contains(&mode) {
+        return Err(format!("unknown mode '{mode}'"));
+    }
+    let mut spr = Spr::parse(data).map_err(|e| e.to_string())?;
+    let mut act = act
+        .map(|a| Act::parse(a).map_err(|e| e.to_string()))
+        .transpose()?;
+    for (k, png) in pngs.iter().enumerate() {
+        let n = spr.indexed.len();
+        let total = n + spr.rgba.len();
+        let at = frame + k + usize::from(mode == "after");
+        if mode == "replace" && at < total {
+            match png_for(&spr, png, at < n)? {
+                NewImage::Indexed(i) => spr.replace_indexed(at, i),
+                NewImage::Rgba(i) => spr.replace_rgba(at - n, i),
+            }
+            .map_err(|e| e.to_string())?;
+            continue;
+        }
+        if at > total {
+            return Err(err!("err-spr-no-image", "frame": frame, "count": total));
+        }
+        // behind the last palette image the new one is a palette one if the sprite has a palette
+        let indexed = at < n || (at == n && spr.palette.is_some());
+        match png_for(&spr, png, indexed)? {
+            NewImage::Indexed(i) => spr.insert_indexed(at, i, act.as_mut()),
+            NewImage::Rgba(i) => spr.insert_rgba(at - n, i, act.as_mut()),
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    let spr_out = spr.to_bytes(spr.version).map_err(|e| e.to_string())?;
+    let act_out = act
+        .map(|a| a.to_bytes(a.version).map_err(|e| e.to_string()))
+        .transpose()?;
+    Ok((spr_out, act_out))
+}
+
 /// Removes image `frame`; the animation (when given) is changed so its layers follow.
 pub fn remove_spr_image(
     data: &[u8],
@@ -1701,6 +1775,7 @@ fn b64(bytes: &[u8]) -> String {
 
 fn png_frame(img: &RgbaImage, label: Note) -> Option<Frame> {
     Some(Frame {
+        mime: None,
         png: b64(&rgba_to_png(img).ok()?),
         width: u32::from(img.width),
         height: u32::from(img.height),
@@ -1735,6 +1810,23 @@ fn edited_audio(
         .apply_all(&ops)
         .map_err(|e| err!("err-audio-op", "error": e.to_string()))?;
     Ok((audio, source, ops.iter().map(Op::text).collect()))
+}
+
+/// Extracting with "decompile .lub": a compiled Lua file becomes its source text (in the Korean
+/// encoding the client reads, UTF-8 if that cannot hold it). Files that cannot be decompiled
+/// completely stay as they are.
+fn lub_to_text(name: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+    let n = name.len();
+    if n < 4 || !name[n - 4..].eq_ignore_ascii_case(b".lub") || !data.starts_with(b"\x1bLua") {
+        return None;
+    }
+    let text = decompiled_text(data).filter(|t| rgrf_formats::luadec::is_complete(t))?;
+    let (bytes, _, lost) = encoding_rs::EUC_KR.encode(&text);
+    Some(if lost {
+        text.into_bytes()
+    } else {
+        bytes.into_owned()
+    })
 }
 
 /// The decompiled text of a compiled Lua file (`None` when it cannot be read).
@@ -1996,6 +2088,9 @@ impl Session {
                     name: name.as_bytes().to_vec(),
                     on: *on,
                 },
+                Change::Removal { name, .. } => crate::draft::DraftChange::Removal {
+                    name: name.as_bytes().to_vec(),
+                },
             })
             .collect();
         if let Err(e) = crate::draft::save(root, &self.path, &changes) {
@@ -2028,6 +2123,9 @@ impl Session {
                     },
                     crate::draft::DraftChange::Crypt { name, on } => {
                         Change::crypt(GrfPath::new(name), on)
+                    }
+                    crate::draft::DraftChange::Removal { name } => {
+                        Change::removal(GrfPath::new(name))
                     }
                 })
                 .collect();
@@ -2544,6 +2642,7 @@ impl Session {
                 Change::Remove { .. } => "remove",
                 Change::Crypt { on: true, .. } => "encrypt",
                 Change::Crypt { on: false, .. } => "decrypt",
+                Change::Removal { .. } => "removal",
             };
             kinds.push((kind, c.shown()));
         }
@@ -2628,7 +2727,9 @@ impl Session {
             }
             Some(Change::Remove { .. }) => Err(err!("err-marked-removal")),
             // a crypt mark has a path of its own and is never found by an entry's name
-            Some(Change::Crypt { .. }) | None => Ok((name, self.read(index)?, Vec::new())),
+            Some(Change::Crypt { .. } | Change::Removal { .. }) | None => {
+                Ok((name, self.read(index)?, Vec::new()))
+            }
         }
     }
 
@@ -2666,6 +2767,64 @@ impl Session {
             data: Arc::new(out),
             what,
         });
+        Ok(())
+    }
+
+    /// ACT Editor's range commands, see [`spr_images_from`].
+    pub fn stage_spr_images(
+        &mut self,
+        index: usize,
+        frame: usize,
+        pngs: &[PathBuf],
+        mode: &str,
+    ) -> Result<(), String> {
+        self.transact(|s| s.stage_spr_images_impl(index, frame, pngs, mode))
+    }
+
+    fn stage_spr_images_impl(
+        &mut self,
+        index: usize,
+        frame: usize,
+        pngs: &[PathBuf],
+        mode: &str,
+    ) -> Result<(), String> {
+        if pngs.is_empty() {
+            return Err(err!("err-enter-path"));
+        }
+        let (name, data, mut what) = self.working_bytes(index)?;
+        let bytes = pngs
+            .iter()
+            .map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display())))
+            .collect::<Result<Vec<_>, _>>()?;
+        // an insertion moves the images behind it, so the animation next to the sprite follows
+        let act_index = (mode != "replace")
+            .then(|| self.sibling(index, "act"))
+            .flatten();
+        let act = act_index.map(|i| self.working_bytes(i)).transpose()?;
+        let (spr_out, act_out) = spr_images_from(
+            &data,
+            frame,
+            &bytes,
+            mode,
+            act.as_ref().map(|a| a.1.as_slice()),
+        )?;
+        what.push(format!(
+            "{} images ({mode}) from image {frame}",
+            bytes.len()
+        ));
+        self.stage(Change::PutBytes {
+            name,
+            data: Arc::new(spr_out),
+            what,
+        });
+        if let (Some((aname, _, mut awhat)), Some(out)) = (act, act_out) {
+            awhat.push("layers follow the inserted sprite images".into());
+            self.stage(Change::PutBytes {
+                name: aname,
+                data: Arc::new(out),
+                what: awhat,
+            });
+        }
         Ok(())
     }
 
@@ -2892,6 +3051,12 @@ impl Session {
             ActEdit::SetInterval { .. } => "interval set",
             ActEdit::Interpolate { .. } => "in-between frames added",
             ActEdit::SetSound { .. } => "sound set",
+            ActEdit::DuplicateFrames { .. } => "frames repeated",
+            ActEdit::AddSpriteToFrames { .. } => "sprite added to all frames",
+            ActEdit::RotationCopy { .. } => "directions copied",
+            ActEdit::FrameOrder { .. } => "frames rearranged",
+            ActEdit::ActionOrder { .. } => "actions rearranged",
+            ActEdit::Effect { .. } => "effect applied",
         };
         let note = format!("action {action} frame {frame}: {kind}");
         if !what.contains(&note) {
@@ -2942,6 +3107,63 @@ impl Session {
             });
             Ok(())
         })
+    }
+
+    /// Adds delete directives for a Thor patch: one path per line (`data\\a\\b.txt`, `/` also works).
+    /// Returns the number of paths added.
+    pub fn stage_removals(&mut self, text: &str) -> Result<usize, String> {
+        self.transact(|s| {
+            let mut n = 0;
+            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                let path = line.replace('/', "\\");
+                if path.ends_with('\\') {
+                    return Err(err!("err-enter-path"));
+                }
+                let name =
+                    GrfPath::from_display(&path, s.mode).ok_or_else(|| err!("err-name-chars"))?;
+                s.stage(Change::removal(name));
+                n += 1;
+            }
+            if n == 0 {
+                return Err(err!("err-enter-path"));
+            }
+            Ok(n)
+        })
+    }
+
+    /// ACT Editor's "Set default anchors" for the male or female head sprite.
+    pub fn stage_act_default_anchors(&mut self, index: usize, female: bool) -> Result<(), String> {
+        self.transact(|s| {
+            let (name, data, mut what) = s.working_bytes(index)?;
+            let out = act_editor::default_anchors(&data, female)?;
+            what.push("default anchors".into());
+            s.stage(Change::PutBytes {
+                name,
+                data: Arc::new(out),
+                what,
+            });
+            Ok(())
+        })
+    }
+
+    /// A new animation (`kind` like `monster`, see `act_editor::new_from_template`) under `path`.
+    pub fn stage_new_act(&mut self, path: &str, kind: &str) -> Result<(), String> {
+        self.transact(|s| s.stage_new_act_impl(path, kind))
+    }
+
+    fn stage_new_act_impl(&mut self, path: &str, kind: &str) -> Result<(), String> {
+        let text = path.trim().replace('/', "\\");
+        if text.is_empty() || text.ends_with('\\') {
+            return Err(err!("err-enter-path"));
+        }
+        let name = GrfPath::from_display(&text, self.mode).ok_or_else(|| err!("err-name-chars"))?;
+        let data = act_editor::new_from_template(kind)?;
+        self.stage(Change::PutBytes {
+            name,
+            data: Arc::new(data),
+            what: vec![format!("new animation ({kind})")],
+        });
+        Ok(())
     }
 
     /// Sets the frame interval of an action of an animation, in milliseconds.
@@ -3220,6 +3442,11 @@ impl Session {
                 },
                 Change::Crypt { name, on, .. } => PendingRow {
                     kind: if *on { "encrypt" } else { "decrypt" },
+                    name: name.display(self.mode),
+                    file: None,
+                },
+                Change::Removal { name, .. } => PendingRow {
+                    kind: "removal",
                     name: name.display(self.mode),
                     file: None,
                 },
@@ -3663,12 +3890,26 @@ impl Session {
         Ok(Located { line, rows })
     }
 
-    /// The entries below a folder of a tree list (all matches for an empty path).
-    pub fn folder_entries(&self, view: usize, path: &str) -> Result<Vec<usize>, String> {
+    /// The entries below a folder of a tree list (all matches for an empty path); with
+    /// `root_only` only the files directly in the folder (GRF Editor's "Extract root files only").
+    pub fn folder_entries(
+        &self,
+        view: usize,
+        path: &str,
+        root_only: bool,
+    ) -> Result<Vec<usize>, String> {
         let st = self.views.get(view).ok_or("no such list")?;
         let t = st.tree.as_ref().ok_or("this list has no folders")?;
         let n = t.find(path).ok_or("no such folder")?;
-        Ok(t.files_below(n))
+        let mut all = t.files_below(n);
+        if root_only {
+            let folder = path.trim_matches('\\').to_lowercase();
+            all.retain(|&i| {
+                let parent = self.names[i].rsplit_once('\\').map_or("", |(p, _)| p);
+                parent.to_lowercase() == folder
+            });
+        }
+        Ok(all)
     }
 
     pub fn details(&self, index: usize) -> Result<Details, String> {
@@ -3775,6 +4016,104 @@ impl Session {
                         .then(|| rgrf_formats::bmp::info(&data).ok().map(|i| i.bits))
                         .flatten(),
                     data: b64(&data),
+                }
+            }
+            "bson" => {
+                let doc = rgrf_formats::bson::parse(&data)
+                    .map_err(|e| err!("err-bson", "error": e.to_string()))?;
+                let mut text = rgrf_formats::bson::to_json(&doc);
+                let truncated = text.chars().count() > MAX_TEXT_CHARS;
+                if truncated {
+                    text = text.chars().take(MAX_TEXT_CHARS).collect();
+                }
+                Preview::Text {
+                    text,
+                    encoding: "BSON as JSON".into(),
+                    truncated,
+                }
+            }
+            "imf" => {
+                let imf = rgrf_formats::imf::Imf::parse(&data)
+                    .map_err(|e| err!("err-imf", "error": e.to_string()))?;
+                Preview::Text {
+                    text: imf.to_text(),
+                    encoding: "IMF".into(),
+                    truncated: false,
+                }
+            }
+            "fna" => {
+                let fna = rgrf_formats::fna::Fna::parse(&data)
+                    .map_err(|e| err!("err-fna", "error": e.to_string()))?;
+                let mut text = format!("{} files\n", fna.files.len());
+                for f in &fna.files {
+                    text += &GrfPath::new(f.clone()).display(NameMode::Cp949);
+                    text.push('\n');
+                }
+                Preview::Text {
+                    text,
+                    encoding: "FNA".into(),
+                    truncated: false,
+                }
+            }
+            "ebm" => Preview::Image {
+                mime: "image/bmp".into(),
+                data: b64(&rgrf_formats::ebm::to_bmp(&data)
+                    .map_err(|e| err!("err-ebm", "error": e.to_string()))?),
+                bits: None,
+            },
+            "ico" | "cur" => {
+                let pics = rgrf_formats::ico::parse(&data)
+                    .map_err(|e| err!("err-ico", "error": e.to_string()))?;
+                let mut frames = Vec::new();
+                for p in &pics {
+                    let label: Note = format!("{} × {}, {} bit", p.width, p.height, p.bits).into();
+                    match &p.picture {
+                        rgrf_formats::ico::IcoPicture::Rgba(img) => {
+                            frames.extend(png_frame(img, label));
+                        }
+                        rgrf_formats::ico::IcoPicture::Png(png) => frames.push(Frame {
+                            mime: None,
+                            png: b64(png),
+                            width: p.width,
+                            height: p.height,
+                            label,
+                        }),
+                    }
+                }
+                Preview::Frames {
+                    frames,
+                    info: vec![note!("pvw-n-icon-count", "n": pics.len())],
+                }
+            }
+            "db" if name.to_ascii_lowercase().ends_with("thumbs.db") => {
+                let db = match rgrf_formats::thumbsdb::parse(&data) {
+                    Ok(db) => db,
+                    Err(rgrf_formats::thumbsdb::ThumbsError::NoCatalog) => {
+                        return Ok(Preview::Message {
+                            text: note!("pvw-n-thumbs-other"),
+                        });
+                    }
+                    Err(e) => return Err(err!("err-thumbs", "error": e.to_string())),
+                };
+                let total = db.thumbs.len();
+                let frames: Vec<Frame> = db
+                    .thumbs
+                    .iter()
+                    .filter_map(|t| {
+                        let name = t.name.rsplit(['\\', '/']).next().unwrap_or(&t.name);
+                        Some(Frame {
+                            mime: Some("image/jpeg"),
+                            png: b64(t.jpeg.as_ref()?),
+                            width: 0,
+                            height: 0,
+                            label: name.to_string().into(),
+                        })
+                    })
+                    .take(400)
+                    .collect();
+                Preview::Frames {
+                    info: vec![note!("pvw-n-thumbs", "n": total, "shown": frames.len())],
+                    frames,
                 }
             }
             "tga" => {
@@ -4544,6 +4883,7 @@ impl Session {
         indices: &[usize],
         dest: &Path,
         rename: bool,
+        decompile_lub: bool,
     ) -> Result<ExtractSummary, String> {
         let opts = ExtractOptions {
             names: NameMode::Cp1252,
@@ -4558,7 +4898,9 @@ impl Session {
             cancel: None,
             progress: None,
         };
-        let rep = extract(&self.arc, indices, dest, &opts, &ctl).map_err(|e| e.to_string())?;
+        let convert: Option<rgrf_core::extract::Convert> = decompile_lub.then_some(lub_to_text);
+        let rep = rgrf_core::extract::extract_with(&self.arc, indices, dest, &opts, &ctl, convert)
+            .map_err(|e| e.to_string())?;
         Ok(ExtractSummary {
             files: indices.len(),
             damaged: rep.damaged.len(),
@@ -4654,7 +4996,7 @@ impl Session {
                 edited.push((target, d));
             }
         }
-        let rep = self.extract(&indices, dest, rename)?;
+        let rep = self.extract(&indices, dest, rename, false)?;
         for (target, d) in &edited {
             if let Some(dir) = target.parent() {
                 std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -5157,7 +5499,7 @@ mod tests {
             .into_iter()
             .find(|r| r.folder)
             .unwrap();
-        let below = s.folder_entries(0, &folder.name).unwrap();
+        let below = s.folder_entries(0, &folder.name, false).unwrap();
         assert_eq!(below.len(), folder.count);
         let before = s.page_view(0, 0, 500).len();
         let after = s.tree_toggle(0, &folder.name).unwrap();
@@ -5329,11 +5671,11 @@ mod tests {
         s.search("*.txt");
         let out = dir.join("out");
         let idx: Vec<usize> = s.filtered().to_vec();
-        let r = s.extract(&idx, &out, false).unwrap();
+        let r = s.extract(&idx, &out, false, false).unwrap();
         assert_eq!((r.files, r.damaged), (2, 0));
         assert!(out.join("data/readme.txt").exists());
         // a second run into the same folder refuses to overwrite
-        assert!(s.extract(&idx, &out, false).is_err());
+        assert!(s.extract(&idx, &out, false, false).is_err());
         let v = s.verify(true).unwrap();
         assert_eq!((v.entries, v.errors, v.warnings), (7, 0, 0));
         assert!(v.decoded);
@@ -5650,6 +5992,63 @@ mod tests {
     }
 
     #[test]
+    fn extracting_can_decompile_lub_files_and_take_only_the_files_of_a_folder() {
+        use rgrf_formats::{luac, luacomp};
+        let dir = tmp("lubout");
+        let src = dir.join("src/data");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.txt"), "plain\n").unwrap();
+        fs::write(src.join("sub/deep.txt"), "deep\n").unwrap();
+        let cp949 =
+            |run: &str| GrfPath::from_display(run, NameMode::Cp949).map(|p| p.as_bytes().to_vec());
+        let lua = "function f(a)\n  return \"Hello_Quest\" .. a\nend\n";
+        let chunk =
+            luacomp::compile_text(lua, b"@t.lua", luacomp::TextEncoding::Auto, &cp949).unwrap();
+        let lub = luac::dump32(&chunk);
+        fs::write(src.join("t.lub"), &lub).unwrap();
+        fs::write(src.join("junk.lub"), b"\x1bLua\x51garbage").unwrap();
+        let out = dir.join("t.grf");
+        build(
+            &dir.join("src"),
+            &out,
+            &BuildOptions::default(),
+            &Control::default(),
+        )
+        .unwrap();
+        let mut s = Session::open(&out).unwrap();
+        let all: Vec<usize> = (0..s.info().entries).collect();
+        s.extract(&all, &dir.join("plain"), false, false).unwrap();
+        assert_eq!(fs::read(dir.join("plain/data/t.lub")).unwrap(), lub);
+        s.extract(&all, &dir.join("text"), false, true).unwrap();
+        let text = fs::read_to_string(dir.join("text/data/t.lub")).unwrap();
+        assert!(
+            text.contains("Hello_Quest") && text.contains("function"),
+            "{text}"
+        );
+        // what cannot be decompiled and what is no Lua stays as it is
+        assert_eq!(
+            fs::read(dir.join("text/data/junk.lub")).unwrap(),
+            b"\x1bLua\x51garbage"
+        );
+        assert_eq!(fs::read(dir.join("text/data/a.txt")).unwrap(), b"plain\n");
+        s.set_view(
+            0,
+            ViewSpec {
+                layout: "tree".into(),
+                auto_expand: true,
+                ..ViewSpec::default()
+            },
+        )
+        .unwrap();
+        let root = s.folder_entries(0, "data", true).unwrap();
+        let names: Vec<String> = root.iter().map(|&i| s.names[i].clone()).collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert!(names.iter().all(|n| !n.contains("sub")));
+        assert_eq!(s.folder_entries(0, "data", false).unwrap().len(), 4);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn edited_text_and_lua_are_staged_in_their_own_format() {
         use rgrf_formats::{luac, luacomp};
         let dir = tmp("textedit");
@@ -5805,6 +6204,65 @@ mod tests {
             (act.actions[0].interval, act.actions[1].interval),
             (2.0, 4.0)
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn range_commands_insert_and_replace_images_one_after_the_other() {
+        let (dir, grf) = sample("sprite-range");
+        let mut s = Session::open(&grf).unwrap();
+        let find = |s: &mut Session, name: &str| {
+            assert_eq!(s.search(name), 1);
+            s.page(0, 1)[0].index
+        };
+        let (spr_i, act_i) = (find(&mut s, "a.spr"), find(&mut s, "a.act"));
+        let png = |name: &str, r: u8| {
+            let img = RgbaImage {
+                width: 1,
+                height: 1,
+                pixels: vec![r, 0, 0, 255],
+            };
+            let p = dir.join(name);
+            fs::write(&p, rgba_to_png(&img).unwrap()).unwrap();
+            p
+        };
+        let (p1, p2) = (png("1.png", 255), png("2.png", 255));
+        let images = |s: &Session| {
+            Spr::parse(&s.read_working(spr_i).unwrap())
+                .unwrap()
+                .indexed
+                .len()
+        };
+        let used = |s: &Session| -> Vec<i32> {
+            let act = Act::parse(&s.read_working(act_i).unwrap()).unwrap();
+            act.layers().map(|(_, _, _, l)| l.sprite_index).collect()
+        };
+        let before = used(&s);
+        assert!(before.contains(&0));
+        // two images before image 0: the old one is now number 2, and the layers follow
+        s.stage_spr_images(spr_i, 0, &[p1.clone(), p2.clone()], "before")
+            .unwrap();
+        assert_eq!(images(&s), 3);
+        assert_eq!(
+            used(&s),
+            before
+                .iter()
+                .map(|&i| if i == 0 { 2 } else { i })
+                .collect::<Vec<_>>()
+        );
+        // after image 2 (the last): appended; replace from 1 on takes the next ones and appends the rest
+        s.stage_spr_images(spr_i, 2, std::slice::from_ref(&p1), "after")
+            .unwrap();
+        assert_eq!(images(&s), 4);
+        s.stage_spr_images(spr_i, 3, &[p1.clone(), p2.clone()], "replace")
+            .unwrap();
+        assert_eq!(images(&s), 5);
+        assert!(
+            s.stage_spr_images(spr_i, 99, std::slice::from_ref(&p1), "before")
+                .is_err()
+        );
+        assert!(s.stage_spr_images(spr_i, 0, &[p1], "sideways").is_err());
+        assert!(s.stage_spr_images(spr_i, 0, &[], "after").is_err());
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -6341,7 +6799,7 @@ mod tests {
         assert!(s.set_names("nonsense").is_err());
         // extracting writes the Latin-1 folder name whatever the display mode
         let idx = s.filtered().to_vec();
-        s.extract(&idx, &dir.join("out"), false).unwrap();
+        s.extract(&idx, &dir.join("out"), false, false).unwrap();
         assert!(dir.join("out/data/\u{c0}\u{af}\u{c0}\u{fa}/a.txt").exists());
         let _ = fs::remove_dir_all(dir);
     }

@@ -235,6 +235,12 @@ main.pv-bottom #split-main { cursor: row-resize; width: auto; height: 6px; }
   border: 1px solid var(--line);
   max-width: 100%;
 }
+/* the setting "Preview background" replaces the checkerboard */
+[data-previewbg="black"] .checker { background-image: none; background-color: #000; }
+[data-previewbg="white"] .checker { background-image: none; background-color: #fff; }
+[data-previewbg="gray"] .checker { background-image: none; background-color: #808080; }
+[data-previewbg="green"] .checker { background-image: none; background-color: #00b140; }
+[data-previewbg="custom"] .checker { background-image: none; background-color: var(--preview-bg, #808080); }
 .checker img { display: block; image-rendering: pixelated; max-width: 100%; height: auto; }
 
 .frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; align-items: end; }
@@ -530,7 +536,7 @@ input.hexb[aria-invalid="true"] { border-color: #d33; }
 .popmenu { position: fixed; z-index: 50; min-width: 220px; max-width: 300px; max-height: 60vh; overflow: auto; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); }
 .popmenu button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 5px 8px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .popmenu button:hover, .popmenu button:focus-visible { background: var(--select); }
-.popmenu.ctx { min-width: 230px; max-height: calc(100vh - 8px); padding: 4px; }
+.popmenu.ctx { min-width: 230px; max-width: min(520px, calc(100vw - 8px)); max-height: calc(100vh - 8px); padding: 4px; }
 .popmenu.ctx button { display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 6px 10px; text-align: left; font-weight: 400; }
 .popmenu.ctx button .ic { width: 16px; height: 16px; flex: none; color: var(--muted); }
 .popmenu.ctx button:hover .ic, .popmenu.ctx button:focus-visible .ic { color: inherit; }

@@ -4,6 +4,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
+use rgrf_formats::act_ops::{EffectKind, EffectScope, RotationCopy, Template, parse_indexes};
+use rgrf_formats::edit::EditError;
 use rgrf_formats::gif_io::upscale;
 use rgrf_formats::png_io::rgba_to_png;
 use rgrf_formats::render::{Bounds, Part, bounds_of_parts, layer_at, layer_bounds, render_parts};
@@ -163,6 +165,84 @@ pub enum ActEdit {
     MirrorAction,
     /// Plays the frames of the action backwards.
     ReverseFrames,
+    /// Repeats the frames of the action `times` more times.
+    DuplicateFrames {
+        times: usize,
+    },
+    /// Adds a layer to every frame of the actions of the listed animations (action / 8, like
+    /// `0-2;5`), in front of the other layers or behind them.
+    AddSpriteToFrames {
+        animations: String,
+        sprite_index: i32,
+        #[serde(default)]
+        sprite_type: i32,
+        #[serde(default)]
+        offset_x: f32,
+        #[serde(default)]
+        offset_y: f32,
+        #[serde(default = "one")]
+        scale: f32,
+        #[serde(default = "white")]
+        color: [u8; 4],
+        #[serde(default = "yes")]
+        front: bool,
+    },
+    /// Copies the frames of every other direction of the action's group onto its neighbour.
+    /// `kind`: `b_br`, `br_b`, `bl_b`, `b_bl`.
+    RotationCopy {
+        kind: String,
+    },
+    /// The frames of the action in a new order (old frame numbers, `-1` for a new empty one).
+    FrameOrder {
+        order: Vec<i32>,
+    },
+    /// The same for the actions of the animation.
+    ActionOrder {
+        order: Vec<i32>,
+    },
+    /// Fades or breathes the layers over the frames of whole animations.
+    Effect {
+        /// `fade`, `breathing` or `overlay`.
+        kind: String,
+        animations: String,
+        #[serde(default)]
+        layers: String,
+        #[serde(default)]
+        start: usize,
+        #[serde(default)]
+        length: usize,
+        #[serde(default)]
+        ease: i32,
+        #[serde(default)]
+        loop_missing: bool,
+        #[serde(default)]
+        add_empty: bool,
+        #[serde(default = "white")]
+        color: [u8; 4],
+        #[serde(default = "one")]
+        scale_x: f32,
+        #[serde(default = "one")]
+        scale_y: f32,
+    },
+}
+
+fn one() -> f32 {
+    1.0
+}
+fn white() -> [u8; 4] {
+    [255; 4]
+}
+fn yes() -> bool {
+    true
+}
+
+/// Library errors with a GUI text of their own.
+fn ed(e: EditError) -> String {
+    match e {
+        EditError::BadIndexList(_) => err!("err-act-index-list"),
+        EditError::BadOrder => err!("err-act-order"),
+        e => e.to_string(),
+    }
 }
 
 fn finite(v: f32, what: &str) -> Result<f32, String> {
@@ -259,6 +339,82 @@ pub fn apply_with(
             }
         }
         ActEdit::ReverseFrames => act.reverse_action(action).map_err(|e| e.to_string())?,
+        ActEdit::DuplicateFrames { times } => act.duplicate_frames(action, *times).map_err(ed)?,
+        ActEdit::AddSpriteToFrames {
+            animations,
+            sprite_index,
+            sprite_type,
+            offset_x,
+            offset_y,
+            scale,
+            color,
+            front,
+        } => {
+            let groups = parse_indexes(animations).map_err(ed)?;
+            let layer = Layer {
+                sprite_index: *sprite_index,
+                sprite_type: *sprite_type,
+                offset_x: finite(*offset_x, "offset_x")?,
+                offset_y: finite(*offset_y, "offset_y")?,
+                scale_x: finite(*scale, "scale")?,
+                scale_y: *scale,
+                color: *color,
+                ..Layer::default()
+            };
+            if act.add_layer_to_frames(&groups, &layer, *front) == 0 {
+                return Err(err!("err-act-no-match"));
+            }
+        }
+        ActEdit::RotationCopy { kind } => {
+            let kind = match kind.as_str() {
+                "b_br" => RotationCopy::BottomToBottomRight,
+                "br_b" => RotationCopy::BottomRightToBottom,
+                "bl_b" => RotationCopy::BottomLeftToBottom,
+                "b_bl" => RotationCopy::BottomToBottomLeft,
+                _ => return Err(err!("err-act-no-match")),
+            };
+            act.rotation_copy(action, kind).map_err(ed)?;
+        }
+        ActEdit::FrameOrder { order } => act.set_frame_order(action, order).map_err(ed)?,
+        ActEdit::ActionOrder { order } => act.set_action_order(order).map_err(ed)?,
+        ActEdit::Effect {
+            kind,
+            animations,
+            layers,
+            start,
+            length,
+            ease,
+            loop_missing,
+            add_empty,
+            color,
+            scale_x,
+            scale_y,
+        } => {
+            let kind = match kind.as_str() {
+                "fade" => EffectKind::Fade { target: *color },
+                "overlay" => EffectKind::Overlay { color: *color },
+                "breathing" => EffectKind::Breathing {
+                    scale_x: finite(*scale_x, "scale")?,
+                    scale_y: finite(*scale_y, "scale")?,
+                },
+                _ => return Err(err!("err-act-no-match")),
+            };
+            let scope = EffectScope {
+                groups: parse_indexes(animations).map_err(ed)?,
+                layers: if layers.trim().is_empty() {
+                    Default::default()
+                } else {
+                    parse_indexes(layers).map_err(ed)?
+                },
+                start: *start,
+                length: *length,
+                loop_missing: *loop_missing,
+                add_empty: *add_empty,
+            };
+            if act.apply_effect(kind, *ease, &scope).map_err(ed)? == 0 {
+                return Err(err!("err-act-no-match"));
+            }
+        }
         _ => return apply_in_action(act, action, frame, edit),
     }
     act.to_bytes(version).map_err(|e| e.to_string())
@@ -270,6 +426,36 @@ pub fn anchors_from(data: &[u8], other: &[u8], adjust: bool) -> Result<Vec<u8>, 
     let version = act.version;
     let other = Act::parse(other).map_err(|e| e.to_string())?;
     act.anchors_from(&other, adjust);
+    act.to_bytes(version).map_err(|e| e.to_string())
+}
+
+/// The bytes of a new animation shaped like one of ACT Editor's templates.
+pub fn new_from_template(kind: &str) -> Result<Vec<u8>, String> {
+    let t = match kind {
+        "empty" => Template::Empty,
+        "npc" => Template::Npc,
+        "monster" => Template::Monster,
+        "homunculus" => Template::Homunculus,
+        "weapon" => Template::Weapon,
+        "headgear_male" => Template::HeadgearMale,
+        "headgear_female" => Template::HeadgearFemale,
+        _ => return Err(err!("err-act-no-match")),
+    };
+    let act = Act::template(t);
+    act.to_bytes(act.version).map_err(|e| e.to_string())
+}
+
+/// The animation with the anchors of ACT Editor's male or female head sprite (set from its
+/// reference animation, see `Act::anchors_from`).
+pub fn default_anchors(data: &[u8], female: bool) -> Result<Vec<u8>, String> {
+    let tpl = Act::template(if female {
+        Template::HeadgearFemale
+    } else {
+        Template::HeadgearMale
+    });
+    let mut act = Act::parse(data).map_err(|e| e.to_string())?;
+    let version = act.version;
+    act.anchors_from(&tpl, false);
     act.to_bytes(version).map_err(|e| e.to_string())
 }
 
@@ -1008,5 +1194,51 @@ mod tests {
         assert_eq!(v.layers[0].sprite_index, 40);
         let v = view(&a, None, 0, 0).unwrap();
         assert!(v.png.is_none() && v.error.is_some());
+    }
+
+    #[test]
+    fn scripts_of_acts_editor_work_on_bytes_and_report_bad_input() {
+        let mon = new_from_template("monster").unwrap();
+        let edit = |data: &[u8], action, json: &str| {
+            let e: ActEdit = serde_json::from_str(json).unwrap();
+            apply(data, action, 0, &e)
+        };
+        let out = edit(&mon, 0, r#"{"op":"duplicate_frames","times":1}"#).unwrap();
+        assert_eq!(Act::parse(&out).unwrap().actions[0].frames.len(), 16);
+        let out = edit(
+            &mon,
+            0,
+            r#"{"op":"add_sprite_to_frames","animations":"0-1","sprite_index":3}"#,
+        )
+        .unwrap();
+        let act = Act::parse(&out).unwrap();
+        assert_eq!(act.actions[39].frames[0].layers.len(), 0);
+        assert_eq!(act.actions[15].frames[0].layers[0].sprite_index, 3);
+        let out = edit(
+            &mon,
+            0,
+            r#"{"op":"effect","kind":"fade","animations":"0","color":[0,0,0,0]}"#,
+        );
+        // the template has no layers, but the effect still runs over the frames
+        assert!(out.is_ok());
+        let e = edit(&mon, 0, r#"{"op":"frame_order","order":[99]}"#).unwrap_err();
+        assert!(e.contains("err-act-order"), "{e}");
+        let e = edit(
+            &mon,
+            0,
+            r#"{"op":"add_sprite_to_frames","animations":"x","sprite_index":1}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("err-act-index-list"), "{e}");
+        let e = edit(
+            &mon,
+            0,
+            r#"{"op":"add_sprite_to_frames","animations":"9","sprite_index":1}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("err-act-no-match"), "{e}");
+        assert!(new_from_template("nonsense").is_err());
+        let head = default_anchors(&new_from_template("empty").unwrap(), false).unwrap();
+        assert!(Act::parse(&head).is_ok());
     }
 }

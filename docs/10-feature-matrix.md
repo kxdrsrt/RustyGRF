@@ -136,6 +136,76 @@ Gelesen: `EMenuInteraction.cs`, `ETreeViewInteraction.cs`, `EListViewInteraction
 | ACT: „Reverse animation“ | „Umkehren“ | ✅ |
 | ACT: Anker „Set from file…“ und „Adjust from file…“ (z. B. Kopfbedeckung männlich ↔ weiblich) | „Anker aus Datei…“: kopieren, oder angleichen (erster Anker wie in der Datei, alle Ebenen um den Unterschied verschoben) | ✅ (Kern- und GUI-Test); die eingebauten Vorlagen `ref_head_m/f.act` fehlen, man wählt eine Datei |
 
+**Nachgezogen (2026-11-21, 3. Durchgang; alles gebaut und geprüft):**
+
+| Funktion in GRF/ACT Editor | RustyGRF | Stand |
+| --- | --- | --- |
+| ACT: „Duplicate frames…“, „Add sprite to all frames…“ (Animationen wie `0-2;5`, Bild, Versatz, Skalierung, Farbe, vor/hinter den Ebenen), „Edit frames…“ / „Edit actions…“ (Liste: umordnen, kopieren, entfernen, leere hinzufügen) | Menü „Skripte ▾“ im ACT-Editor; `Act::duplicate_frames`, `add_layer_to_frames`, `set_frame_order`, `set_action_order` (Kern, `act_ops.rs`) | ✅ Kern- und GUI-Tests; im Browser an einer echten ACT (Poring) durchgeklickt, Fehlermeldungen übersetzt |
+| ACT: Richtungen kopieren („Setup“-Skripte: unten → unten rechts, unten rechts → unten, unten links → unten, unten → unten links) | vier Einträge im Menü „Skripte“, je in der Gruppe von 8 Aktionen der gewählten Aktion | ✅ Test mit den Abbildungsregeln aus `AnimationMenu.cs`. **Nicht gebaut:** der interaktive Dialog „Setup Headgear/Head“ (Ziehen und Platzieren, 859 Zeilen WPF); „Setup Garment“ ist in ACT Editor selbst abgeschaltet |
+| ACT: Effekte Ein-/Ausblenden (Zielfarbe), Atmen, Farbpuls (multiplizierend) mit Beschleunigung, Frame-Bereich, fehlende Frames ergänzen | Menü „Skripte“ (`Act::apply_effect`, Kurve wie `GetEaseMethod`) | ✅ Tests; **nicht gebaut:** Umriss („Bleeding outline“), „Cut sprite“ und die addierende Farbüberlagerung (sie erzeugen Bilder im Sprite) |
+| ACT: „New ACT“ aus Vorlagen (leer, NPC, Monster, Homunkulus, Waffe, Kopfbedeckung männlich/weiblich) | Bearbeiten → „Neue Animation aus Vorlage…“ legt eine `.act` im Archiv an; Form (Aktionen, Frames, Tempo, Monster-Sound) wie die `Resources/*.act` von ACT Editor (gemessen), Kopf-Anker eingebettet | ✅ Kern- und GUI-Test, Dialog im Browser |
+| ACT: Standard-Anker männlicher/weiblicher Kopf (aus `ref_head_m/f.act`) | zwei Einträge im Menü „Skripte“ | ✅ |
+| Sprite-Liste: Einfügen/Ersetzen für einen Bereich von Bildern | „Ersetzen…“ nimmt mehrere PNG und ersetzt ab diesem Bild die folgenden (hängt an, was überschreitet); neu „Davor einfügen…“ und „Danach einfügen…“ (mehrere PNG, die Bilder dahinter rücken, **die ACT daneben folgt**) | ✅ Kern- und GUI-Test, im Browser |
+| ACT: Hintergrundfarbe der Vorschau | Einstellung „Vorschau-Hintergrund“ (Schachbrett, Schwarz, Weiß, Grau, Grün für Greenscreen, eigene Farbe); gilt für alle Vorschauen und den ACT-Editor | ✅ im Browser |
+| Thor: „Add files to remove…“ (Löschanweisungen von Hand) | Bearbeiten → „Löschanweisungen hinzufügen (Thor)…“, ein Pfad je Zeile; als vorgemerkte Änderung (rückgängig, Entwurf), beim Speichern als `.thor` geschrieben. **Dabei behoben:** Speichern eines Thor aus dem GUI hat vorhandene Löschanweisungen verworfen, jetzt bleiben sie | ✅ Test; als `.grf` gespeichert gibt es eine klare Meldung (GPF kennt keine Löschanweisungen, in GRF Editor ist es auch nur für Thor) |
+| Einstellungen: .lub beim Extrahieren dekompilieren, Ordner nach dem Extrahieren öffnen, Extraktionspfad festlegen, Hintergrund der Vorschau | Einstellungen → „Extrahieren und Vorschau“; die dekompilierte `.lub` behält den Namen und wird Lua-Text im koreanischen Zeichensatz (nicht vollständig lesbare bleiben wie sie sind) | ✅ Test (Kern `extract_with`, GUI); nicht gebaut: „Baumzustand merken“, „Thor-Hash anhängen“ im GUI (CLI `thor create --integrity` gibt es) |
+| Baum: „New folder…“, „Extract root files only“ | Kontextmenü eines Ordners: „Neuer Ordner…“ (ein GRF hat keine leeren Ordner, also Pfad und Dateien wählen) und „Nur Dateien dieses Ordners extrahieren…“; Bearbeiten-Menü „Neuer Ordner…“ | ✅ Test, im Browser |
+| GrfCL `hash` über einen Ordner, `hashComp` | `rgrf hashlist create|show|compare` (Dateien eines Ordners und Einträge der Archive darin, Quick-MD5, CRC32, MD5 oder Größe; Vergleich wie `HashObjectComparer`) | ✅ **gegen GrfCL in der Windows-VM geprüft:** GrfCL liest unsere Liste (`hashComp`: genau der eine geänderte Eintrag), wir lesen die von GrfCL, Pfade und Hashes gleich |
+| GrfCL `thorPack`, `thorUnpack` | `rgrf thor pack|unpack` (Anordnung nach `ThorPacker.cs`) | ✅ gegen GrfCL geprüft: gleiche Größe und Anordnung, unser Auspacker liest die Datei von GrfCL (die zlib-Bytes selbst weichen ab). `thorUnpack` hat in GrfCL gar keine Verarbeitung |
+| GrfCL `addFakeClientinfo` | `rgrf client definitions` (Text mit Blöcken `archiv.grf?`, Muster je Zeile, `#end` → komprimierte `__definitions` mit Quick-CRC32) | ◐ aus dem Quelltext portiert (Test der Bausteine); der Befehl in GrfCL heißt „Redirects the client info“, tut aber nur das und ist ohne Argumente nicht aufrufbar; wofür der Server die Datei braucht, ist unbekannt, **nicht gegen GrfCL geprüft** |
+| Dateiformate: BSON/JSON, ICO, IMF, EBM, FNA, ThumbDB | Vorschau im GUI (BSON als JSON-Text, Symbole mit allen Größen, Emblem, IMF/FNA als Text, Thumbs.db mit den JPEG-Vorschaubildern) und `rgrf rare bson-to-json|json-to-bson|ebm-to-bmp|bmp-to-ebm|ico|thumbs|imf|fna`; BSON, EBM, FNA lassen sich zurückschreiben | ✅ an echten Dateien: alle 3 BSON der kRO (durch JSON zurück: **gleiche Bytes**), 304 IMF und 23 FNA der `data.grf` (FNA: gleiche Bytes), 143 Thumbs.db (2.074 Vorschaubilder, 1.888 mit JPEG; 18 haben nicht den Katalog der älteren Windows-Versionen und werden als solche gemeldet), Symbole; EBM nur mit einer selbst gebauten Datei (kein echtes Emblem vorhanden). Thumbs.db wird ohne Windows-Schnittstellen gelesen (eigener Leser für Compound-Dateien) |
+
+**Weiterhin offen:** ACT: Umriss, „Cut sprite“, addierende Farbüberlagerung, der Dialog „Setup Headgear/Head“, Zoomen und Verschieben während der Wiedergabe; „Baumzustand merken“; `Effects2Str`; MCP-Werkzeuge für Hashlisten, Thor-Packen und die seltenen Formate (die CLI hat sie).
+
+**Behoben (2026-11-21):** Bei schmalem Fenster (unter 900 px) lag die Liste nur auf halber Höhe neben einem 6 px breiten Vorschaustreifen, weil die Regel für die Ordneransicht mit Vorschau rechts die allgemeine Schmalfenster-Regel überstimmte. Jetzt bleibt die Vorschau bis 721 px rechts (schmalere Spalte), darunter liegt sie unter der Liste (60 %); im Browser (alle vier Ansichten) und im echten Windows-Fenster der VM (angedockt 960×540: ganze Liste sichtbar) gemessen.
+
+## ACT Editor (Tokeiburu)
+
+| Funktion (laut README, Changelog, Ordner) | RustyGRF | Stand |
+|---|---|---|
+| Aktionen, Frames, Layer, Anker lesen/schreiben | Bibliothek `rgrf-formats` | ✅ Versatz, Intervall, Aktion kopieren/entfernen; Layer-Feinbearbeitung ✅ (`act layer`: Farbe, Skalierung, Drehung, Spiegeln, wählbar je Aktion/Frame/Layer; an einer echten ACT gerendert) |
+| Referenz-Sprite wählen (auch aus GRF) | `act render --with` (Teile übereinander) | ✅ (2026-11-19) im ACT-Editor: beliebig viele Animationen des Archivs als Referenz, dahinter oder davor, am ersten Anker ausgerichtet wie im Client (Kopf und Kopfbedeckung am Körper); Vorschläge Körper/Kopf männlich/weiblich; bleibt gespeichert. Gemessen an `남_Crushed_Snow_Man.act` mit `초보자_남.act` und `1_남.act` |
+| Interpolation (auch „erweitert“), Skripte (C#-Skript-Engine, `doc/ScriptGuide`) | **Zwischenbilder ✅ (2026-11-19):** „In-betweens…“ im ACT-Editor und `rgrf act interpolate`: 1–20 Zwischenframes je Paar, ein Paar oder die ganze Aktion, gleichmäßig oder weich, optional als Schleife (letzter Frame zurück zum ersten), mit Tempo-Erhalt (Frame-Zeit kürzer); Versatz, Skalierung, Drehung (kurzer Weg), Farbe und Anker werden gemischt, Bild und Spiegelung wechseln zur Hälfte, Sounds bleiben bei den Originalframes | ✅ Zwischenbilder: Tests (Bibliothek, GUI-Backend), echte ACT (`goldporing`, 8 → 24 Frames, Bilderfolge angesehen), Dialog im Browser. Mehr als gleichmäßige/weiche Kurven (z. B. eigene Kurven, „erweitert“) fehlt. Skripte: bewusst ❌ (CLI und MCP-Server decken die Automatisierung ab) |
+| GIF-Export | `act render --gif` | ✅ (Hintergrund wählen ❓) |
+| Sound-Effekte je Frame | `act sound` | ✅ (setzen/entfernen, Tabelle wächst; Eingabe im GUI ✅ (ACT-Editor), **Abspielen ✅ (2026-11-19):** „Play“ im ACT-Editor spielt die Aktion mit ihren Sounds, ein Knopf hört den Sound eines Frames vor; „atk“ wird als Treffer-Markierung erkannt) |
+| Palette Editor (`PaletteEditorTool`, `PaletteSheetGenerator`) | `pal info/extract/png/from-png/set/adjust/sheet` | ✅ Palette ansehen, als Bild bearbeiten und zurückholen, Farben setzen, Farbton/Sättigung/Helligkeit, Vorschaublatt eines Sprites mit mehreren Paletten (an einem echten Sprite geprüft); Oberfläche ✅ (`.pal`-Vorschau: Farbe anklicken, Bereich anpassen; vorgemerkt wie jede Änderung); Pixel-Editor für Sprites ✅ (Paletten-Bilder: Stift, Radierer, Füllen, Pipette, Palette; `SpriteEditorTools`) |
+| Sprite von indiziert nach BGRA konvertieren (und zurück) | `spr convert --to rgba|indexed [--act … --act-output …]` | ✅ (2026-11-19; ACT-Ebenen folgen; zurück verlustfrei bei höchstens 255 Farben, sonst Median-Cut mit Meldung; echter Sprite `C_Surf_Board_Poring` hin und zurück: gleiche Größe, 9 Bilder) |
+| `GrfShellExplorer` (Windows-Explorer-Integration) | – | ❓ nur Windows |
+
+### Klang bearbeiten (neu, 2026-11-21; GRF Editor kann Klänge nur abspielen)
+
+| Funktion | RustyGRF | Stand |
+| --- | --- | --- |
+| Audio startet beim Auswählen (WAV/MP3/OGG) | Einstellung „Töne automatisch abspielen“ (Standard an); der vorige Klang wird gestoppt | ✅ im Browser (Chromium) und in WebView2 (Windows-VM, echter Klick: spielt bis zum Ende) geprüft; WKWebView (Mac) und Linux nicht |
+| WAV bearbeiten: Zuschneiden, Ausschneiden, Stille, Lautstärke (dB), Normalisieren, Ein-/Ausblenden, Umkehren, Mono, Umrechnen der Abtastrate, Tempo, Echo, Hall, Tief-/Hochpass | GUI „Klang bearbeiten…“ (Wellenform, Auswahl ziehen, Schrittliste, Vorhören) im Kontextmenü und in der Vorschau; CLI `rgrf audio info|edit`; Bibliothek `rgrf_formats::audio` | ✅ (Kern 6 Tests, alle 3.332 WAV der kRO-`data.grf` lassen sich lesen und bearbeiten, GUI-Test, CLI-Test) |
+| Ergebnis | 16-Bit-PCM-WAV (jeder Client spielt es); als vorgemerkte Änderung (rückgängig, Entwurf) | ✅ |
+| MP3/OGG bearbeiten | Dieselben Schritte wie bei WAV; das Ergebnis bleibt MP3 bzw. Ogg (ähnliche Bitrate, bei jedem Speichern geht etwas Qualität verloren), `--to wav|mp3|ogg` wandelt um; Decoder Symphonia (rein Rust), Encoder LAME (MP3) und libvorbis mit aoTuV (Ogg), Merkmal `lossy-audio` (CLI, MCP und GUI haben es an) | ✅ (2026-11-21): alle 232 MP3 der Client-Musik (`BGM`) lesen sich, 20 davon gekürzt und als MP3 zurückgeschrieben (Länge und Bitrate geprüft), Tests in Formaten, CLI, MCP und GUI. Windows ARM64 (VM: C-Code von LAME und libvorbis mit MSVC gebaut, alle Tests grün) und Linux ARM64 (Docker: alle Tests mit den echten Daten grün) sind geprüft. **Nicht geprüft:** im Spiel, das GUI-Fenster mit MP3 unter Windows/Linux |
+| MCP-Werkzeug für Klänge | `grf_audio_info`, `grf_audio_edit` (Datei oder Eintrag eines Archivs, Schritte als Text, schreibt eine neue Datei) | ✅ (Test) |
+
+**GSF („Gravity Secure Patch“, 2026-11-21):** GRF Editor liest `.gsf` mit demselben Leser wie `.grf`/`.gpf` (`GrfContainerProvider`, `GrfHolder.Merge`: ein Fall `.gsf` neben `.grf` und `.gpf`; ein eigenes Format gibt es dort nicht). RustyGRF öffnet Archive nach ihrer Kennung, nicht nach der Endung, und speichert `.gsf` jetzt als GRF; „Öffnen“, „Zusammenführen“, „Vergleichen“, „Speichern unter“ und die Dateizuordnung kennen die Endung. Nicht geprüft: eine echte `.gsf` von Gravity (keine Beispieldatei vorhanden). **cnRO (2026-11-21):** `ProtectedCnDecoder.cs` aus GRF Editor ist **gelesen und nach `gravity.rs` portiert** (Kopfversion 2 mit 64-Byte-Signatur, Körperverschlüsselung 9 mit RC6 und IDEA-Maske, die beiden Schlüsselblöcke, die GRF Editor an ihrem SHA-256 erkennt, mit den dort eingebauten Schlüsseln). GRF Editor selbst kann diesen Weg nie ausführen (sein Kopfleser lehnt Version 2 ab, seine 64-Byte-Schlüssel scheitern an der 60-Byte-Prüfung); hier werden die ersten 60 Byte genommen, die Ed25519-Signatur wird nicht geprüft, aber der Hash des Inhalts: ein falsches Lesen ist ein Fehler, nie falsche Daten. **Ungeprüft an echten Daten** (es gibt kein cnRO-Archiv; getestet ist nur ein Hin-und-zurück mit einem Kodierer, der aus demselben Code geschrieben wurde). Die Schlüssel stehen nicht im Archiv, sondern nur für diese zwei bekannten Schlüsselblöcke in GRF Editor; ein anderer Block bleibt „unbekannt“. Schreiben: geschützte Einträge werden unverändert kopiert wie bei den anderen Varianten.
+
+## Was RustyGRF anders machen soll
+- Alles in **einer** App und **einer** Bibliothek (GRF Editor, ACT Editor und Palette Editor sind getrennte Programme).
+- Dieselbe Funktion in CLI und MCP, damit ein Agent Sprites prüfen und Archive bauen kann.
+- Läuft auf macOS, Linux und Windows (GRF Editor/ACT Editor nur Windows).
+
+## Offene Fragen an dich
+1. **Skripte im ACT Editor:** Wollen wir eine Skriptsprache (z. B. Lua) für Massenbearbeitung, oder reichen feste Funktionen (Palette tauschen, Offset verschieben, kopieren)? Empfehlung: erst feste Funktionen.
+2. **Audio/Video/Hex-Ansicht:** brauchbar oder weglassen? Empfehlung: weglassen, bis Bedarf da ist.
+
+## Vergleich mit dem Quelltext, 2. Durchgang (2026-11-21)
+Gelesen: `EMenuInteraction.cs`, `ETreeViewInteraction.cs`, `EListViewInteraction.cs`, `SettingsDialog.xaml`, `GrfCL/CommandLineOptions.cs`, `WPF/PreviewTabs/*`, ACT Editors `changelog.txt` und `Core/Scripting/Scripts/*`. Ein erster, automatischer Durchlauf (Hilfsprogramm) nannte vieles als fehlend, das längst da ist (Herabstufen, Einträge verschlüsseln, „Verwendung suchen“, flache Karten); die Liste unten ist von Hand geprüft.
+
+**Neu gebaut in diesem Durchgang:**
+
+| Funktion in GRF/ACT Editor | RustyGRF | Stand |
+| --- | --- | --- |
+| „RSM2 to RSM1 (anim/flat)“ auf einzelnen Modellen | Kontextmenü „RSM2 → RSM1…“ auf `.rsm2` (eine Auswahl oder ein Ordner), schreibt `.rsm` daneben, ein Rückgängig-Schritt; Drehanimationen bleiben, sonst wie bei „flat“ | ✅ (Test auf echten Modellen) |
+| ACT: „Mirror vertical/horizontal“ (Frame, Aktion) | Schaltflächen „Frame spiegeln ↔“, „Frame kippen ↕“, „Aktion spiegeln ↔“ (`Act::flip`, Regeln von `FlipCommand`, Halbpixel-Ausgleich bei ungerader Bildbreite aus der Sprite-Datei daneben) | ✅ (Kern- und GUI-Tests) |
+| ACT: „Mirror action from left/right to right/left“ | „Auf die Gegenseite“ (1↔7, 2↔6, 3↔5 je 8, Anker mitgespiegelt) | ✅ |
+| ACT: „Reverse animation“ | „Umkehren“ | ✅ |
+| ACT: Anker „Set from file…“ und „Adjust from file…“ (z. B. Kopfbedeckung männlich ↔ weiblich) | „Anker aus Datei…“: kopieren, oder angleichen (erster Anker wie in der Datei, alle Ebenen um den Unterschied verschoben) | ✅ (Kern- und GUI-Test); die eingebauten Vorlagen `ref_head_m/f.act` fehlen, man wählt eine Datei |
+
 **Noch offen (nach Nutzen):**
 
 | Funktion in GRF/ACT Editor | Stand bei uns |

@@ -1288,6 +1288,8 @@ function renderPreview(p, row, meta) {
                     { class: "figactions" },
                     el("button", { type: "button", class: "small", icon: "pencil", text: t("spr-pixels"), title: t("spr-pixels-title"), onclick: () => openPixelEditor(row, i) }),
                     el("button", { type: "button", class: "small", text: t("spr-replace"), title: t("spr-replace-title"), onclick: () => replaceImage(row, i) }),
+                    el("button", { type: "button", class: "small", text: t("spr-before"), title: t("spr-before-title"), onclick: () => replaceImage(row, i, "before") }),
+                    el("button", { type: "button", class: "small", text: t("spr-after"), title: t("spr-after-title"), onclick: () => replaceImage(row, i, "after") }),
                     el("button", { type: "button", class: "small", text: t("btn-remove"), title: t("spr-remove-title"), onclick: () => removeImage(row, i) }),
                   )
                 : null,
@@ -1577,6 +1579,13 @@ async function doExtractMap(row, shown = {}) {
 
 const LAST_EXTRACT_KEY = "rustygrf-last-extract";
 
+/** Where to extract to: the folder of the setting "Override the extraction path", else a question. */
+async function pickExtractDest() {
+  if (SET.extractTo) return SET.extractTo;
+  const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
+  return Array.isArray(dest) ? dest[0] : dest;
+}
+
 async function doExtract() {
   if (!S.info) return;
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
@@ -1586,7 +1595,7 @@ async function doExtract() {
   buttons.push({ label: "Cancel", value: null });
   const what = await ask(t("ext-title"), el("p", { text: filtersActive() ? t("ext-filtered") : t("ext-whole") }), buttons);
   if (!what) return;
-  const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
+  const dest = await pickExtractDest();
   if (!dest) return;
   const indices = what === "one" ? await entriesOf(sel) : [];
   if (what === "one" && !indices.length) return note(t("ext-title"), t("ext-empty-folder"));
@@ -1600,8 +1609,9 @@ async function extractIndices(indices, dest) {
   let rename = false;
   for (;;) {
     try {
-      const r = await invoke("extract", { indices, dest, rename });
+      const r = await invoke("extract", { indices, dest, rename, decompile_lub: !!SET.decompileLub });
       setStatus(t("ext-done-status", { files: r.files, dest: r.dest }));
+      if (SET.openAfterExtract) invoke("open_folder", { path: r.dest }).catch(() => {});
       await ask(t("ext-done-title"), el("p", { text: `${t("ext-done-body", { files: r.files, dest: r.dest })}${r.damaged ? ` ${t("ext-damaged", { n: r.damaged })}` : ""}` }), [{ label: "OK", value: true, primary: true }], "success");
       return;
     } catch (e) {
@@ -1757,15 +1767,17 @@ function refreshPreview(action) {
   if (r && !r.folder && V.preview !== "off") showPreview(r, action);
 }
 
-async function replaceImage(row, frame) {
-  const png = await T.dialog.open({ multiple: false, directory: false, title: t("spr-replace-pick", { frame, name: row.name }), filters: [{ name: t("spr-png-filter"), extensions: ["png"] }] });
-  if (!png) return;
+/** ACT Editor's range commands: one or several PNGs replace the images from `frame` on, or go in before or after it. */
+async function replaceImage(row, frame, mode = "replace") {
+  const picked = await T.dialog.open({ multiple: true, directory: false, title: t(`spr-${mode}-pick`, { frame, name: row.name }), filters: [{ name: t("spr-png-filter"), extensions: ["png"] }] });
+  if (!picked) return;
+  const pngs = Array.isArray(picked) ? picked : [picked];
   try {
-    setPending(await invoke("stage_spr_image", { index: row.index, frame, png }));
-    setStatus(t("spr-replace-status", { frame, name: row.name }));
+    setPending(await invoke("stage_spr_images", { index: row.index, frame, pngs, mode }));
+    setStatus(t(`spr-${mode}-status`, { frame, name: row.name, n: pngs.length }));
     refreshPreview();
   } catch (e) {
-    await note(t("spr-replace-failed"), errText(e), true);
+    await note(t(`spr-${mode}-failed`), errText(e), true);
   }
 }
 
@@ -2122,7 +2134,7 @@ function gatEditor(row, p) {
 // ---------- palette editing ----------
 
 function palImage(row, f) {
-  const img = el("img", { src: dataUrl("image/png", f.png), alt: noteText(f.label) });
+  const img = el("img", { src: dataUrl(f.mime || "image/png", f.png), alt: noteText(f.label) });
   if (row.name.toLowerCase().endsWith(".pal")) {
     img.style.cursor = "crosshair";
     img.style.width = "256px";
@@ -2398,6 +2410,155 @@ async function actAnchorsFromFile() {
   await loadActFrame();
 }
 
+
+// ---------- ACT Editor's scripts ----------
+
+const formRow = (text, input) => el("p", {}, el("label", {}, `${text} `, input));
+const numberField = (value, opts = {}) => el("input", { type: "number", class: "narrow", value: String(value), step: opts.step ?? "1", min: opts.min, max: opts.max });
+const colourValue = (input) => [parseInt(input.value.slice(1, 3), 16), parseInt(input.value.slice(3, 5), 16), parseInt(input.value.slice(5, 7), 16)];
+
+/** Runs a script edit; the message of an error is shown in a dialog (the frame editor stays as it is). */
+async function actScript(title, edit) {
+  if (E.busy) return;
+  stopActPlay();
+  E.busy = true;
+  try {
+    setPending(await invoke("stage_act_edit", { index: E.row.index, action: E.action, frame: E.frame, edit }));
+    if (edit.op === "action_order") Object.assign(E, { action: Math.min(E.action, edit.order.length - 1), frame: 0 });
+    if (edit.op === "frame_order") E.frame = Math.min(E.frame, edit.order.length - 1);
+  } catch (e) {
+    E.busy = false;
+    await note(title, errText(e), true);
+    return loadActFrame();
+  }
+  E.busy = false;
+  await loadActFrame();
+}
+
+/** A list of frames or actions to rearrange; resolves to the new order (old numbers, -1 = a new empty one). */
+async function orderEditor(title, intro, count, itemLabel) {
+  let order = Array.from({ length: count }, (_, i) => i);
+  const list = el("div", { class: "orderlist", style: "max-height:45vh;overflow:auto" });
+  const draw = () =>
+    list.replaceChildren(
+      ...order.map((o, i) => {
+        const b = (text, tip, fn, off) => el("button", { type: "button", class: "small", text, title: tip, "aria-label": tip, disabled: !!off, onclick: fn });
+        const swap = (j) => {
+          [order[i], order[j]] = [order[j], order[i]];
+          draw();
+        };
+        return el(
+          "div",
+          { class: "bar" },
+          el("span", { class: o < 0 ? "muted" : "", style: "min-width:8em", text: o < 0 ? t("as-order-new") : itemLabel(o) }),
+          b("↑", t("as-order-up"), () => swap(i - 1), i === 0),
+          b("↓", t("as-order-down"), () => swap(i + 1), i === order.length - 1),
+          b("⧉", t("as-order-copy"), () => (order.splice(i + 1, 0, o), draw())),
+          b("✕", t("as-order-remove"), () => (order.splice(i, 1), draw()), order.length <= 1),
+        );
+      }),
+    );
+  draw();
+  const add = el("button", { type: "button", class: "small", text: t("as-order-add"), onclick: () => (order.push(-1), draw()) });
+  const go = await ask(title, [el("p", { text: intro }), list, add], [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  return go ? order : null;
+}
+
+async function actScriptDuplicate() {
+  const times = numberField(1, { min: "1", max: "1000" });
+  const go = await ask(t("as-dup-title"), [el("p", { text: t("as-dup-intro", { action: E.action }) }), formRow(t("as-times"), times)], [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (go) await actScript(t("as-dup-title"), { op: "duplicate_frames", times: Number(times.value) });
+}
+
+async function actScriptAddSprite(v) {
+  const groups = el("input", { class: "field", value: `0-${Math.max(0, Math.floor((v.actions - 1) / 8))}` });
+  const index = numberField(0, { min: "0" });
+  const type = el("select", {}, el("option", { value: 0, text: t("act-type-palette", { n: v.indexed_images }) }), el("option", { value: 1, text: t("act-type-rgba", { n: v.rgba_images }) }));
+  const ox = numberField(0);
+  const oy = numberField(0);
+  const scale = numberField(1, { step: "0.1" });
+  const colour = el("input", { type: "color", value: "#ffffff" });
+  const alpha = numberField(255, { min: "0", max: "255" });
+  const front = el("select", {}, el("option", { value: "1", text: t("as-front") }), el("option", { value: "0", text: t("as-back") }));
+  const go = await ask(
+    t("as-addspr-title"),
+    [el("p", { text: t("as-addspr-intro") }), formRow(t("as-animations"), groups), formRow(t("as-sprite-index"), index), formRow(t("as-sprite-type"), type), formRow("x", ox), formRow("y", oy), formRow(t("as-scale"), scale), formRow(t("as-colour"), colour), formRow("α", alpha), formRow(t("as-position"), front)],
+    [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }],
+  );
+  if (!go) return;
+  await actScript(t("as-addspr-title"), { op: "add_sprite_to_frames", animations: groups.value, sprite_index: Number(index.value), sprite_type: Number(type.value), offset_x: Number(ox.value), offset_y: Number(oy.value), scale: Number(scale.value), color: [...colourValue(colour), Number(alpha.value)], front: front.value === "1" });
+}
+
+async function actScriptEffect(kind, v) {
+  const title = t(`as-fx-${kind}`);
+  const groups = el("input", { class: "field", value: String(Math.floor(E.action / 8)) });
+  const layers = el("input", { class: "field", value: "", placeholder: "0" });
+  const start = numberField(0, { min: "0" });
+  const length = numberField(0, { min: "0" });
+  const ease = numberField(0, { min: "-100", max: "100" });
+  const loop = el("input", { type: "checkbox", checked: true });
+  const empty = el("input", { type: "checkbox" });
+  const colour = el("input", { type: "color", value: kind === "fade" ? "#000000" : "#ff0000" });
+  const alpha = numberField(255, { min: "0", max: "255" });
+  const sx = numberField(1.2, { step: "0.05" });
+  const sy = numberField(1.2, { step: "0.05" });
+  const body = [el("p", { text: t(`as-fx-${kind}-intro`) }), formRow(t("as-animations"), groups), formRow(t("as-layers"), layers), formRow(t("as-start"), start), formRow(t("as-length"), length), formRow(t("as-ease"), ease)];
+  if (kind === "breathing") body.push(formRow("x", sx), formRow("y", sy));
+  else body.push(formRow(t("as-colour"), colour), formRow("α", alpha));
+  body.push(el("label", { class: "check" }, loop, ` ${t("as-loop")}`), el("br"), el("label", { class: "check" }, empty, ` ${t("as-add-empty")}`));
+  const go = await ask(title, body, [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  await actScript(title, { op: "effect", kind, animations: groups.value, layers: layers.value, start: Number(start.value), length: Number(length.value), ease: Number(ease.value), loop_missing: loop.checked, add_empty: empty.checked, color: [...colourValue(colour), Number(alpha.value)], scale_x: Number(sx.value), scale_y: Number(sy.value) });
+}
+
+async function actDefaultAnchors(female) {
+  if (E.busy) return;
+  stopActPlay();
+  E.busy = true;
+  try {
+    setPending(await invoke("stage_act_default_anchors", { index: E.row.index, female }));
+  } catch (e) {
+    await note(t("act-anchors-title"), errText(e), true);
+  }
+  E.busy = false;
+  await loadActFrame();
+}
+
+function actScriptsMenu(ev, v) {
+  const r = ev.currentTarget.getBoundingClientRect();
+  const rot = (kind) => () => actScript(t("as-rot-title"), { op: "rotation_copy", kind });
+  showContextMenu(
+    r.left,
+    r.bottom,
+    [
+      { label: t("as-edit-frames"), run: async () => {
+        const order = await orderEditor(t("as-edit-frames"), t("as-order-intro"), v.frames, (n) => t("act-frame-label", { n: n + 1, total: v.frames }));
+        if (order) await actScript(t("as-edit-frames"), { op: "frame_order", order });
+      } },
+      { label: t("as-edit-actions"), run: async () => {
+        const order = await orderEditor(t("as-edit-actions"), t("as-order-intro"), v.actions, (n) => t("pvw-action-n", { n }));
+        if (order) await actScript(t("as-edit-actions"), { op: "action_order", order });
+      } },
+      { label: t("as-dup"), run: actScriptDuplicate },
+      { label: t("as-addspr"), run: () => actScriptAddSprite(v) },
+      "-",
+      { label: t("as-rot-b-br"), run: rot("b_br") },
+      { label: t("as-rot-br-b"), run: rot("br_b") },
+      { label: t("as-rot-bl-b"), run: rot("bl_b") },
+      { label: t("as-rot-b-bl"), run: rot("b_bl") },
+      "-",
+      { label: t("as-fx-fade"), run: () => actScriptEffect("fade", v) },
+      { label: t("as-fx-breathing"), run: () => actScriptEffect("breathing", v) },
+      { label: t("as-fx-overlay"), run: () => actScriptEffect("overlay", v) },
+      "-",
+      { label: t("as-anchors-male"), run: () => actDefaultAnchors(false) },
+      { label: t("as-anchors-female"), run: () => actDefaultAnchors(true) },
+    ],
+    ev.currentTarget,
+    t("act-scripts"),
+  );
+}
+
 /** Asks how many in-between frames to add, then stages them (see `Act::interpolate`). */
 async function openInterpolate(v) {
   const count = el("input", { type: "number", min: "1", max: "20", value: "1", class: "narrow", "aria-label": t("ip-count") });
@@ -2573,6 +2734,7 @@ function drawActEditor() {
     el("button", { type: "button", class: "small", text: t("act-flip-action"), title: t("act-flip-action-title"), onclick: () => actEdit({ op: "flip", whole_action: true }) }),
     el("button", { type: "button", class: "small", text: t("act-mirror-action"), title: t("act-mirror-action-title"), onclick: () => actEdit({ op: "mirror_action" }) }),
     el("button", { type: "button", class: "small", text: t("act-reverse"), title: t("act-reverse-title"), disabled: v.frames <= 1, onclick: () => actEdit({ op: "reverse_frames" }) }),
+    el("button", { type: "button", class: "small", text: `${t("act-scripts")} ▾`, title: t("act-scripts-title"), "aria-haspopup": "menu", onclick: (e) => actScriptsMenu(e, v) }),
     el("button", { type: "button", class: "small", text: t("act-anchors-file"), title: t("act-anchors-file-title"), onclick: () => actAnchorsFromFile() }),
     el("button", { type: "button", class: "small", text: t("act-remove-action"), disabled: v.actions <= 1, onclick: () => removeAction(v.action) }),
     el("button", { type: "button", class: "small", text: t("act-remove-frame"), disabled: v.frames <= 1, onclick: () => actEdit({ op: "remove_frame" }) }),
@@ -2668,6 +2830,59 @@ async function doAdd() {
     setStatus(t("add-status", { path: input.value }));
   } catch (e) {
     await note(t("add-failed"), errText(e), true);
+  }
+}
+
+/** A GRF has no empty folders: "New folder" asks for the path and the files that go into it. */
+async function doNewFolder(parent) {
+  const row = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  const start = parent != null ? `${parent}\\` : row ? (row.folder ? `${row.name}\\` : row.name.slice(0, row.name.lastIndexOf("\\") + 1)) : "data\\";
+  const input = el("input", { type: "text", class: "field", value: start, spellcheck: "false", "aria-label": t("nf-path") });
+  const go = await ask(t("nf-title"), [el("p", { text: t("nf-intro") }), input], [{ label: t("nf-pick"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  const folder = input.value.trim().replace(/\//g, "\\").replace(/\\+$/, "");
+  if (!folder) return note(t("nf-title"), t("err-enter-path"), true);
+  const picked = await T.dialog.open({ multiple: true, directory: false, title: t("add-pick") });
+  if (!picked) return;
+  let added = 0;
+  try {
+    for (const file of Array.isArray(picked) ? picked : [picked]) {
+      setPending(await invoke("stage_add", { path: `${folder}\\${file.split(/[\\/]/).pop()}`, file }));
+      added += 1;
+    }
+    setStatus(t("nf-status", { n: added, folder }));
+  } catch (e) {
+    await note(t("add-failed"), errText(e), true);
+  }
+}
+
+/** A new animation shaped like one of ACT Editor's templates, added to the archive. */
+async function doNewAct() {
+  const kinds = ["empty", "npc", "monster", "homunculus", "weapon", "headgear_male", "headgear_female"];
+  const kind = el("select", { class: "field", "aria-label": t("tpl-kind") }, kinds.map((k) => el("option", { value: k, text: t(`tpl-${k}`) })));
+  const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  const folder = sel ? (sel.folder ? `${sel.name}\\` : sel.name.slice(0, sel.name.lastIndexOf("\\") + 1)) : "data\\sprite\\";
+  const path = el("input", { type: "text", class: "field", value: `${folder}new.act`, spellcheck: "false", "aria-label": t("tpl-path") });
+  const go = await ask(t("tpl-title"), [el("p", { text: t("tpl-intro") }), formRow(t("tpl-kind"), kind), formRow(t("tpl-path"), path)], [{ label: t("dlg-add"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  try {
+    setPending(await invoke("stage_new_act", { path: path.value, kind: kind.value }));
+    setStatus(t("add-status", { path: path.value }));
+  } catch (e) {
+    await note(t("tpl-title"), errText(e), true);
+  }
+}
+
+/** Delete directives of a Thor patch: paths the patch removes from the target when it is applied. */
+async function doThorRemovals() {
+  const text = el("textarea", { class: "field", rows: "8", style: "width:100%;font-family:monospace", spellcheck: "false", placeholder: "data\\texture\\old.bmp", "aria-label": t("tr-title") });
+  const go = await ask(t("tr-title"), [el("p", { text: t("tr-intro") }), text], [{ label: t("dlg-add"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  if (!go) return;
+  try {
+    setPending(await invoke("stage_removals", { text: text.value }));
+    setStatus(t("tr-status", { n: text.value.split(/\n/).filter((l) => l.trim()).length }));
+  } catch (e) {
+    await note(t("tr-title"), errText(e), true);
   }
 }
 
@@ -3344,7 +3559,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, method: "zlib", format: "0x200", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, openAfterExtract: false, extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -3379,6 +3594,8 @@ function applySettings() {
   flag("data-fontsize", SET.fontsize !== "normal", SET.fontsize);
   flag("data-plainicons", SET.plainIcons);
   flag("data-motion", SET.motion === "off", "off");
+  flag("data-previewbg", SET.previewBg !== "checker", SET.previewBg);
+  root.style.setProperty("--preview-bg", SET.previewBgColor || "#808080");
   const rowH = DENSITY[SET.density] || 24;
   if (rowH !== ROW_H) {
     ROW_H = rowH;
@@ -3427,6 +3644,23 @@ function openSettings() {
     setLanguage();
     openSettings();
   });
+  const extractTo = el("span", { class: "bar" });
+  const drawExtractTo = () =>
+    extractTo.replaceChildren(
+      ...[el("code", { text: SET.extractTo || t("set-extract-to-none") }),
+      el("button", { type: "button", class: "small", text: t("set-extract-to-choose"), onclick: async () => {
+        const dir = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
+        if (dir) {
+          change("extractTo", Array.isArray(dir) ? dir[0] : dir);
+          drawExtractTo();
+        }
+      } }),
+      SET.extractTo ? el("button", { type: "button", class: "small", text: t("set-extract-to-clear"), onclick: () => (change("extractTo", ""), drawExtractTo()) }) : null,
+      ].filter(Boolean),
+    );
+  drawExtractTo();
+  const bgColour = el("input", { type: "color", value: SET.previewBgColor || "#808080", "aria-label": t("set-bg-custom") });
+  bgColour.addEventListener("input", () => change("previewBgColor", bgColour.value));
   const layouts = [["last", t("set-as-last")], ...LAYOUTS.map((k) => [k, t(`view-${k}`)])];
   const L = (label, key, table) => {
     const e = explained(table, SET[key], (v) => change(key, v));
@@ -3453,6 +3687,11 @@ function openSettings() {
       row(t("set-changes"), check("warnDiscard", t("set-warn-discard"))),
       row(t("set-audio"), check("autoplay", t("set-autoplay"))),
       row(t("set-tabs"), check("tabs", t("set-tabs-open"))),
+      el("h3", { text: t("set-extracting") }),
+      row(t("set-decompile"), check("decompileLub", t("set-decompile-on")), t("set-decompile-hint")),
+      row(t("set-open-after"), check("openAfterExtract", t("set-open-after-on"))),
+      row(t("set-extract-to"), extractTo, t("set-extract-to-hint")),
+      row(t("set-previewbg"), el("span", {}, pick("previewBg", t("set-previewbg"), [["checker", t("set-bg-checker")], ["black", t("set-bg-black")], ["white", t("set-bg-white")], ["gray", t("set-bg-gray")], ["green", t("set-bg-green")], ["custom", t("set-bg-custom")]]), " ", bgColour)),
       el("h3", { text: t("set-building") }),
       L(t("set-compression"), "method", METHODS()),
       L(t("set-format"), "format", FORMATS()),
@@ -3511,7 +3750,9 @@ function showContextMenu(x, y, items, returnFocus, label) {
     menu.append(b);
     if (!it.disabled) buttons.push(b);
   }
-  document.body.append(menu);
+  // inside the open dialog (if any): a modal dialog covers everything outside of it
+  const open = document.querySelectorAll("dialog[open]");
+  (open[open.length - 1] || document.body).append(menu);
   const box = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - box.width - 4))}px`;
   menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - box.height - 4))}px`;
@@ -3572,7 +3813,7 @@ function entryMenu(list, row) {
   const items = [];
   const last = localStorage.getItem(LAST_EXTRACT_KEY);
   const pickAndExtract = async () => {
-    const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
+    const dest = await pickExtractDest();
     if (!dest) return;
     const indices = await entriesIn(list, row);
     if (!indices.length) return note(t("ext-title"), t("ext-empty-folder"));
@@ -3581,9 +3822,17 @@ function entryMenu(list, row) {
   const guard = (fn) => () => Promise.resolve(fn()).catch((e) => note(t("open-failed"), errText(e), true));
   if (row.folder) {
     items.push({ label: t("ctx-extract-folder"), icon: "extract", run: guard(pickAndExtract) });
+    items.push({ label: t("ctx-extract-root"), icon: "extract", run: guard(async () => {
+      const dest = await pickExtractDest();
+      if (!dest) return;
+      const indices = await invoke("folder_entries", { view: list.view, path: row.name, root_only: true });
+      if (!indices.length) return note(t("ext-title"), t("ext-empty-root"));
+      return extractIndices(indices, dest);
+    }) });
     if (last) items.push({ label: t("ctx-extract-last", { folder: baseOf(last.replace(/\//g, "\\")) || last }), icon: "extract", run: guard(async () => extractIndices(await entriesIn(list, row), last)) });
     items.push({ label: t("ctx-export-folder"), icon: "export", run: guard(() => exportRows(list, row)) });
     items.push("-", { label: t("ctx-add-here"), icon: "add", run: guard(doAdd) });
+    items.push({ label: t("ctx-new-folder"), icon: "add", run: guard(() => doNewFolder(row.name)) });
     items.push({ label: t("ctx-rename-folder"), icon: "pencil", run: guard(() => renameRow(list, row)) });
     items.push({ label: t("ctx-delete-folder"), icon: "remove", run: guard(() => deleteRow(list, row)) });
     items.push(...cryptItems(list, row, guard));
@@ -4339,7 +4588,7 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
-const NEEDS_ARCHIVE = new Set(["nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
+const NEEDS_ARCHIVE = new Set(["new-act", "new-folder", "thor-removals", "nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
 const MENU_ACTIONS = {
   "new-window": () => invoke("open_in_window", { path: null }),
   "new-grf": () => newArchive("grf"),
@@ -4366,6 +4615,9 @@ const MENU_ACTIONS = {
   "recent-clear": clearRecent,
   "reduce-images": () => doReduceImages(),
   "flat-maps": () => doFlatMaps(),
+  "new-act": doNewAct,
+  "new-folder": () => doNewFolder(),
+  "thor-removals": doThorRemovals,
 };
 function runMenuCommand(id) {
   if (id === "undo" || id === "redo") return editHistory(id === "redo");
