@@ -612,6 +612,7 @@ dependencies = [
 name = "rgrf-formats"
 version = "0.0.0"
 dependencies = [
+ "flate2",
  "gif",
  "mp3lame-encoder",
  "png",

@@ -2916,3 +2916,172 @@ fn audio_edit_trims_fades_and_resamples_a_wav() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn hash_lists_and_packed_thor_patchers_work_without_archives_of_the_game() {
+    let dir = tmpdir("grfcl");
+    let client = dir.join("client");
+    std::fs::create_dir_all(client.join("data")).unwrap();
+    std::fs::write(client.join("ro.exe"), b"exe").unwrap();
+    std::fs::write(client.join("data/a.txt"), b"a").unwrap();
+    let (m, u) = (dir.join("m.hash"), dir.join("u.hash"));
+    let (c, mp) = (client.to_str().unwrap(), m.to_str().unwrap());
+    assert!(rgrf(&["hashlist", "create", c, "-o", mp]).status.success());
+    // a second run refuses to overwrite
+    assert_eq!(
+        rgrf(&["hashlist", "create", c, "-o", mp]).status.code(),
+        Some(1)
+    );
+    std::fs::write(client.join("data/a.txt"), b"changed").unwrap();
+    std::fs::write(client.join("extra.txt"), b"e").unwrap();
+    std::fs::remove_file(client.join("ro.exe")).unwrap();
+    assert!(
+        rgrf(&["hashlist", "create", c, "-o", u.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let r = rgrf(&["--json", "hashlist", "compare", mp, u.to_str().unwrap()]);
+    assert_eq!(r.status.code(), Some(2));
+    let v = json(&r);
+    let found: Vec<(String, String)> = v["differences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["issue"].as_str().unwrap().into(),
+                d["path"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    for want in [
+        ("different", "data\\a.txt"),
+        ("missing", "ro.exe"),
+        ("extra", "extra.txt"),
+    ] {
+        assert!(found.contains(&(want.0.into(), want.1.into())), "{found:?}");
+    }
+    assert!(rgrf(&["hashlist", "compare", mp, mp]).status.success());
+
+    // a Thor Patcher: config files and a folder packed behind a program, and back
+    let cfg = dir.join("cfg");
+    std::fs::create_dir_all(cfg.join("images")).unwrap();
+    std::fs::write(cfg.join("config.ini"), b"[CONFIG]\n").unwrap();
+    std::fs::write(cfg.join("LanguageMap.ini"), b"x").unwrap();
+    std::fs::write(cfg.join("images/a.png"), b"png").unwrap();
+    std::fs::write(dir.join("patcher.exe"), b"MZ").unwrap();
+    let packed = dir.join("packed.exe");
+    let r = rgrf(&[
+        "thor",
+        "pack",
+        dir.join("patcher.exe").to_str().unwrap(),
+        "-o",
+        packed.to_str().unwrap(),
+        cfg.to_str().unwrap(),
+        "images",
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let out = dir.join("out");
+    let r = rgrf(&[
+        "thor",
+        "unpack",
+        packed.to_str().unwrap(),
+        out.to_str().unwrap(),
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(
+        std::fs::read(out.join("config.ini")).unwrap(),
+        b"[CONFIG]\n"
+    );
+    assert_eq!(std::fs::read(out.join("images/a.png")).unwrap(), b"png");
+    // an ordinary file is no packed patcher
+    let r = rgrf(&[
+        "thor",
+        "unpack",
+        client.join("data/a.txt").to_str().unwrap(),
+        out.to_str().unwrap(),
+        "--overwrite",
+    ]);
+    assert_eq!(r.status.code(), Some(1));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn rare_formats_convert_back_and_forth() {
+    let dir = tmpdir("rare");
+    std::fs::create_dir_all(&dir).unwrap();
+    // BSON: {"a": 1, "list": ["x", true]} written by hand
+    let bson: Vec<u8> = {
+        let mut b = vec![0u8; 4];
+        b.extend([0x10, b'a', 0, 1, 0, 0, 0]);
+        let mut list = vec![0u8; 4];
+        list.extend([0x02, b'0', 0, 2, 0, 0, 0, b'x', 0, 0x08, b'1', 0, 1, 0]);
+        let n = list.len() as i32;
+        list[..4].copy_from_slice(&n.to_le_bytes());
+        b.extend([0x04, b'l', b'i', b's', b't', 0]);
+        b.extend(list);
+        b.push(0);
+        let n = b.len() as i32;
+        b[..4].copy_from_slice(&n.to_le_bytes());
+        b
+    };
+    let (b1, js, b2) = (dir.join("a.bson"), dir.join("a.json"), dir.join("b.bson"));
+    std::fs::write(&b1, &bson).unwrap();
+    let r = rgrf(&[
+        "rare",
+        "bson-to-json",
+        b1.to_str().unwrap(),
+        "-o",
+        js.to_str().unwrap(),
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let text = std::fs::read_to_string(&js).unwrap();
+    assert!(
+        text.contains("\"a\": 1") && text.contains("\"x\""),
+        "{text}"
+    );
+    let r = rgrf(&[
+        "rare",
+        "json-to-bson",
+        js.to_str().unwrap(),
+        "-o",
+        b2.to_str().unwrap(),
+    ]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    assert_eq!(std::fs::read(&b2).unwrap(), bson);
+    // a damaged BSON is an error, not a crash
+    std::fs::write(&b1, &bson[..bson.len() - 4]).unwrap();
+    let r = rgrf(&["rare", "bson-to-json", b1.to_str().unwrap()]);
+    assert_eq!(r.status.code(), Some(1));
+    // an emblem is a compressed BMP
+    let bmp = dir.join("e.bmp");
+    let mut data = b"BM".to_vec();
+    data.extend([0u8; 52]);
+    std::fs::write(&bmp, &data).unwrap();
+    let ebm = dir.join("e.ebm");
+    assert!(
+        rgrf(&[
+            "rare",
+            "bmp-to-ebm",
+            bmp.to_str().unwrap(),
+            "-o",
+            ebm.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    let back = dir.join("back.bmp");
+    assert!(
+        rgrf(&[
+            "rare",
+            "ebm-to-bmp",
+            ebm.to_str().unwrap(),
+            "-o",
+            back.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(std::fs::read(&back).unwrap(), data);
+    let _ = std::fs::remove_dir_all(dir);
+}

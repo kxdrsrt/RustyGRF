@@ -33,6 +33,10 @@ pub enum EditError {
     NoNextFrame { action: usize, frame: usize },
     #[error("between 1 and {max} in-between frames can be added at once")]
     BadCount { max: usize },
+    #[error("'{0}' is not a list of numbers like 0-2;4")]
+    BadIndexList(String),
+    #[error("the new order names frames or actions that do not exist, or is empty")]
+    BadOrder,
     #[error("{what} needs ACT version {need} or newer (this file is {have})")]
     NeedsVersion {
         what: &'static str,
@@ -163,6 +167,52 @@ impl Spr {
     pub fn push_rgba(&mut self, img: RgbaImage) -> usize {
         self.rgba.push(img);
         self.rgba.len() - 1
+    }
+
+    /// Inserts a palette image so that it gets `index` (images from there on move up by one). Needs
+    /// a palette. Pass the ACT of the sprite so that its layers follow.
+    pub fn insert_indexed(
+        &mut self,
+        index: usize,
+        img: IndexedImage,
+        act: Option<&mut Act>,
+    ) -> Result<(), EditError> {
+        if self.palette.is_none() {
+            return Err(EditError::NoPalette);
+        }
+        if index > self.indexed.len() {
+            return Err(EditError::NoImage {
+                kind: Kind::Indexed.name(),
+                index,
+                count: self.indexed.len(),
+            });
+        }
+        self.indexed.insert(index, img);
+        if let Some(act) = act {
+            act.sprite_inserted(Kind::Indexed, index);
+        }
+        Ok(())
+    }
+
+    /// The same for a true-colour image.
+    pub fn insert_rgba(
+        &mut self,
+        index: usize,
+        img: RgbaImage,
+        act: Option<&mut Act>,
+    ) -> Result<(), EditError> {
+        if index > self.rgba.len() {
+            return Err(EditError::NoImage {
+                kind: Kind::Rgba.name(),
+                index,
+                count: self.rgba.len(),
+            });
+        }
+        self.rgba.insert(index, img);
+        if let Some(act) = act {
+            act.sprite_inserted(Kind::Rgba, index);
+        }
+        Ok(())
     }
 
     /// Removes an image. Pass the ACT that belongs to the sprite so that its layers follow:
@@ -389,6 +439,22 @@ pub struct LayerEdit {
 }
 
 impl Act {
+    /// Adjusts the layers after an image was inserted at `index` of `kind`: the images from there
+    /// on have moved up by one.
+    pub fn sprite_inserted(&mut self, kind: Kind, index: usize) {
+        let t = kind.layer_type();
+        for l in self
+            .actions
+            .iter_mut()
+            .flat_map(|a| &mut a.frames)
+            .flat_map(|f| &mut f.layers)
+        {
+            if l.sprite_index >= 0 && l.sprite_type == t && l.sprite_index as usize >= index {
+                l.sprite_index += 1;
+            }
+        }
+    }
+
     /// Adjusts the layers after image `index` of `kind` was removed from the SPR.
     pub fn sprite_removed(&mut self, kind: Kind, index: usize) {
         let t = kind.layer_type();
@@ -993,6 +1059,38 @@ mod tests {
             .collect();
         assert_eq!(idx, vec![-1, 0, 2]);
         assert!(s.remove_image(Kind::Rgba, 0, None).is_err());
+    }
+
+    #[test]
+    fn inserting_an_image_moves_the_later_ones_and_their_layers() {
+        let mut s = spr();
+        let mut a = act();
+        s.insert_indexed(1, img(9), Some(&mut a)).unwrap();
+        let px: Vec<u8> = s.indexed.iter().map(|i| i.pixels[0]).collect();
+        assert_eq!(px, [1, 9, 2, 3]);
+        let idx: Vec<i32> = a.actions[0].frames[0]
+            .layers
+            .iter()
+            .map(|l| l.sprite_index)
+            .collect();
+        assert_eq!(idx, [0, 2, 3], "layers of the images from 1 on follow");
+        // at the end nothing moves; past the end is refused; true colour counts apart
+        s.insert_indexed(4, img(7), Some(&mut a)).unwrap();
+        assert_eq!(a.actions[0].frames[0].layers[2].sprite_index, 3);
+        assert!(s.insert_indexed(9, img(1), None).is_err());
+        let rgba = RgbaImage {
+            width: 1,
+            height: 1,
+            pixels: vec![0; 4],
+        };
+        assert!(s.insert_rgba(1, rgba.clone(), None).is_err());
+        s.insert_rgba(0, rgba, Some(&mut a)).unwrap();
+        assert_eq!(
+            a.actions[0].frames[0].layers[0].sprite_index, 0,
+            "palette layers stay"
+        );
+        s.palette = None;
+        assert_eq!(s.insert_indexed(0, img(1), None), Err(EditError::NoPalette));
     }
 
     #[test]

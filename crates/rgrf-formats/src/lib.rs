@@ -1,15 +1,22 @@
 //! RustyGRF formats: files inside the GRF archives (milestone M7).
 
 pub mod act;
+pub mod act_ops;
 pub mod audio;
 pub mod bmp;
+pub mod bson;
+pub mod cfb;
 pub mod downgrade;
+pub mod ebm;
 pub mod edit;
 pub mod flat_map;
+pub mod fna;
 pub mod gat;
 pub mod gif_io;
 pub mod gnd;
 pub mod gnd_map;
+pub mod ico;
+pub mod imf;
 #[cfg(feature = "lossy-audio")]
 pub mod lossy;
 pub mod lua;
@@ -31,6 +38,7 @@ pub mod rsw;
 pub mod spr;
 pub mod str_effect;
 pub mod tga;
+pub mod thumbsdb;
 pub mod unused;
 pub mod version;
 pub mod wav;

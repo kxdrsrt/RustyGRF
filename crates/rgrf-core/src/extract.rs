@@ -189,6 +189,22 @@ pub fn extract<R: ReadAt>(
     opts: &ExtractOptions,
     ctl: &Control,
 ) -> Result<ExtractReport> {
+    extract_with(a, indices, dest, opts, ctl, None)
+}
+
+/// Turns the content of an entry (given its path and bytes) into what is written, or `None` to
+/// write it as it is.
+pub type Convert = fn(&[u8], &[u8]) -> Option<Vec<u8>>;
+
+/// Like [`extract`]; `convert` can change the content of entries on the way out.
+pub fn extract_with<R: ReadAt>(
+    a: &Archive<R>,
+    indices: &[usize],
+    dest: &Path,
+    opts: &ExtractOptions,
+    ctl: &Control,
+    convert: Option<Convert>,
+) -> Result<ExtractReport> {
     fs::create_dir_all(dest)?;
     let root = fs::canonicalize(dest)?;
     let done = AtomicU64::new(0);
@@ -280,7 +296,8 @@ pub fn extract<R: ReadAt>(
             return Ok(());
         };
         let d = a.read(i)?;
-        match write_file(target, &d.data, opts)? {
+        let converted = convert.and_then(|f| f(e.name.as_bytes(), &d.data));
+        match write_file(target, converted.as_deref().unwrap_or(&d.data), opts)? {
             Outcome::Written { bytes, renamed } => {
                 r.written += 1;
                 r.bytes += bytes;

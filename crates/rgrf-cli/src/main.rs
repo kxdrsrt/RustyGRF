@@ -30,11 +30,13 @@ mod audio_cmd;
 mod client_cmd;
 mod crypt_cmd;
 mod edit_cmd;
+mod grfcl_cmd;
 mod image_cmd;
 mod lua_cmd;
 mod map_cmd;
 mod pal_cmd;
 mod patch_cmd;
+mod rare_cmd;
 mod refs_cmd;
 mod spr_cmd;
 mod unused_cmd;
@@ -327,6 +329,16 @@ enum Cmd {
         #[command(subcommand)]
         action: MapCmd,
     },
+    /// Seldom needed client files: BSON as JSON, emblems, icons, Thumbs.db, IMF, FNA
+    Rare {
+        #[command(subcommand)]
+        action: RareCmd,
+    },
+    /// Hash lists of a folder (GRF Editor's .hash files): create, show, compare
+    Hashlist {
+        #[command(subcommand)]
+        action: HashlistCmd,
+    },
     /// Thor patches (.thor): create; every other command opens them like a GRF
     Thor {
         #[command(subcommand)]
@@ -368,6 +380,126 @@ enum ThorCmd {
         /// Replace an existing output file
         #[arg(long)]
         overwrite: bool,
+    },
+    /// Pack config.ini, LanguageMap.ini and folders behind a Thor Patcher program (GrfCL thorPack)
+    Pack {
+        /// The Thor Patcher without packed files
+        program: PathBuf,
+        /// The Thor Patcher with them
+        #[arg(short, long)]
+        output: PathBuf,
+        /// The folder with config.ini and LanguageMap.ini
+        config_dir: PathBuf,
+        /// Folders of the config folder to pack too (images, BGM, ...)
+        folders: Vec<String>,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Write the files packed in a Thor Patcher into a folder (config comes out as config.ini)
+    Unpack {
+        packed: PathBuf,
+        dest: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum RareCmd {
+    /// BSON file (data\\contentdata\\*.bson) as JSON text
+    BsonToJson {
+        input: PathBuf,
+        /// A path inside the GRF `input`
+        entry: Option<String>,
+        /// The JSON file (default: the screen)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// JSON text (from bson-to-json, edited) as BSON file
+    JsonToBson {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Guild emblem (.ebm) as BMP
+    EbmToBmp {
+        input: PathBuf,
+        entry: Option<String>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// BMP as guild emblem (.ebm)
+    BmpToEbm {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// The pictures of an icon (.ico, .cur); with --output they are written there as PNG
+    Ico {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Folder for the PNG files
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// The pictures of a Thumbs.db; with --output the JPEG thumbnails are written there
+    Thumbs {
+        input: PathBuf,
+        entry: Option<String>,
+        /// Folder for the JPEG files
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// An IMF file (data\\imf\\*.imf): priority and offset of the layers per action and frame
+    Imf {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+    /// An FNA file (data\\imf\\*.fna): a list of file names
+    Fna {
+        input: PathBuf,
+        entry: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HashlistCmd {
+    /// Hash every file of a folder, and the entries of the archives in it (GrfCL hash)
+    Create {
+        folder: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Only files whose name matches (* and ?)
+        #[arg(long, default_value = "*")]
+        pattern: String,
+        /// quick: MD5 of the first 4096 bytes (GRF Editor's choice), md5, crc32 or size
+        #[arg(long, value_parser = ["quick", "md5", "crc32", "size"], default_value = "quick")]
+        method: String,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// List a hash list
+    Show { file: PathBuf },
+    /// What the user's list lacks, changes or adds against the master's (GrfCL hashComp; exit 0
+    /// nothing, 2 differences)
+    Compare {
+        master: PathBuf,
+        user: PathBuf,
+        /// Do not look for the files of the master's archives loose or in other archives
+        #[arg(long)]
+        exact: bool,
     },
 }
 
@@ -520,6 +652,20 @@ enum ClientCmd {
         /// Do not fail when the client lacks the names the patch looks for
         #[arg(long)]
         skip_resource_check: bool,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// A definitions file (`__definitions`) with a quick CRC32 of files of archives, made from a
+    /// text (GrfCL addFakeClientinfo; the text has blocks `archive.grf?`, one pattern per line,
+    /// `#end`)
+    Definitions {
+        /// The text, like GRF Editor's def.txt
+        text: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Where the archives are (default: next to the text)
+        #[arg(long)]
+        base: Option<PathBuf>,
         #[arg(long)]
         overwrite: bool,
     },
@@ -1468,7 +1614,100 @@ fn run(cli: &Cli) -> Result<i32> {
             all,
         } => verify_cmd(cli, grf, *no_decode, *all),
         Cmd::Hash { grf, pattern } => hash_cmd(cli, grf, pattern.as_deref()),
+        Cmd::Rare { action } => match action {
+            RareCmd::BsonToJson {
+                input,
+                entry,
+                output,
+                overwrite,
+            } => rare_cmd::bson_to_json(&rare_cmd::io(
+                input, entry, output, *overwrite, cli.names, cli.json,
+            )),
+            RareCmd::JsonToBson {
+                input,
+                output,
+                overwrite,
+            } => rare_cmd::json_to_bson(input, output, *overwrite),
+            RareCmd::EbmToBmp {
+                input,
+                entry,
+                output,
+                overwrite,
+            } => rare_cmd::ebm_to_bmp(&rare_cmd::io(
+                input,
+                entry,
+                &Some(output.clone()),
+                *overwrite,
+                cli.names,
+                cli.json,
+            )),
+            RareCmd::BmpToEbm {
+                input,
+                output,
+                overwrite,
+            } => rare_cmd::bmp_to_ebm(input, output, *overwrite),
+            RareCmd::Ico {
+                input,
+                entry,
+                output,
+                overwrite,
+            } => rare_cmd::ico_cmd(
+                &rare_cmd::io(input, entry, &None, *overwrite, cli.names, cli.json),
+                rare_cmd::dir_of(output),
+            ),
+            RareCmd::Thumbs {
+                input,
+                entry,
+                output,
+                overwrite,
+            } => rare_cmd::thumbs_cmd(
+                &rare_cmd::io(input, entry, &None, *overwrite, cli.names, cli.json),
+                rare_cmd::dir_of(output),
+            ),
+            RareCmd::Imf { input, entry } => rare_cmd::imf_cmd(&rare_cmd::io(
+                input, entry, &None, false, cli.names, cli.json,
+            )),
+            RareCmd::Fna { input, entry } => rare_cmd::fna_cmd(&rare_cmd::io(
+                input, entry, &None, false, cli.names, cli.json,
+            )),
+        },
+        Cmd::Hashlist { action } => match action {
+            HashlistCmd::Create {
+                folder,
+                output,
+                pattern,
+                method,
+                overwrite,
+            } => grfcl_cmd::hashlist_create(folder, output, pattern, method, *overwrite, cli.json),
+            HashlistCmd::Show { file } => grfcl_cmd::hashlist_show(file, cli.json),
+            HashlistCmd::Compare {
+                master,
+                user,
+                exact,
+            } => grfcl_cmd::hashlist_compare(master, user, *exact, cli.json),
+        },
         Cmd::Thor { action } => match action {
+            ThorCmd::Pack {
+                program,
+                output,
+                config_dir,
+                folders,
+                overwrite,
+            } => grfcl_cmd::thor_pack(
+                &grfcl_cmd::PackArgs {
+                    program,
+                    output,
+                    config_dir,
+                    folders,
+                    overwrite: *overwrite,
+                },
+                cli.json,
+            ),
+            ThorCmd::Unpack {
+                packed,
+                dest,
+                overwrite,
+            } => grfcl_cmd::thor_unpack(packed, dest, *overwrite, cli.json),
             ThorCmd::Create {
                 source,
                 output,
@@ -1594,6 +1833,12 @@ fn run(cli: &Cli) -> Result<i32> {
             ),
         },
         Cmd::Client { action } => match action {
+            ClientCmd::Definitions {
+                text,
+                output,
+                base,
+                overwrite,
+            } => grfcl_cmd::definitions_cmd(text, output, base.as_deref(), *overwrite, cli.json),
             ClientCmd::Encrypt {
                 exe,
                 cps_dll,
