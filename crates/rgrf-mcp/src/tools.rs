@@ -608,6 +608,127 @@ pub const TOOLS: &[Tool] = &[
         run: crypt_tool,
     },
     Tool {
+        name: "grf_hashlist_create",
+        title: "Hash list of a folder (GRF Editor's .hash file)",
+        description: "Hashes every file below `folder` and the entries of the GRF, GPF, Thor, RGZ and GSF archives in it (after decoding) and writes them as a hash list that GRF Editor and GrfCL read (`archive.grf?data\\path` for archive entries). Compare two lists with grf_hashlist_compare.",
+        params: &[
+            req("folder", Ty::Str, "The client folder."),
+            req("output", Ty::Str, "The hash list file to create."),
+            opt(
+                "pattern",
+                Ty::Str,
+                "Only files whose name matches (* and ?; default all).",
+            ),
+            opt(
+                "method",
+                Ty::Enum(&["quick", "md5", "crc32", "size"]),
+                "quick (default): MD5 of the first 4096 bytes, as GRF Editor does.",
+            ),
+            OVERWRITE,
+        ],
+        writes: true,
+        run: hashlist_create_tool,
+    },
+    Tool {
+        name: "grf_hashlist_compare",
+        title: "Compare two hash lists",
+        description: "What the user's hash list lacks (`missing`), changes (`different`), overrides by another path (`path override`) or adds (`extra`, `unreadable`) against the master list (GrfCL hashComp). Unless `exact`, files of the master's archives are also looked for loose and in the user's other archives.",
+        params: &[
+            req("master", Ty::Str, "The master hash list."),
+            req("user", Ty::Str, "The hash list to check."),
+            opt("exact", Ty::Bool, "Compare the exact paths only."),
+            opt(
+                "limit",
+                Ty::Int,
+                "How many differences to list (default 200; the count is complete).",
+            ),
+        ],
+        writes: false,
+        run: hashlist_compare_tool,
+    },
+    Tool {
+        name: "grf_thor_pack",
+        title: "Pack config files into a Thor Patcher",
+        description: "Packs config.ini (stored as `config`), LanguageMap.ini and the given subfolders of `config_dir` behind the Thor Patcher program `program` (GrfCL thorPack) and writes the result to `output`.",
+        params: &[
+            req("program", Ty::Str, "The Thor Patcher without packed files."),
+            req("output", Ty::Str, "The Thor Patcher with them."),
+            req(
+                "config_dir",
+                Ty::Str,
+                "Folder with config.ini and LanguageMap.ini.",
+            ),
+            opt(
+                "folders",
+                Ty::StrList,
+                "Subfolders of config_dir to pack too (images, BGM, ...).",
+            ),
+            OVERWRITE,
+        ],
+        writes: true,
+        run: thor_pack_tool,
+    },
+    Tool {
+        name: "grf_thor_unpack",
+        title: "Unpack the files of a Thor Patcher",
+        description: "Writes the files packed into a Thor Patcher into `dest` (`config` becomes config.ini). Existing files are not replaced.",
+        params: &[
+            req("packed", Ty::Str, "The Thor Patcher with packed files."),
+            req("dest", Ty::Str, "Folder to write into."),
+        ],
+        writes: true,
+        run: thor_unpack_tool,
+    },
+    Tool {
+        name: "grf_rare_info",
+        title: "Read a seldom used client file",
+        description: "Reads BSON (as JSON text), IMF, FNA, ICO/CUR or Thumbs.db: a loose file, or `entry` of an archive. `kind` says which. For ico and thumbs, `output_dir` writes the pictures (PNG or JPEG) there.",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "The file, or an archive when `entry` is given.",
+            ),
+            opt("entry", Ty::Str, "The file inside the archive `path`."),
+            req(
+                "kind",
+                Ty::Enum(&["bson", "imf", "fna", "ico", "thumbs"]),
+                "The kind of file.",
+            ),
+            opt(
+                "output_dir",
+                Ty::Str,
+                "Folder for the pictures of ico and thumbs.",
+            ),
+            NAMES,
+        ],
+        writes: false,
+        run: rare_info_tool,
+    },
+    Tool {
+        name: "grf_rare_convert",
+        title: "Convert a seldom used client file",
+        description: "bson_to_json and json_to_bson (the bytes come back the same), ebm_to_bmp and bmp_to_ebm (guild emblems are zlib-compressed BMPs). A loose file, or `entry` of an archive for the first of each pair; writes a new file. Put the result into an archive with grf_edit.",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "The input file, or an archive when `entry` is given.",
+            ),
+            opt("entry", Ty::Str, "The file inside the archive `path`."),
+            req(
+                "kind",
+                Ty::Enum(&["bson_to_json", "json_to_bson", "ebm_to_bmp", "bmp_to_ebm"]),
+                "The conversion.",
+            ),
+            req("output", Ty::Str, "The file to create."),
+            NAMES,
+            OVERWRITE,
+        ],
+        writes: true,
+        run: rare_convert_tool,
+    },
+    Tool {
         name: "grf_audio_info",
         title: "Sound information",
         description: "Format (wav, mp3, ogg), sample rate, channels, length and peak level of a sound: a loose file, or `entry` of an archive. Reads PCM and ADPCM WAV, MP3 and Ogg Vorbis.",
@@ -1820,6 +1941,265 @@ fn audio_edit_tool(ctx: &Ctx, a: &Args) -> Out {
         "sample_rate": audio.rate, "channels": audio.channels.len(),
         "duration_ms": audio.duration_ms(), "bytes": bytes.len(),
     }))
+}
+
+fn hashlist_create_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_core::hashlist::{HashMethod, hash_folder};
+    let folder = ctx.policy.read(a.str("folder"))?;
+    let out = ctx
+        .policy
+        .write_file(a.str("output"), a.flag("overwrite"))?;
+    let method = match a.opt_str("method").unwrap_or("quick") {
+        "md5" => HashMethod::Md5,
+        "crc32" => HashMethod::Crc32,
+        "size" => HashMethod::FileSize,
+        _ => HashMethod::QuickMd5,
+    };
+    let list = hash_folder(
+        &folder,
+        a.opt_str("pattern").unwrap_or("*"),
+        method,
+        &ctx.control,
+    )
+    .map_err(err)?;
+    list.write(&out).map_err(err)?;
+    Ok(json!({
+        "output": out.display().to_string(), "files": list.hashes.len(),
+        "method": list.method.name(),
+    }))
+}
+
+fn hashlist_compare_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_core::hashlist::{HashList, compare};
+    let m = HashList::read(&ctx.policy.read(a.str("master"))?).map_err(err)?;
+    let u = HashList::read(&ctx.policy.read(a.str("user"))?).map_err(err)?;
+    if m.method.len() != u.method.len() {
+        return Err("the lists use different hash methods".into());
+    }
+    let diffs = compare(&m, &u, a.flag("exact"));
+    let limit = a.opt_u64("limit").unwrap_or(200) as usize;
+    let items: Vec<_> = diffs
+        .iter()
+        .take(limit)
+        .map(|d| json!({"issue": d.issue.name(), "path": d.path, "user_path": d.user_path}))
+        .collect();
+    Ok(json!({"issues": diffs.len(), "listed": items.len(), "differences": items}))
+}
+
+fn thor_pack_tool(ctx: &Ctx, a: &Args) -> Out {
+    let program = ctx.policy.read(a.str("program"))?;
+    let cfg = ctx.policy.read(a.str("config_dir"))?;
+    let out = ctx
+        .policy
+        .write_file(a.str("output"), a.flag("overwrite"))?;
+    let prog = std::fs::read(&program).map_err(|e| format!("{}: {e}", program.display()))?;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for (stored, name) in [
+        ("config", "config.ini"),
+        ("LanguageMap.ini", "LanguageMap.ini"),
+    ] {
+        let p = cfg.join(name);
+        files.push((
+            stored.into(),
+            std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?,
+        ));
+    }
+    for folder in a.list("folders") {
+        // a folder name never leaves the config folder
+        if folder
+            .split(['/', '\\'])
+            .any(|p| p == ".." || p.contains(':'))
+        {
+            return Err(format!("'{folder}' is not a folder of config_dir"));
+        }
+        let root = cfg.join(folder);
+        if !root.is_dir() {
+            return Err(format!("{} is not a folder", root.display()));
+        }
+        let mut stack = vec![root.clone()];
+        let mut found = Vec::new();
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).map_err(err)?.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    found.push(p);
+                }
+            }
+        }
+        found.sort();
+        let parent = root.parent().unwrap_or(&cfg).to_path_buf();
+        for f in found {
+            let rel: Vec<String> = f
+                .strip_prefix(&parent)
+                .unwrap_or(&f)
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            let sep = if rel.first().is_some_and(|f| f == "Languages") {
+                "\\"
+            } else {
+                "/"
+            };
+            files.push((
+                rel.join(sep),
+                std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?,
+            ));
+        }
+    }
+    let packed = rgrf_core::thorpack::pack(&prog, &files).map_err(err)?;
+    std::fs::write(&out, &packed).map_err(err)?;
+    Ok(json!({"output": out.display().to_string(), "files": files.len(), "bytes": packed.len()}))
+}
+
+fn thor_unpack_tool(ctx: &Ctx, a: &Args) -> Out {
+    let packed = ctx.policy.read(a.str("packed"))?;
+    let dest = ctx.policy.write_dir(a.str("dest"))?;
+    let exe = std::fs::read(&packed).map_err(|e| format!("{}: {e}", packed.display()))?;
+    let (program_bytes, files) = rgrf_core::thorpack::unpack(&exe).map_err(err)?;
+    let mut written = Vec::new();
+    for (name, data) in &files {
+        let name = if name == "config" {
+            "config.ini"
+        } else {
+            name.as_str()
+        };
+        let mut target = dest.clone();
+        for part in name.split(['/', '\\']) {
+            if part.is_empty() || part == ".." || part.contains(':') {
+                return Err(format!("the packed name '{name}' is not a safe path"));
+            }
+            target.push(part);
+        }
+        if target.exists() {
+            return Err(format!("{} exists", target.display()));
+        }
+        if let Some(d) = target.parent() {
+            std::fs::create_dir_all(d).map_err(err)?;
+        }
+        std::fs::write(&target, data).map_err(err)?;
+        written.push(name.to_string());
+    }
+    Ok(json!({"program_bytes": program_bytes, "files": written}))
+}
+
+fn rare_bytes(ctx: &Ctx, a: &Args) -> Result<(Vec<u8>, String), String> {
+    audio_bytes(ctx, a)
+}
+
+fn rare_info_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::{bson, fna, ico, imf, thumbsdb};
+    let (data, name) = rare_bytes(ctx, a)?;
+    let dir = a
+        .opt_str("output_dir")
+        .map(|d| ctx.policy.write_dir(d))
+        .transpose()?;
+    let mode = names_mode(a);
+    let write = |dir: &std::path::Path, file: String, bytes: &[u8]| -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(err)?;
+        let p = dir.join(file);
+        if p.exists() {
+            return Err(format!("{} exists", p.display()));
+        }
+        std::fs::write(p, bytes).map_err(err)
+    };
+    match a.str("kind") {
+        "bson" => {
+            let doc = bson::parse(&data).map_err(|e| format!("{name}: {e}"))?;
+            Ok(json!({"name": name, "json": bson::to_json(&doc)}))
+        }
+        "imf" => {
+            let f = imf::Imf::parse(&data).map_err(|e| format!("{name}: {e}"))?;
+            Ok(json!({"name": name, "checksum": f.checksum, "text": f.to_text()}))
+        }
+        "fna" => {
+            let f = fna::Fna::parse(&data).map_err(|e| format!("{name}: {e}"))?;
+            let names: Vec<String> = f
+                .files
+                .iter()
+                .map(|n| GrfPath::new(n.clone()).display(mode))
+                .collect();
+            Ok(json!({"name": name, "files": names}))
+        }
+        "ico" => {
+            let pics = ico::parse(&data).map_err(|e| format!("{name}: {e}"))?;
+            let mut written = Vec::new();
+            for (i, p) in pics.iter().enumerate() {
+                if let Some(dir) = &dir {
+                    let png = match &p.picture {
+                        ico::IcoPicture::Png(b) => b.clone(),
+                        ico::IcoPicture::Rgba(img) => {
+                            rgrf_formats::png_io::rgba_to_png(img).map_err(err)?
+                        }
+                    };
+                    let file = format!("{i}_{}x{}.png", p.width, p.height);
+                    write(dir, file.clone(), &png)?;
+                    written.push(file);
+                }
+            }
+            let items: Vec<_> = pics
+                .iter()
+                .map(|p| json!({"width": p.width, "height": p.height, "bits": p.bits}))
+                .collect();
+            Ok(json!({"name": name, "pictures": items, "written": written}))
+        }
+        _ => {
+            let db = thumbsdb::parse(&data).map_err(|e| format!("{name}: {e}"))?;
+            let mut written = 0;
+            for t in &db.thumbs {
+                if let (Some(dir), Some(j)) = (&dir, &t.jpeg) {
+                    let base = t.name.rsplit(['\\', '/']).next().unwrap_or(&t.name);
+                    let safe: String = base
+                        .chars()
+                        .map(|c| {
+                            if c.is_alphanumeric() || "._- ".contains(c) {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect();
+                    write(dir, format!("{}_{safe}.jpg", t.id), j)?;
+                    written += 1;
+                }
+            }
+            let items: Vec<_> = db
+                .thumbs
+                .iter()
+                .map(|t| json!({"id": t.id, "name": t.name, "jpeg_bytes": t.jpeg.as_ref().map(Vec::len)}))
+                .collect();
+            Ok(
+                json!({"name": name, "width": db.width, "height": db.height, "thumbnails": items, "written": written}),
+            )
+        }
+    }
+}
+
+fn rare_convert_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::{bson, ebm};
+    let out = ctx
+        .policy
+        .write_file(a.str("output"), a.flag("overwrite"))?;
+    let (data, name) = rare_bytes(ctx, a)?;
+    let bytes = match a.str("kind") {
+        "bson_to_json" => {
+            bson::to_json(&bson::parse(&data).map_err(|e| format!("{name}: {e}"))?).into_bytes()
+        }
+        "json_to_bson" => {
+            let text = String::from_utf8(data).map_err(|_| format!("{name} is not UTF-8 text"))?;
+            bson::to_bytes(&bson::from_json(&text).map_err(|e| format!("{name}: {e}"))?)
+        }
+        "ebm_to_bmp" => ebm::to_bmp(&data).map_err(|e| format!("{name}: {e}"))?,
+        _ => {
+            if !data.starts_with(b"BM") {
+                return Err(format!("{name} is not a BMP"));
+            }
+            ebm::from_bmp(&data)
+        }
+    };
+    std::fs::write(&out, &bytes).map_err(err)?;
+    Ok(json!({"output": out.display().to_string(), "bytes": bytes.len()}))
 }
 
 fn patch_tool(ctx: &Ctx, a: &Args) -> Out {

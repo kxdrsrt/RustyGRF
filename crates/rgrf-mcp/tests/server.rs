@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 12);
+    assert_eq!(ro.len(), 14);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 23);
+    assert_eq!(names(&rw).len(), 29);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -959,4 +959,113 @@ fn downgrade_maps_writes_the_old_world_and_ground_files() {
     let listed = ok(&s, "grf_list", json!({"path": out}));
     assert_eq!(listed["total"], 2, "{listed}");
     assert!(fails(&s, "grf_downgrade_maps", json!({"path": p, "output": dir.join("z.grf").display().to_string(), "maps": ["nowhere"]})).contains("no matching"));
+}
+
+#[test]
+fn hash_lists_thor_patchers_and_rare_files_work_through_the_tools() {
+    let dir = tmp("grfcl-tools");
+    let client = dir.join("client");
+    put(&client, "ro.exe", b"exe");
+    put(&client, "data/a.txt", b"a");
+    let s = server(std::slice::from_ref(&dir), std::slice::from_ref(&dir));
+    let p = |n: &str| dir.join(n).display().to_string();
+    let v = ok(
+        &s,
+        "grf_hashlist_create",
+        json!({"folder": client.display().to_string(), "output": p("m.hash")}),
+    );
+    assert_eq!(v["files"], 2);
+    put(&client, "data/a.txt", b"changed");
+    put(&client, "extra.txt", b"e");
+    ok(
+        &s,
+        "grf_hashlist_create",
+        json!({"folder": client.display().to_string(), "output": p("u.hash")}),
+    );
+    let v = ok(
+        &s,
+        "grf_hashlist_compare",
+        json!({"master": p("m.hash"), "user": p("u.hash")}),
+    );
+    assert_eq!(v["issues"], 2, "{v}");
+    let issues: Vec<String> = v["differences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["issue"].as_str().unwrap().to_string())
+        .collect();
+    assert!(issues.contains(&"different".into()) && issues.contains(&"extra".into()));
+    // an existing output is not replaced
+    fails(
+        &s,
+        "grf_hashlist_create",
+        json!({"folder": client.display().to_string(), "output": p("m.hash")}),
+    );
+
+    put(&dir, "cfg/config.ini", b"[CONFIG]\n");
+    put(&dir, "cfg/LanguageMap.ini", b"x");
+    put(&dir, "cfg/images/a.png", b"png");
+    put(&dir, "patcher.exe", b"MZ");
+    let v = ok(
+        &s,
+        "grf_thor_pack",
+        json!({"program": p("patcher.exe"), "config_dir": p("cfg"), "folders": ["images"], "output": p("packed.exe")}),
+    );
+    assert_eq!(v["files"], 3);
+    ok(
+        &s,
+        "grf_thor_unpack",
+        json!({"packed": p("packed.exe"), "dest": p("out")}),
+    );
+    assert_eq!(std::fs::read(dir.join("out/images/a.png")).unwrap(), b"png");
+    assert_eq!(
+        std::fs::read(dir.join("out/config.ini")).unwrap(),
+        b"[CONFIG]\n"
+    );
+    let e = fails(
+        &s,
+        "grf_thor_pack",
+        json!({"program": p("patcher.exe"), "config_dir": p("cfg"), "folders": ["../x"], "output": p("p2.exe"), "overwrite": true}),
+    );
+    assert!(e.contains("not a folder"), "{e}");
+
+    // a BMP as emblem and back, a BSON as JSON and back
+    put(&dir, "e.bmp", b"BM0123456789");
+    ok(
+        &s,
+        "grf_rare_convert",
+        json!({"path": p("e.bmp"), "kind": "bmp_to_ebm", "output": p("e.ebm")}),
+    );
+    ok(
+        &s,
+        "grf_rare_convert",
+        json!({"path": p("e.ebm"), "kind": "ebm_to_bmp", "output": p("e2.bmp")}),
+    );
+    assert_eq!(std::fs::read(dir.join("e2.bmp")).unwrap(), b"BM0123456789");
+    let bson: Vec<u8> = vec![12, 0, 0, 0, 0x10, b'a', 0, 7, 0, 0, 0, 0];
+    put(&dir, "a.bson", &bson);
+    let v = ok(
+        &s,
+        "grf_rare_info",
+        json!({"path": p("a.bson"), "kind": "bson"}),
+    );
+    assert!(v["json"].as_str().unwrap().contains("\"a\": 7"));
+    ok(
+        &s,
+        "grf_rare_convert",
+        json!({"path": p("a.bson"), "kind": "bson_to_json", "output": p("a.json")}),
+    );
+    ok(
+        &s,
+        "grf_rare_convert",
+        json!({"path": p("a.json"), "kind": "json_to_bson", "output": p("b.bson")}),
+    );
+    assert_eq!(std::fs::read(dir.join("b.bson")).unwrap(), bson);
+    let e = fails(
+        &s,
+        "grf_rare_info",
+        json!({"path": p("e.bmp"), "kind": "imf"}),
+    );
+    assert!(e.contains("IMF"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -107,7 +107,7 @@ fn handshake_list_call_and_clean_exit_at_eof() {
     assert_eq!(r["result"]["serverInfo"]["name"], "rgrf-mcp");
     s.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
     let r = s.request(2, "tools/list", json!({}));
-    assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 12);
+    assert_eq!(r["result"]["tools"].as_array().unwrap().len(), 14);
     let r = s.request(
         3,
         "tools/call",
