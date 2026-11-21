@@ -150,6 +150,13 @@ function libText(text) {
     names.forEach((n, i) => (args[n] = n === "reason" ? libText(m[i + 1] ?? "") : (m[i + 1] ?? "")));
     return t(key, args);
   }
+  // a message that names a file first ("/path/a.grf: not a GRF archive: …")
+  const at = plain.indexOf(": ");
+  if (at > 0) {
+    const rest = plain.slice(at + 2);
+    const translated = libText(rest);
+    if (translated !== rest) return `${plain.slice(0, at)}: ${translated}`;
+  }
   return text;
 }
 
