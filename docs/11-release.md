@@ -24,13 +24,16 @@ cd apps/gui && cargo test --release && cargo clippy --all-targets --features dev
 
 Die Tests mit echten Archiven brauchen `RGRF_TESTDATA` (siehe `apps/gui/.cargo/config.toml`). Die Oberfläche lässt sich ohne Fenster mit dem Devserver prüfen (`apps/gui/README.md`). Der Devserver ist ein eigenes Binary mit `required-features`; er landet nicht im Bundle.
 
+## Entschieden (2026-11-22)
+
+- **Signierung und Notarisierung:** bewusst **nicht**; kein Apple-Developer-Konto, kein Windows-Zertifikat. Folge: macOS und Windows warnen beim ersten Start. macOS: Rechtsklick → Öffnen (oder `xattr -dr com.apple.quarantine RustyGRF.app`); Windows: SmartScreen → „Weitere Informationen“ → „Trotzdem ausführen“. Das gehört in die Release-Notizen.
+- **Icon:** Entwurf C (Kiste mit Block-„R“) ersetzt Entwurf A, siehe [icon-drafts/](icon-drafts/README.md).
+- **Updater:** eingebaut, ohne Zusatzpaket: beim Start (einstellbar, Einstellungen → Updates) und von Hand über Hilfe → „Nach Updates suchen…“ fragt die Oberfläche `https://api.github.com/repos/kxdrsrt/RustyGRF/releases/latest` ab (die Adresse steht als `UPDATE_REPO` in `apps/gui/ui/app.js`, die Erlaubnis in der CSP von `tauri.conf.json`). Ist der `tag_name` neuer als die Programmversion, erscheint ein Dialog mit den Release-Notizen und den Knöpfen „Herunterladen“ (der Installer für das System, bei mehreren Treffern die Release-Seite), „Was ist neu“, „Diese Version überspringen“, „Später“. Es wird nichts außer der Abfrage gesendet; das Installieren macht der Nutzer selbst (kein Selbstaustausch, weil das ohne Signatur auf macOS und Windows ohnehin eine Warnung brächte). Ein Release braucht also ein Tag `vX.Y.Z` und die Installer als Dateien; `.github/workflows/gui-bundles.yml` erzeugt beides beim Tag `v*`. Ohne veröffentlichtes Release meldet die Suche „noch keine Version veröffentlicht“. Im echten Fenster nicht gegen ein echtes Release geprüft, solange das Projekt nicht auf GitHub liegt.
+- **Version:** `0.1.0`.
+
 ## Offen, braucht deine Entscheidung
 
-- **Signierung und Notarisierung** (macOS: Apple-Developer-Konto; Windows: Zertifikat). Ohne sie warnt das System beim ersten Start („nicht verifizierter Entwickler“, SmartScreen). Für den Eigengebrauch reicht Rechtsklick → Öffnen.
-- **Icon:** Entwurf A (Kiste, Rostorange) ist eingebaut und im `.app` geprüft; Entwürfe und Vorgehen in [icon-drafts/](icon-drafts/README.md). Ein endgültiges Design ist deine Entscheidung.
-- **Versionsnummer:** `0.0.0` in `tauri.conf.json` und den `Cargo.toml`; vor dem ersten Release festlegen.
 - **Automatische Builds:** `.github/workflows/gui-bundles.yml` baut die Installer (Windows `.msi`/`.exe`, Linux `.deb`/AppImage x64 und ARM64, macOS `.app`/`.dmg`) bei Hand-Start oder Tag `v*`; läuft erst, wenn das Projekt auf GitHub liegt (bisher nur lokales Git, kein Push), Syntax geprüft (YAML), nicht ausgeführt.
-- **Updater:** nicht eingebaut.
 
 ## Bekannte Grenzen der Pakete
 
