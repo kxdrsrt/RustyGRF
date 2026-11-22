@@ -50,3 +50,4 @@ Mit Erlaubnis von Tokeiburu nach GRF Editors Quelltext gelesen und in Rust neu g
 
 
 - `tools/translation/fill_untranslated.py` (2026-11-22): eigener Code. Die ergänzten englischen Texte stammen aus der Übersetzung ROenglishRE (wie bisher, siehe oben), nicht aus eigener Übersetzung; die Schablonenübersetzung der Gegenstandsbeschreibungen („Weight“, „Class“, …) ist eigener Text.
+
