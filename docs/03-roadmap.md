@@ -168,6 +168,7 @@ Ergebnis der Vorabstimmung 2026-11-18: Bundle-ID `dev.rustygrf.app` bestätigt, 
 - **ACT-Zwischenbilder ✅:** `rgrf act interpolate` und „In-betweens…“ im ACT-Editor, Einzelheiten in der [Funktionsmatrix](10-feature-matrix.md). Keine Skriptsprache.
 
 ## Client-Projekt (ausgelagert, 2026-11-22)
+Die Notizen zum Client-Projekt (Client-Ordner, Bau- und Textskripte, Skins, Übersetzungsfixes) gehören nicht zu RustyGRF und liegen im Client-Projekt, Datei `client-dev/docs/client-log.md`. RustyGRF liefert dafür nur das Programm `rgrf` (`rgrf client slim`, `rgrf client translate`, `rgrf client check`, `rgrf image reduce-dir` …).
 
 
 ## Kleinster Client (2026-11-19)
