@@ -256,7 +256,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "grf_client_translate_assemble",
         title: "Assemble the RO Translation Project for a client",
-        description: "Puts the folders of a ROenglishRE checkout together in the order of the project's ClientGenerator.bat (Renewal, Pre-Renewal, the Compatibility folders up to the client date, deletions for newer clients) into `out/grf` (the archive root, give it to `grf_build`) and `out/loose` (files next to the client). `out` must not exist. Maintained version of tools/translation/assemble.py.",
+        description: "Puts the folders of a ROenglishRE checkout together in the order of the project's ClientGenerator.bat (Renewal, Pre-Renewal, the Compatibility folders up to the client date, deletions for newer clients) into `out/grf` (the archive root, give it to `grf_build`) and `out/loose` (files next to the client). `out` must not exist. Rust version of the former Python script assemble.py.",
         params: &[
             req(
                 "repo",
@@ -290,7 +290,7 @@ pub const TOOLS: &[Tool] = &[
     Tool {
         name: "grf_client_translate_fill",
         title: "Fill Korean entries of the client's text tables",
-        description: "Reads the text tables of the client from its archives (the first archive that has a table wins, as in DATA.INI) and replaces entries that are still Korean with the English entry of the same key from a ROenglishRE checkout (Pre-Renewal first, then Renewal): buff texts (stateiconinfo), skill descriptions, map and card name tables, tipoftheday symbols, hotkey names. Entries that are English already are never touched. Writes the changed tables to `out` with their path inside the archive (`out/data/...`); the archives are only read. The loose item tables of the client folder are filled by the CLI (`rgrf client translate fill --out-loose`). Maintained version of tools/translation/fill_untranslated.py.",
+        description: "Reads the text tables of the client from its archives (the first archive that has a table wins, as in DATA.INI) and replaces entries that are still Korean with the English entry of the same key from a ROenglishRE checkout (Pre-Renewal first, then Renewal): buff texts (stateiconinfo), skill descriptions, map and card name tables, tipoftheday symbols, hotkey names. Entries that are English already are never touched. Writes the changed tables to `out` with their path inside the archive (`out/data/...`); the archives are only read. The loose item tables of the client folder are filled by the CLI (`rgrf client translate fill --out-loose`). Rust version of the former Python script fill_untranslated.py.",
         params: &[
             req(
                 "paths",

@@ -776,7 +776,7 @@ enum ClientCmd {
         no_lua: bool,
     },
     /// Update the client's text tables from the RO Translation Project (assemble, fill, personal,
-    /// mods, update, install; the maintained version of tools/translation/*.py)
+    /// mods, update, install; the Rust version of the former Python scripts)
     Translate {
         #[command(subcommand)]
         action: translate_cmd::TranslateCmd,

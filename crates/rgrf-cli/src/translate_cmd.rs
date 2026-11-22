@@ -1,5 +1,5 @@
 //! `rgrf client translate ...`: updates a client's text tables from the RO Translation Project
-//! (the Rust version of `tools/translation/*.py`; see [`rgrf_formats::translate`]).
+//! (the Rust version of the former Python scripts; see [`rgrf_formats::translate`]).
 
 use std::path::PathBuf;
 

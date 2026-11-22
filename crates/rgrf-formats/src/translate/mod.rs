@@ -1,5 +1,5 @@
 //! Updates a client's text tables from the RO Translation Project (`llchrisll/ROenglishRE`):
-//! the Rust version of `tools/translation/*.py`, which stay as the reference.
+//! the Rust version of the former Python scripts (they belong to the client project, not to this tool).
 //!
 //! - [`assemble`]: the project's folders in the order of its `ClientGenerator.bat`.
 //! - [`fill`]: entries of the client's tables that are still Korean, taken from the project.
