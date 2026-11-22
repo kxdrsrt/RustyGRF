@@ -1496,6 +1496,21 @@ enum Collision {
 }
 
 fn main() {
+    // Windows gives the main thread only 1 MiB; the command tree and the big `run` match need more
+    // (unoptimised builds overflowed it), so everything runs on a thread with room to spare.
+    let code = std::thread::Builder::new()
+        .name("rgrf".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(real_main)
+        .map(|h| h.join().unwrap_or(101))
+        .unwrap_or_else(|e| {
+            eprintln!("rgrf: error: cannot start: {e}");
+            1
+        });
+    std::process::exit(code);
+}
+
+fn real_main() -> i32 {
     let cli = Cli::parse();
     if let Some(n) = cli.threads
         && let Err(e) = rayon::ThreadPoolBuilder::new()
@@ -1505,7 +1520,7 @@ fn main() {
         eprintln!("rgrf: error: cannot set threads: {e}");
         std::process::exit(1);
     }
-    let code = match run(&cli) {
+    match run(&cli) {
         Ok(code) => code,
         Err(e) => {
             let broken_pipe = e.chain().any(|c| {
@@ -1513,13 +1528,12 @@ fn main() {
                     .is_some_and(|i| i.kind() == io::ErrorKind::BrokenPipe)
             });
             if broken_pipe {
-                std::process::exit(0);
+                return 0;
             }
             eprintln!("rgrf: error: {e:#}");
             1
         }
-    };
-    std::process::exit(code);
+    }
 }
 
 fn open(path: &Path) -> Result<(Archive, u128)> {

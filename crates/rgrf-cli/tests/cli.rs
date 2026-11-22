@@ -1902,7 +1902,8 @@ fn client_check_on_the_real_full_client() {
         .collect();
     assert_eq!(names, ["cdata.grf", "core.grf", "cpal.grf", "data.grf"]);
     let text = v["findings"].to_string();
-    assert!(text.contains("Live Server 185.163.118.80:6900"), "{text}");
+    // the server address depends on whose client this is; the check only has to find one
+    assert!(text.contains("sclientinfo.xml (used: "), "{text}");
     assert!(text.contains("0 with syntax errors"), "{text}");
 }
 
