@@ -52,3 +52,4 @@ Mit Erlaubnis von Tokeiburu nach GRF Editors Quelltext gelesen und in Rust neu g
 - `tools/translation/fill_untranslated.py` (2026-11-22): eigener Code. Die ergänzten englischen Texte stammen aus der Übersetzung ROenglishRE (wie bisher, siehe oben), nicht aus eigener Übersetzung; die Schablonenübersetzung der Gegenstandsbeschreibungen („Weight“, „Class“, …) ist eigener Text.
 
 - **OpenSetup-INI (`client-dev/addons/opensetup/`, 2026-11-22):** `Setup.ini`/`opensetup.ini` sind die Einstellungsdateien von RO OpenSetup (Ai4rei/AN, `Setup.exe` liegt schon in `full`); der Abschnitt zu `PolicyDisableDirectXVersion` folgt der Vorlage `opensetup.ini.sample` aus dem offiziellen Paket 3.5.0.692. Nichts davon im Repository.
+- `tools/translation/fill_manual.py` und `manual_texts.tsv` (2026-11-22): eigener Code und eigene Übersetzung (Handliste für Quest-, Beschreibungs- und Erfolgstexte). Namen aus rAthena und ROenglishRE wie bei `fill_navigation.py`.
