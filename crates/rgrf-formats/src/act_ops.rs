@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 use crate::act::{Act, Action, Anchor, Frame, Layer, V2_4, V2_5};
 use crate::edit::EditError;
+use crate::spr::{Spr, Version as SprVersion};
 
 /// Which frames the "rotation copy" scripts of ACT Editor copy where (the 8 directions of a group
 /// of actions are 0 bottom, 1 bottom left, 2 left, 3 top left, 4 top, 5 top right, 6 right, 7 bottom right).
@@ -303,6 +304,37 @@ pub enum Template {
     HeadgearFemale,
 }
 
+impl Template {
+    /// The names the tools use, in the order of ACT Editor's File > New Act menu.
+    pub const NAMES: [(&'static str, Template); 7] = [
+        ("empty", Template::Empty),
+        ("headgear_male", Template::HeadgearMale),
+        ("headgear_female", Template::HeadgearFemale),
+        ("monster", Template::Monster),
+        ("homunculus", Template::Homunculus),
+        ("weapon", Template::Weapon),
+        ("npc", Template::Npc),
+    ];
+
+    pub fn from_name(name: &str) -> Option<Template> {
+        Self::NAMES
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name.trim()))
+            .map(|&(_, t)| t)
+    }
+}
+
+/// The empty sprite that ACT Editor saves next to a new animation (`new Spr()`: no images).
+pub fn empty_spr() -> Spr {
+    Spr {
+        version: SprVersion::V2_1,
+        indexed: Vec::new(),
+        rgba: Vec::new(),
+        palette: None,
+        warnings: Vec::new(),
+    }
+}
+
 /// (frames, interval in units of 25 ms, number of actions) in a row.
 type Runs = &'static [(usize, f32, usize)];
 
@@ -347,6 +379,11 @@ const HEAD: Runs = &[
     (6, 4.0, 8),
 ];
 
+/// Which of the `WEAPON` runs carry an empty layer in every frame (280 of the 392 frames of
+/// ACT Editor's `weapon.act`). Its placeholders are all zero there (no colour, scale 0); here
+/// they are ordinary empty layers, so that setting an image on one shows it.
+const WEAPON_LAYER: [bool; 10] = [true, true, true, false, true, true, true, true, false, true];
+
 fn from_runs(runs: Runs) -> Vec<Action> {
     runs.iter()
         .flat_map(|&(frames, interval, count)| {
@@ -378,7 +415,20 @@ impl Act {
             Template::Npc => from_runs(&[(1, 4.0, 8)]),
             Template::Monster => from_runs(MONSTER),
             Template::Homunculus => from_runs(HOMUNCULUS),
-            Template::Weapon => from_runs(WEAPON),
+            Template::Weapon => {
+                let mut actions = from_runs(WEAPON);
+                let mut next = actions.iter_mut();
+                for (&(_, _, count), &with_layer) in WEAPON.iter().zip(&WEAPON_LAYER) {
+                    for action in next.by_ref().take(count) {
+                        if with_layer {
+                            for f in &mut action.frames {
+                                f.layers.push(Layer::default());
+                            }
+                        }
+                    }
+                }
+                actions
+            }
             Template::HeadgearMale | Template::HeadgearFemale => from_runs(HEAD),
         };
         match kind {
@@ -1521,6 +1571,9 @@ mod tests {
         assert_eq!(shape(Template::Monster), (40, 504));
         assert_eq!(shape(Template::Homunculus), (64, 648));
         assert_eq!(shape(Template::Weapon), (104, 392));
+        let layers = |t| Act::template(t).layers().count();
+        assert_eq!(layers(Template::Weapon), 280);
+        assert_eq!(layers(Template::Monster), 0);
         assert_eq!(shape(Template::HeadgearMale), (104, 456));
         let m = Act::template(Template::Monster);
         assert_eq!(m.actions[16].frames[11].sound_id, 0);
@@ -1536,5 +1589,15 @@ mod tests {
         assert_eq!(h.version, V2_4);
         // the bytes read back
         assert!(Act::parse(&m.to_bytes(V2_5).unwrap()).is_ok());
+        // every menu name resolves, and the empty sprite next to a new animation reads back
+        assert!(
+            Template::NAMES
+                .iter()
+                .all(|&(n, t)| Template::from_name(n) == Some(t))
+        );
+        assert_eq!(Template::from_name(" Monster "), Some(Template::Monster));
+        assert_eq!(Template::from_name("garment"), None);
+        let bytes = empty_spr().to_bytes(SprVersion::V2_1).unwrap();
+        assert!(Spr::parse(&bytes).unwrap().indexed.is_empty());
     }
 }

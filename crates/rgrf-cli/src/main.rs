@@ -40,6 +40,7 @@ mod rare_cmd;
 mod refs_cmd;
 mod slim_cmd;
 mod spr_cmd;
+mod translate_cmd;
 mod unused_cmd;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -675,14 +676,17 @@ enum ClientCmd {
         #[arg(long)]
         overwrite: bool,
     },
-    /// The files animations (.act) and effects (.str) name, checked against the archives: the
-    /// sprite next to each animation, the images its layers use, the sounds its frames play, the
-    /// textures of an effect (exit 0 nothing missing, 3 problems)
+    /// The files animations (.act), effects (.str) and the client's Lua tables name, checked
+    /// against the archives: the sprite next to each animation, the images its layers use, the
+    /// sounds its frames play, the textures of an effect, and per table (monster, NPC, headgear,
+    /// pet, item, skill, state icon, hat effect, map ... names) the file it stands for (exit 0
+    /// nothing missing, 3 problems)
     Refs {
-        /// A client folder (with DATA.INI, the first archive wins) or one archive
+        /// A client folder (with DATA.INI, the first archive wins; its `System` folder holds the
+        /// item tables) or one archive
         input: PathBuf,
-        /// Only animations (act) or only effects (str)
-        #[arg(long, value_parser = ["act", "str"])]
+        /// Only animations (act), only effects (str) or only Lua tables (lua)
+        #[arg(long, value_parser = ["act", "str", "lua"])]
         only: Option<String>,
         /// How many problems or folders to list (the counts are always complete)
         #[arg(long, default_value_t = 50)]
@@ -770,6 +774,12 @@ enum ClientCmd {
         /// Skip the Lua syntax check
         #[arg(long)]
         no_lua: bool,
+    },
+    /// Update the client's text tables from the RO Translation Project (assemble, fill, personal,
+    /// mods, update, install; the maintained version of tools/translation/*.py)
+    Translate {
+        #[command(subcommand)]
+        action: translate_cmd::TranslateCmd,
     },
 }
 
@@ -989,6 +999,22 @@ enum PalCmd {
 
 #[derive(Subcommand)]
 enum ActCmd {
+    /// Write a new animation shaped like one of ACT Editor's File > New Act templates (empty,
+    /// headgear_male, headgear_female, monster, homunculus, weapon, npc) and the empty .spr next
+    /// to it, which you fill with `rgrf spr add`
+    New {
+        /// Template name
+        #[arg(long, default_value = "empty")]
+        template: String,
+        /// The new .act file; the sprite goes to the same path with .spr
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Do not write the empty sprite
+        #[arg(long)]
+        no_spr: bool,
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Version, actions, frames, layers, sounds (a loose .act file, or a GRF and the entry path)
     Info {
         input: PathBuf,
@@ -1962,6 +1988,7 @@ fn run(cli: &Cli) -> Result<i32> {
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)
             }
+            ClientCmd::Translate { action } => translate_cmd::run(action, cli.json),
         },
         Cmd::Lua { action } => match action {
             LuaCmd::Compile {
@@ -2190,6 +2217,20 @@ fn run(cli: &Cli) -> Result<i32> {
                     flip: *flip,
                 },
                 cli.names,
+                &edit_cmd::ActOut {
+                    output,
+                    overwrite: *overwrite,
+                    json: cli.json,
+                },
+            ),
+            ActCmd::New {
+                template,
+                output,
+                no_spr,
+                overwrite,
+            } => edit_cmd::act_new(
+                template,
+                !*no_spr,
                 &edit_cmd::ActOut {
                     output,
                     overwrite: *overwrite,

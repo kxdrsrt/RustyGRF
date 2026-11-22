@@ -10,10 +10,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
 use rgrf_core::NameMode;
 use rgrf_formats::act::Act;
+use rgrf_formats::act_ops::{Template, empty_spr};
 use rgrf_formats::edit::{Kind, quantize};
 use rgrf_formats::pal::Pal;
 use rgrf_formats::png_io::{Frame, frame_from_png};
-use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr};
+use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, RgbaImage, Spr, Version as SprVersion};
 use serde_json::json;
 
 use crate::spr_cmd::load;
@@ -336,6 +337,48 @@ pub struct ActOut<'a> {
 fn save_act(act: &Act, what: &str, out: &ActOut<'_>, details: serde_json::Value) -> Result<i32> {
     write_new(out.output, out.overwrite, &act.to_bytes(act.version)?)?;
     report(out.json, what, out.output, details);
+    Ok(0)
+}
+
+pub fn act_new(template: &str, with_spr: bool, out: &ActOut<'_>) -> Result<i32> {
+    let kind = Template::from_name(template).ok_or_else(|| {
+        anyhow!(
+            "unknown template '{template}' (one of: {})",
+            Template::NAMES.map(|(n, _)| n).join(", ")
+        )
+    })?;
+    if !out
+        .output
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("act"))
+    {
+        bail!("{} does not end in .act", out.output.display());
+    }
+    let spr_path = out.output.with_extension("spr");
+    if with_spr && spr_path.exists() && !out.overwrite {
+        bail!("{} exists already (use --overwrite)", spr_path.display());
+    }
+    let act = Act::template(kind);
+    let bytes = act.to_bytes(act.version)?;
+    write_new(out.output, out.overwrite, &bytes)?;
+    if with_spr {
+        write_new(
+            &spr_path,
+            out.overwrite,
+            &empty_spr().to_bytes(SprVersion::V2_1)?,
+        )?;
+    }
+    report(
+        out.json,
+        "act new",
+        out.output,
+        serde_json::json!({
+            "template": template.trim().to_ascii_lowercase(),
+            "actions": act.actions.len(),
+            "frames": act.actions.iter().map(|a| a.frames.len()).sum::<usize>(),
+            "sprite": with_spr.then(|| spr_path.display().to_string()),
+        }),
+    );
     Ok(0)
 }
 

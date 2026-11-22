@@ -105,7 +105,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.folder_entries(
                 arg(a, "view")?,
                 &arg::<String>(a, "path")?,
-                arg::<Option<bool>>(a, "root_only")?.unwrap_or(false),
+                arg::<Option<bool>>(a, "rootOnly")?.unwrap_or(false),
             )?)
         }),
         "page" => with(state, |s| {
@@ -218,7 +218,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 &list,
                 &PathBuf::from(arg::<String>(a, "dest")?),
                 arg(a, "rename")?,
-                arg::<Option<bool>>(a, "decompile_lub")?.unwrap_or(false),
+                arg::<Option<bool>>(a, "decompileLub")?.unwrap_or(false),
             )?)
         }),
         "verify" => with(state, |s| to_json(s.verify(arg(a, "decode")?)?)),
@@ -281,6 +281,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
                 arg(a, "action")?,
                 arg(a, "frame")?,
                 &refs.unwrap_or_default(),
+                arg::<Option<bool>>(a, "adjacent")?.unwrap_or(false),
             )?)
         }),
         "stage_act_anchors" => with(state, |s| {
@@ -293,12 +294,18 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
         }),
         "act_setup_info" => with(state, |s| {
             let reference: String = arg(a, "reference")?;
-            to_json(s.act_setup_info(arg(a, "index")?, &reference)?)
+            let garment: Option<bool> = arg(a, "garment")?;
+            to_json(s.act_setup_info(arg(a, "index")?, &reference, garment.unwrap_or(false))?)
         }),
         "stage_act_setup" => with(state, |s| {
             let reference: String = arg(a, "reference")?;
             let choices: Vec<rustygrf_gui_lib::act_editor::SetupChoice> = arg(a, "choices")?;
-            s.stage_act_setup(arg(a, "index")?, &reference, arg(a, "head")?, &choices)?;
+            s.stage_act_setup(
+                arg(a, "index")?,
+                &reference,
+                &arg::<String>(a, "kind")?,
+                &choices,
+            )?;
             to_json(s.pending())
         }),
         "stage_act_image_fx" => with(state, |s| {
@@ -312,12 +319,24 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.pending())
         }),
         "open_folder" => Ok(Value::Null),
+        "act_garment_matches" => with(state, |s| to_json(s.garment_matches(arg(a, "index")?, 30)?)),
+        "act_garment_jobs" => to_json(backend::Session::garment_default_jobs()),
+        "stage_save_garment" => with(state, |s| {
+            let spec: backend::GarmentSpec = arg(a, "spec")?;
+            let report = s.stage_save_garment(arg(a, "index")?, &spec)?;
+            to_json((s.pending(), report))
+        }),
         "stage_removals" => with(state, |s| {
             s.stage_removals(&arg::<String>(a, "text")?)?;
             to_json(s.pending())
         }),
         "stage_new_act" => with(state, |s| {
-            s.stage_new_act(&arg::<String>(a, "path")?, &arg::<String>(a, "kind")?)?;
+            let spr: Option<bool> = arg(a, "spr")?;
+            s.stage_new_act(
+                &arg::<String>(a, "path")?,
+                &arg::<String>(a, "kind")?,
+                spr.unwrap_or(true),
+            )?;
             to_json(s.pending())
         }),
         "stage_act_edit" => with(state, |s| {

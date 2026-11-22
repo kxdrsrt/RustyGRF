@@ -2,7 +2,7 @@
 
 Alle Entwürfe sind SVG (1024 × 1024, Quelle im Text, frei änderbar).
 
-- `draft-c-crate-r.svg`: **gewählt (aktuelles Icon)**. Entwurf A, dazu ein großes „R“ aus Pixelblöcken auf der linken Seitenfläche der Kiste (4 × 5 Blöcke, wie die Fläche schräg gestellt, Steigung 156/272). Die Kiste ist um 15 % größer als in A, damit das R auch bei 32 px noch zu erkennen ist. Die Pixelquadrate auf der rechten Fläche bleiben.
+- `draft-c-crate-r.svg`: **gewählt (aktuelles Icon)**. Entwurf A, dazu ein großes „R“ aus Pixelblöcken auf der linken Seitenfläche der Kiste (4 × 5 Blöcke, wie die Fläche schräg gestellt, Steigung 156/272). Die Kiste ist um 15 % größer als in A, damit das R auch bei 32 px noch zu erkennen ist. Die Pixelquadrate auf der rechten Fläche bleiben; darunter steht „GRF“ in 3 × 5 Pixelblöcken (20 px, gleiche Schräge).
 - `draft-a-crate.svg`: der frühere Entwurf (gewählt am 2026-11-18). Eine isometrische Kiste (ein Archiv/Paket) auf rostorangem Grund; die kleinen Pixelquadrate stehen für die Sprite-Bilder darin. Ist die Grundlage von C.
 - `draft-b-pixel-r.svg`: ein Pixel-„R“ in Rosttönen auf dunklem Grund. Klar lesbar, aber sagt weniger über den Zweck aus.
 

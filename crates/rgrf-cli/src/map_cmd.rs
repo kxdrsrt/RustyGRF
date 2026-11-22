@@ -2,7 +2,7 @@
 //! that every file a map names (ground, altitude, textures, models, sounds) exists, and the
 //! extraction of one map with everything it needs.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -259,13 +259,14 @@ pub fn png(
 pub(crate) struct Vfs {
     pub(crate) archives: Vec<(String, Archive)>,
     pub(crate) keymaps: Vec<HashMap<Vec<u8>, Vec<usize>>>,
-    loose: BTreeSet<Vec<u8>>,
+    /// Loose files of the `data` and `System` folders of a client: key -> file.
+    loose: BTreeMap<Vec<u8>, PathBuf>,
 }
 
 impl Vfs {
     pub(crate) fn open(input: &Path) -> Result<Self> {
         let mut archives = Vec::new();
-        let mut loose = BTreeSet::new();
+        let mut loose = BTreeMap::new();
         if input.is_dir() {
             let Some(ini) = find_ci(input, "DATA.INI") else {
                 bail!("no DATA.INI in {}", input.display());
@@ -280,13 +281,16 @@ impl Vfs {
                 };
                 archives.push((e.file.clone(), crate::crypt_cmd::open_archive(p)?));
             }
-            if let Some(d) = find_ci(input, "data").filter(|d| d.is_dir()) {
+            for folder in ["data", "System"] {
+                let Some(d) = find_ci(input, folder).filter(|d| d.is_dir()) else {
+                    continue;
+                };
                 let mut files: Vec<(String, PathBuf)> = Vec::new();
                 walk(&d, input, &mut files);
-                for (rel, _) in files {
+                for (rel, path) in files {
                     let rel: String = rel.nfc().collect();
                     if let Some(p) = GrfPath::from_display(&rel, NameMode::Cp1252) {
-                        loose.insert(p.key());
+                        loose.insert(p.key(), path);
                     }
                 }
             }
@@ -313,7 +317,7 @@ impl Vfs {
     }
 
     pub(crate) fn exists(&self, key: &[u8]) -> bool {
-        self.find(key).is_some() || self.loose.contains(key)
+        self.find(key).is_some() || self.loose.contains_key(key)
     }
 
     pub(crate) fn read(&self, at: (usize, usize)) -> Result<Vec<u8>> {
@@ -323,12 +327,35 @@ impl Vfs {
 
 impl rgrf_formats::map_files::MapSource for Vfs {
     fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
-        let at = self.find(&GrfPath::new(path.to_vec()).key())?;
-        Vfs::read(self, at).ok()
+        let key = GrfPath::new(path.to_vec()).key();
+        match self.find(&key) {
+            Some(at) => Vfs::read(self, at).ok(),
+            None => fs::read(self.loose.get(&key)?).ok(),
+        }
     }
 
     fn exists(&self, path: &[u8]) -> bool {
         Vfs::exists(self, &GrfPath::new(path.to_vec()).key())
+    }
+
+    fn list(&self, prefix: &[u8]) -> Vec<Vec<u8>> {
+        let prefix = GrfPath::new(prefix.to_vec()).key();
+        let mut out: Vec<Vec<u8>> = self
+            .keymaps
+            .iter()
+            .flat_map(|m| m.keys())
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        out.extend(
+            self.loose
+                .range(prefix.clone()..)
+                .take_while(|(k, _)| k.starts_with(&prefix))
+                .map(|(k, _)| k.clone()),
+        );
+        out.sort();
+        out.dedup();
+        out
     }
 }
 

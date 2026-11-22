@@ -2,6 +2,7 @@
 
 pub mod act;
 pub mod act_fx;
+pub mod act_garment;
 pub mod act_ops;
 pub mod act_setup;
 pub mod audio;
@@ -23,6 +24,7 @@ pub mod imf;
 #[cfg(feature = "lossy-audio")]
 pub mod lossy;
 pub mod lua;
+pub mod lua_table;
 pub mod luac;
 pub mod luac50;
 pub mod luacomp;
@@ -35,6 +37,7 @@ pub mod png_io;
 pub mod png_opt;
 pub mod quantize;
 pub mod refs;
+pub mod refs_tables;
 pub mod render;
 pub mod rle;
 pub mod rsm;
@@ -44,6 +47,7 @@ pub mod spr;
 pub mod str_effect;
 pub mod tga;
 pub mod thumbsdb;
+pub mod translate;
 pub mod unused;
 pub mod version;
 pub mod wav;

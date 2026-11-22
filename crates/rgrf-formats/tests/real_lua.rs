@@ -526,3 +526,79 @@ fn lua50_files_dump_and_compile_back() {
     );
     assert!(different.len() <= 3, "{different:?}");
 }
+
+/// The table rules of `client refs` on the kRO client (`rdata.grf` before `data.grf`, as its
+/// DATA.INI says): the tables are read and nearly every name they hold is a file of the archives.
+#[test]
+fn table_rules_find_the_files_the_kro_tables_name() {
+    use rgrf_formats::map_files::MapSource;
+    use rgrf_formats::refs_tables::check_tables;
+    type Keyed = (Archive, std::collections::HashMap<Vec<u8>, Vec<usize>>);
+    struct Src(Vec<Keyed>);
+    impl Src {
+        fn find(&self, path: &[u8]) -> Option<(usize, usize)> {
+            let key = rgrf_core::GrfPath::new(path.to_vec()).key();
+            self.0
+                .iter()
+                .enumerate()
+                .find_map(|(n, (_, m))| m.get(&key).and_then(|v| v.last()).map(|&i| (n, i)))
+        }
+    }
+    impl MapSource for Src {
+        fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+            let (n, i) = self.find(path)?;
+            Some(self.0[n].0.read(i).ok()?.data)
+        }
+        fn exists(&self, path: &[u8]) -> bool {
+            self.find(path).is_some()
+        }
+        fn list(&self, prefix: &[u8]) -> Vec<Vec<u8>> {
+            let prefix = rgrf_core::GrfPath::new(prefix.to_vec()).key();
+            let mut out: Vec<Vec<u8>> = self
+                .0
+                .iter()
+                .flat_map(|(_, m)| m.keys())
+                .filter(|k| k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            out.sort();
+            out.dedup();
+            out
+        }
+    }
+    let Some(base) = base() else { return };
+    let kro = base.join("0 OTHER CLIENTS/client-kro");
+    let archives = ["rdata.grf", "data.grf"]
+        .iter()
+        .map(|n| {
+            let a = Archive::open(kro.join(n)).unwrap();
+            let k = a.index_by_key();
+            (a, k)
+        })
+        .collect();
+    let r = check_tables(&Src(archives));
+    let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
+    for p in &r.problems {
+        *by_kind.entry(p.problem.kind).or_default() += 1;
+    }
+    eprintln!(
+        "{} tables, {} names, {} problems: {by_kind:?}",
+        r.files,
+        r.names,
+        r.problems.len()
+    );
+    assert!(r.unreadable.is_empty(), "{:?}", r.unreadable);
+    assert!(r.files > 250 && r.names > 40_000, "{} {}", r.files, r.names);
+    // the folders of the rules are right: well under one name in twenty is missing, and every
+    // rule found its table
+    assert!(r.problems.len() * 20 < r.names, "{by_kind:?}");
+    for kind in [
+        "missing_monster_sprite",
+        "missing_headgear_sprite",
+        "missing_item_icon",
+        "missing_skill_icon",
+        "missing_robe_folder",
+    ] {
+        assert!(by_kind.contains_key(kind), "no {kind}: {by_kind:?}");
+    }
+}

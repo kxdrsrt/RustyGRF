@@ -1,5 +1,6 @@
-//! `rgrf client refs`: the files animations (.act) and effects (.str) name, checked against the
-//! client's archives before the client finds them missing ("Resource File Loading fail").
+//! `rgrf client refs`: the files animations (.act), effects (.str) and Lua tables name, checked
+//! against the client's archives before the client finds them missing ("Resource File Loading
+//! fail").
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -7,7 +8,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use rayon::prelude::*;
 use rgrf_core::{GrfPath, NameMode};
-use rgrf_formats::refs;
+use rgrf_formats::{refs, refs_tables};
 use serde_json::json;
 
 use crate::map_cmd::Vfs;
@@ -35,8 +36,9 @@ fn shown(p: &refs::Problem, file: &str, names: NameMode) -> Problem {
     }
 }
 
-/// Checks every animation and effect that wins in the client (or the one GRF) and reports
-/// what they name that is not there. Exit 0 when nothing is wrong, 3 otherwise.
+/// Checks every animation and effect that wins in the client (or the one GRF), and the Lua tables
+/// that have a rule (`only` `lua`: only those), and reports what they name that is not there.
+/// Exit 0 when nothing is wrong, 3 otherwise.
 pub fn check(
     input: &Path,
     only: Option<&str>,
@@ -47,6 +49,7 @@ pub fn check(
 ) -> Result<i32> {
     let vfs = Vfs::open(input)?;
     let wanted = |ext: &str| only.is_none_or(|o| o.eq_ignore_ascii_case(ext));
+    let tables = wanted("lua").then(|| refs_tables::check_tables(&vfs));
     // (archive, entry, path, shown) of the files that win
     let mut work = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -69,8 +72,8 @@ pub fn check(
             }
         }
     }
-    if work.is_empty() {
-        bail!("no animations or effects found");
+    if work.is_empty() && tables.as_ref().is_none_or(|t| t.files == 0) {
+        bail!("no animations, effects or Lua tables found");
     }
     work.sort_by(|a, b| a.4.cmp(&b.4));
     let results: Vec<Vec<Problem>> = work
@@ -98,7 +101,38 @@ pub fn check(
     for p in &problems {
         *by_kind.entry(p.kind).or_default() += 1;
     }
+    // the table problems, by rule and then by missing file
+    let mut table_problems: Vec<Problem> = Vec::new();
+    let mut table_kinds: BTreeMap<&str, usize> = BTreeMap::new();
+    if let Some(t) = &tables {
+        let mut list: Vec<&refs_tables::TableProblem> = t.problems.iter().collect();
+        list.sort_by(|a, b| {
+            (a.table, a.problem.kind, &a.problem.path).cmp(&(
+                b.table,
+                b.problem.kind,
+                &b.problem.path,
+            ))
+        });
+        for p in list {
+            *table_kinds.entry(p.problem.kind).or_default() += 1;
+            let file = GrfPath::new(p.file.clone()).display(names);
+            table_problems.push(shown(&p.problem, &file, names));
+        }
+        for u in &t.unreadable {
+            table_problems.push(Problem {
+                kind: "unreadable_table",
+                file: GrfPath::new(u.clone()).display(names),
+                detail: "compiled Lua that cannot be read".to_string(),
+            });
+        }
+    }
+    let total_problems = problems.len() + table_problems.len();
     let files_with: usize = results.iter().filter(|r| !r.is_empty()).count();
+    let table_files = table_problems
+        .iter()
+        .map(|p| &p.file)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     if json {
         println!(
             "{}",
@@ -106,10 +140,16 @@ pub fn check(
                 "schema_version": crate::SCHEMA_VERSION,
                 "animations_checked": acts,
                 "effects_checked": strs,
-                "files_with_problems": files_with,
-                "problems": problems.len(),
+                "files_with_problems": files_with + table_files,
+                "tables_checked": tables.as_ref().map(|t| t.files),
+                "table_names_checked": tables.as_ref().map(|t| t.names),
+                "table_names_skipped_utf8": tables.as_ref().map(|t| t.skipped_utf8),
+                "problems": total_problems,
                 "by_kind": by_kind,
+                "table_problems": table_problems.len(),
+                "table_by_kind": table_kinds,
                 "list": problems.iter().take(limit).map(|p| json!({"kind": p.kind, "file": p.file, "detail": p.detail})).collect::<Vec<_>>(),
+                "table_list": table_problems.iter().take(limit).map(|p| json!({"kind": p.kind, "file": p.file, "detail": p.detail})).collect::<Vec<_>>(),
             })
         );
     } else {
@@ -138,13 +178,35 @@ pub fn check(
                 folders.len() - limit
             );
         }
+        for p in table_problems.iter().take(limit) {
+            println!("{}: {} ({})", p.file, p.detail, p.kind.replace('_', " "));
+        }
+        if table_problems.len() > limit {
+            println!(
+                "... and {} more from Lua tables (use --limit)",
+                table_problems.len() - limit
+            );
+        }
         let kinds: Vec<String> = by_kind
             .iter()
+            .chain(table_kinds.iter())
             .map(|(k, n)| format!("{n} {}", k.replace('_', " ")))
             .collect();
+        let tables_note = tables.as_ref().map_or(String::new(), |t| {
+            format!(
+                " and {} Lua tables ({} names{})",
+                t.files,
+                t.names,
+                if t.skipped_utf8 > 0 {
+                    format!(", {} in UTF-8 scripts left out", t.skipped_utf8)
+                } else {
+                    String::new()
+                }
+            )
+        });
         println!(
-            "{acts} animations and {strs} effects checked: {} problems in {files_with} files{}",
-            problems.len(),
+            "{acts} animations and {strs} effects{tables_note} checked: {total_problems} problems in {} files{}",
+            files_with + table_files,
             if kinds.is_empty() {
                 String::new()
             } else {
@@ -152,8 +214,8 @@ pub fn check(
             }
         );
         println!(
-            "Not checked: files named by Lua tables, and whether an existing file is valid beyond what is read."
+            "Not checked: names a table gets from other tables or builds at run time (e.g. weapon sprites), and whether an existing file is valid beyond what is read."
         );
     }
-    Ok(if problems.is_empty() { 0 } else { 3 })
+    Ok(if total_problems == 0 { 0 } else { 3 })
 }

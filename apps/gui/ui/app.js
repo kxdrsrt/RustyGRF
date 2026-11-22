@@ -1645,7 +1645,7 @@ async function extractIndices(indices, dest) {
   let rename = false;
   for (;;) {
     try {
-      const r = await invoke("extract", { indices, dest, rename, decompile_lub: !!SET.decompileLub });
+      const r = await invoke("extract", { indices, dest, rename, decompileLub: !!SET.decompileLub });
       setStatus(t("ext-done-status", { files: r.files, dest: r.dest }));
       if (SET.openAfterExtract) invoke("open_folder", { path: r.dest }).catch(() => {});
       await ask(t("ext-done-title"), el("p", { text: `${t("ext-done-body", { files: r.files, dest: r.dest })}${r.damaged ? ` ${t("ext-damaged", { n: r.damaged })}` : ""}` }), [{ label: "OK", value: true, primary: true }], "success");
@@ -2236,12 +2236,32 @@ async function setPalette(row) {
 
 // reference animations (a body or head to fit headgear on) stay chosen between sessions
 const ACT_REFS_KEY = "rustygrf.actReferences";
-const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map(), refs: loadActRefs(), layer: null };
+// what the frame view shows and how it plays; ACT Editor's View, Anchors and settings options
+const ACT_VIEW_KEY = "rustygrf.actView";
+const ACT_VIEW_DEFAULT = { anchors: true, lineH: true, lineV: true, grid: false, pixelated: true, adjacent: false, onion: false, base: false, keepLayer: true, speed: 1, accurate: false };
+const E = { row: null, action: 0, frame: 0, view: null, busy: false, playing: false, timer: 0, sounds: new Map(), refs: loadActRefs(), layer: null, opt: loadActView(), optOpen: false };
+
+function loadActView() {
+  try {
+    const r = JSON.parse(localStorage.getItem(ACT_VIEW_KEY) || "{}");
+    const o = { ...ACT_VIEW_DEFAULT };
+    for (const k of Object.keys(o)) if (typeof r?.[k] === typeof o[k]) o[k] = r[k];
+    if (![0.25, 0.5, 1, 2].includes(o.speed)) o.speed = 1;
+    return o;
+  } catch {
+    return { ...ACT_VIEW_DEFAULT };
+  }
+}
+function saveActView() {
+  try {
+    localStorage.setItem(ACT_VIEW_KEY, JSON.stringify(E.opt));
+  } catch {}
+}
 
 function loadActRefs() {
   try {
     const r = JSON.parse(localStorage.getItem(ACT_REFS_KEY) || "[]");
-    return Array.isArray(r) ? r.filter((x) => typeof x?.path === "string").map((x) => ({ path: x.path, under: !!x.under })) : [];
+    return Array.isArray(r) ? r.filter((x) => typeof x?.path === "string").map((x) => ({ path: x.path, under: !!x.under, hidden: !!x.hidden })) : [];
   } catch {
     return [];
   }
@@ -2284,8 +2304,9 @@ function referenceRow(v) {
   const chips = E.refs.map((r, i) =>
     el(
       "span",
-      { class: "refchip", title: r.path },
+      { class: r.hidden ? "refchip hiddenref" : "refchip", title: r.path },
       el("span", { class: "name", text: r.path.split("\\").pop() }),
+      el("button", { type: "button", class: "small", text: r.hidden ? t("ref-show") : t("ref-hide"), title: t("ref-visible-title"), "aria-pressed": String(!r.hidden), onclick: () => { E.refs[i] = { ...r, hidden: !r.hidden }; saveActRefs(); loadActFrame(); } }),
       el("button", { type: "button", class: "small", text: r.under ? t("ref-behind") : t("ref-front"), title: t("ref-toggle-title"), onclick: () => { E.refs[i] = { ...r, under: !r.under }; saveActRefs(); loadActFrame(); } }),
       el("button", { type: "button", class: "small", text: "✕", "aria-label": t("ref-remove-aria", { path: r.path }), onclick: () => { E.refs.splice(i, 1); saveActRefs(); loadActFrame(); } }),
       problem.get(r.path) ? el("span", { class: "muted", text: problem.get(r.path) }) : null,
@@ -2354,9 +2375,14 @@ async function openTextEditor(row) {
   $("text-body").replaceChildren(el("div", { class: "texted" }, el("div", { class: "bar" }, el("span", { class: "badge", text: doc.format }), save), msg, area));
 }
 
+/** The references that are shown, as the backend takes them ("Use body as base" turns the anchors round). */
+const shownRefs = () => E.refs.filter((r) => !r.hidden).map((r) => ({ path: r.path, under: r.under, base: E.opt.base }));
+
 async function loadActFrame() {
   try {
-    E.view = await invoke("act_frame", { index: E.row.index, action: E.action, frame: E.frame, references: E.refs });
+    const before = E.view;
+    E.view = await invoke("act_frame", { index: E.row.index, action: E.action, frame: E.frame, references: shownRefs(), adjacent: E.opt.adjacent || E.opt.onion });
+    if (!E.opt.keepLayer && before && (before.action !== E.view.action || before.frame !== E.view.frame)) E.layer = null;
     E.action = E.view.action;
     E.frame = E.view.frame;
     drawActEditor();
@@ -2383,6 +2409,8 @@ function stopActPlay() {
 }
 
 // one frame after the other at the action's frame time, with the frames' sounds
+const actPlayDelay = () => Math.max(16, (E.view.interval_ms * (E.opt.accurate ? 24 / 25 : 1)) / E.opt.speed);
+
 async function actPlayStep() {
   if (!E.playing || !$("act-dlg").open) return stopActPlay();
   const started = performance.now();
@@ -2390,7 +2418,7 @@ async function actPlayStep() {
   await loadActFrame();
   if (!E.playing) return;
   playActSound(E.view.sound);
-  E.timer = setTimeout(actPlayStep, Math.max(16, E.view.interval_ms - (performance.now() - started)));
+  E.timer = setTimeout(actPlayStep, Math.max(16, actPlayDelay() - (performance.now() - started)));
 }
 
 function toggleActPlay() {
@@ -2402,7 +2430,7 @@ function toggleActPlay() {
   E.playing = true;
   drawActEditor();
   playActSound(E.view.sound);
-  E.timer = setTimeout(actPlayStep, Math.max(16, E.view.interval_ms));
+  E.timer = setTimeout(actPlayStep, actPlayDelay());
 }
 
 async function actEdit(edit) {
@@ -2600,18 +2628,20 @@ async function actScriptImageFx(kind) {
 const SETUP_REF_KEY = "rustygrf-setup-reference";
 
 /**
- * ACT Editor's "Setup Headgear/Head": every image of the reference head gets the image of this
- * animation that belongs to it, and how far it lies from it; the whole animation (all directions,
- * frames and mirrored copies) is then built from that.
+ * ACT Editor's "Setup Headgear/Head/Garment": every image of the reference (a head, or the body
+ * for a garment) gets the image of this animation that belongs to it, and how far it lies from it;
+ * the whole animation (all directions, frames and mirrored copies) is then built from that.
  */
-async function actSetup(head) {
+async function actSetup(kind) {
   if (E.busy) return;
   stopActPlay();
-  const title = t(head ? "as-setup-head" : "as-setup-headgear");
+  const garment = kind === "garment";
+  const title = t(`as-setup-${kind}`);
   const female = /[\\/]여[_\\/]/.test(E.row.name);
-  const last = localStorage.getItem(SETUP_REF_KEY);
-  const ref = el("input", { type: "text", class: "field", list: "setup-presets", spellcheck: "false", value: last || REF_PRESETS()[female ? 3 : 2][0] });
-  const presets = el("datalist", { id: "setup-presets" }, REF_PRESETS().slice(2).map(([v, label]) => el("option", { value: v, label })));
+  const refKey = garment ? `${SETUP_REF_KEY}-garment` : SETUP_REF_KEY;
+  const last = localStorage.getItem(refKey);
+  const ref = el("input", { type: "text", class: "field", list: "setup-presets", spellcheck: "false", value: last || REF_PRESETS()[(garment ? 0 : 2) + (female ? 1 : 0)][0] });
+  const presets = el("datalist", { id: "setup-presets" }, (garment ? REF_PRESETS().slice(0, 2) : REF_PRESETS().slice(2)).map(([v, label]) => el("option", { value: v, label })));
   const table = el("div", { style: "max-height:50vh;overflow:auto" });
   const problem = el("p", { class: "error", role: "alert" });
   let info = null;
@@ -2624,7 +2654,7 @@ async function actSetup(head) {
       el(
         "table",
         {},
-        el("thead", {}, el("tr", {}, ...["as-setup-th-ref", "as-setup-th-image", "", "x", "y"].map((k) => el("th", { text: k ? (k.length > 1 ? t(k) : k) : "" })))),
+        el("thead", {}, el("tr", {}, ...[garment ? "as-setup-th-ref-body" : "as-setup-th-ref", "as-setup-th-image", "", "x", "y"].map((k) => el("th", { text: k ? (k.length > 1 ? t(k) : k) : "" })))),
         el(
           "tbody",
           {},
@@ -2654,8 +2684,8 @@ async function actSetup(head) {
   const load = async () => {
     problem.textContent = "";
     try {
-      info = await invoke("act_setup_info", { index: E.row.index, reference: ref.value });
-      localStorage.setItem(SETUP_REF_KEY, ref.value.trim());
+      info = await invoke("act_setup_info", { index: E.row.index, reference: ref.value, garment });
+      localStorage.setItem(refKey, ref.value.trim());
       draw();
     } catch (e) {
       info = null;
@@ -2664,14 +2694,14 @@ async function actSetup(head) {
     }
   };
   const loadBtn = el("button", { type: "button", class: "small", text: t("as-setup-load"), onclick: load });
-  const body = [el("p", { text: t(head ? "as-setup-head-intro" : "as-setup-headgear-intro") }), formRow(t("as-setup-ref"), ref), presets, loadBtn, problem, table, el("p", { class: "muted", text: t("as-setup-note") })];
+  const body = [el("p", { text: t(`as-setup-${kind}-intro`) }), formRow(t(garment ? "as-setup-ref-body" : "as-setup-ref"), ref), presets, loadBtn, problem, table, el("p", { class: "muted", text: t("as-setup-note") })];
   const go = ask(title, body, [{ label: t("as-apply"), value: true, primary: true }, { label: "Cancel", value: null }]);
   load();
   if (!(await go) || !info) return;
   E.busy = true;
   try {
-    const choices = rows.map((r) => ({ image: Number(r.sel.value), dx: Math.round(Number(r.dx.value) || 0), dy: Math.round(Number(r.dy.value) || 0) }));
-    setPending(await invoke("stage_act_setup", { index: E.row.index, reference: ref.value, head, choices }));
+    const choices = rows.map((r, i) => ({ image: Number(r.sel.value), dx: Math.round(Number(r.dx.value) || 0), dy: Math.round(Number(r.dy.value) || 0), reference_image: info.rows[i].reference_image }));
+    setPending(await invoke("stage_act_setup", { index: E.row.index, reference: ref.value, kind, choices }));
   } catch (e) {
     E.busy = false;
     await note(title, errText(e), true);
@@ -2679,6 +2709,76 @@ async function actSetup(head) {
   }
   E.busy = false;
   await loadActFrame();
+}
+
+const SAVE_GARMENT_KEY = "rustygrf-save-garment";
+
+/**
+ * ACT Editor's "Save as garment": this animation becomes the animations of a garment (cape, wings)
+ * for every job and both genders, as new entries of the archive. Optionally the animations of the
+ * kRO garment with the closest sprite are taken and fitted to this sprite.
+ */
+async function actSaveGarment() {
+  if (E.busy) return;
+  stopActPlay();
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(SAVE_GARMENT_KEY) || "{}") || {};
+  } catch {}
+  const base = el("input", { type: "text", class: "field", value: saved.base || "custom_wing", spellcheck: "false", "aria-label": t("sg-name") });
+  const folder = el("input", { type: "text", class: "field", value: saved.folder || "data\\sprite\\로브\\", spellcheck: "false", "aria-label": t("sg-folder") });
+  const dx = numberField(saved.dx ?? 0);
+  const dy = numberField(saved.dy ?? 0);
+  const copy = el("input", { type: "checkbox", checked: !!saved.copy_spr });
+  const guess = el("input", { type: "checkbox", checked: saved.guess !== false });
+  const robe = el("select", { class: "field", "aria-label": t("sg-robe") }, el("option", { value: "", text: t("sg-robe-best") }));
+  const hint = el("p", { class: "muted", text: t("pvw-loading") });
+  const jobs = el("textarea", { class: "field", rows: "6", style: "width:100%;font-family:monospace", spellcheck: "false", "aria-label": t("sg-jobs") });
+  jobs.value = await invoke("act_garment_jobs");
+  const sync = () => (robe.disabled = !guess.checked);
+  guess.addEventListener("change", sync);
+  const row = (input, text) => el("label", { class: "check" }, input, ` ${text}`);
+  const go = ask(
+    t("sg-title"),
+    [
+      el("p", { text: t("sg-intro") }),
+      formRow(t("sg-name"), base),
+      formRow(t("sg-folder"), folder),
+      el("p", {}, el("label", {}, `${t("sg-dx")} `, dx), " ", el("label", {}, `${t("sg-dy")} `, dy)),
+      row(copy, t("sg-copy-spr")),
+      row(guess, t("sg-guess")),
+      formRow(t("sg-robe"), robe),
+      hint,
+      el("details", {}, el("summary", { text: t("sg-jobs") }), el("p", { class: "muted", text: t("sg-jobs-note") }), jobs),
+    ],
+    [{ label: t("sg-save"), value: true, primary: true }, { label: "Cancel", value: null }],
+  );
+  invoke("act_garment_matches", { index: E.row.index })
+    .then((list) => {
+      robe.append(...list.map((m) => el("option", { value: m.name, text: `${m.name} (${(m.ratio * 100).toFixed(1)} %)` })));
+      hint.textContent = list.length ? t("sg-matches", { n: list.length }) : t("sg-no-matches");
+      if (!list.length) {
+        guess.checked = false;
+        guess.disabled = true;
+      }
+      sync();
+    })
+    .catch((e) => (hint.textContent = errText(e)));
+  if (!(await go)) return;
+  const spec = { base: base.value, folder: folder.value, dx: Math.round(Number(dx.value) || 0), dy: Math.round(Number(dy.value) || 0), copy_spr: copy.checked, guess: guess.checked, robe: guess.checked && robe.value ? robe.value : null, jobs: jobs.value };
+  E.busy = true;
+  try {
+    const [pending, report] = await invoke("stage_save_garment", { index: E.row.index, spec });
+    setPending(pending);
+    setStatus(t("sg-status", { n: report.files, name: spec.base }));
+    localStorage.setItem(SAVE_GARMENT_KEY, JSON.stringify({ base: spec.base, folder: spec.folder, dx: spec.dx, dy: spec.dy, copy_spr: spec.copy_spr, guess: spec.guess }));
+    if (report.robe) await note(t("sg-title"), t("sg-done-guess", { n: report.files, robe: report.robe, ratio: (report.ratio * 100).toFixed(1) }));
+  } catch (e) {
+    E.busy = false;
+    await note(t("sg-title"), errText(e), true);
+    return;
+  }
+  E.busy = false;
 }
 
 async function actDefaultAnchors(female) {
@@ -2724,8 +2824,10 @@ function actScriptsMenu(ev, v) {
       { label: t("as-fx-cut"), run: () => actScriptImageFx("cut") },
       { label: t("as-fx-outline"), run: () => actScriptImageFx("outline") },
       "-",
-      { label: t("as-setup-headgear"), run: () => actSetup(false) },
-      { label: t("as-setup-head"), run: () => actSetup(true) },
+      { label: t("as-setup-headgear"), run: () => actSetup("headgear") },
+      { label: t("as-setup-head"), run: () => actSetup("head") },
+      { label: t("as-setup-garment"), run: () => actSetup("garment") },
+      { label: t("as-save-garment"), run: actSaveGarment },
       "-",
       { label: t("as-anchors-male"), run: () => actDefaultAnchors(false) },
       { label: t("as-anchors-female"), run: () => actDefaultAnchors(true) },
@@ -2882,6 +2984,14 @@ function wireStage(stage, v) {
     drawActEditor();
   });
   stage.addEventListener("keydown", (e) => {
+    // frame by frame: Page up / Page down; Space plays and stops
+    if (e.key === " " || e.key === "PageUp" || e.key === "PageDown") {
+      e.preventDefault();
+      if (e.key === " ") return toggleActPlay();
+      stopActPlay();
+      E.frame = Math.max(0, Math.min(v.frames - 1, E.frame + (e.key === "PageDown" ? 1 : -1)));
+      return loadActFrame();
+    }
     const step = e.shiftKey ? 10 : 1;
     const dir = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
     if (!dir) return;
@@ -2935,8 +3045,19 @@ function drawActEditor() {
   const stage = el("div", { class: "stage checker", tabindex: "0", "data-act-stage": "", role: "group", "aria-roledescription": t("act-stage-role"), "aria-label": `${t("act-stage-aria", { n: v.frame + 1 })}${E.layer != null ? ` ${t("act-stage-sel", { n: E.layer })}` : ""}` });
   if (v.png) {
     const z = actZoom();
-    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width * z, height: v.height * z, alt: "", draggable: "false" }), el("div", { class: "cross-h", style: `top:${v.origin_y * z}px` }), el("div", { class: "cross-v", style: `left:${v.origin_x * z}px` }));
-    v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: t("act-anchor-title", { n: i }), "data-anchor": String(i), style: `left:${(v.origin_x + a.x * v.scale) * z}px;top:${(v.origin_y + a.y * v.scale) * z}px` })));
+    const smooth = E.opt.pixelated ? "" : "image-rendering:auto";
+    stage.append(el("img", { src: dataUrl("image/png", v.png), width: v.width * z, height: v.height * z, alt: "", draggable: "false", style: smooth }));
+    // the neighbouring frames as a faint copy over the picture (onion skin)
+    if (E.opt.onion) for (const png of [v.prev_png, v.next_png]) if (png) stage.append(el("img", { class: "ghost", src: dataUrl("image/png", png), width: v.width * z, height: v.height * z, alt: "", draggable: "false", style: smooth }));
+    if (E.opt.grid) {
+      let step = 1;
+      while (v.width / v.scale / step > 50) step *= 2;
+      const cell = step * v.scale * z;
+      stage.append(el("div", { class: "pixgrid", style: `background-size:${cell}px ${cell}px;background-position:${(v.origin_x * z) % cell}px ${(v.origin_y * z) % cell}px` }));
+    }
+    if (E.opt.lineH) stage.append(el("div", { class: "cross-h", style: `top:${v.origin_y * z}px` }));
+    if (E.opt.lineV) stage.append(el("div", { class: "cross-v", style: `left:${v.origin_x * z}px` }));
+    if (E.opt.anchors) v.anchors.forEach((a, i) => stage.append(el("div", { class: "dot", title: t("act-anchor-title", { n: i }), "data-anchor": String(i), style: `left:${(v.origin_x + a.x * v.scale) * z}px;top:${(v.origin_y + a.y * v.scale) * z}px` })));
     const b = E.layer != null ? v.layers[E.layer]?.bounds : null;
     if (b) stage.append(layerBox(b));
     wireStage(stage, v);
@@ -2954,7 +3075,33 @@ function drawActEditor() {
     e.preventDefault();
     setActZoom(e.deltaY < 0 ? 1 : -1);
   }, { passive: false });
-  const left = el("div", {}, zoomBar, el("div", { class: "stagewrap" }, stage), v.error ? el("p", { class: "muted", text: t("act-no-picture", { error: v.error }) }) : null, el("p", { class: "muted", text: t("act-stage-note") }));
+  // what the picture shows and how it plays; each choice stays between sessions
+  const toggle = (key, label, title, reload) =>
+    el("label", { class: "check", title }, el("input", { type: "checkbox", checked: E.opt[key], onchange: (e) => { E.opt[key] = e.target.checked; saveActView(); if (reload) loadActFrame(); else drawActEditor(); } }), ` ${label}`);
+  const speed = el("select", { "aria-label": t("act-opt-speed"), onchange: () => { E.opt.speed = Number(speed.value); saveActView(); if (E.playing) { clearTimeout(E.timer); E.timer = setTimeout(actPlayStep, actPlayDelay()); } } }, [0.25, 0.5, 1, 2].map((s) => el("option", { value: String(s), text: `${s}×`, selected: s === E.opt.speed })));
+  const viewOpts = el(
+    "details",
+    { class: "viewopts", open: E.optOpen, ontoggle: (e) => (E.optOpen = e.target.open) },
+    el("summary", { text: t("act-opt-heading") }),
+    el(
+      "div",
+      { class: "bar" },
+      toggle("anchors", t("act-opt-anchors"), t("act-opt-anchors-title")),
+      toggle("lineH", t("act-opt-line-h"), t("act-opt-line-title")),
+      toggle("lineV", t("act-opt-line-v"), t("act-opt-line-title")),
+      toggle("grid", t("act-opt-grid"), t("act-opt-grid-title")),
+      toggle("pixelated", t("act-opt-pixelated"), t("act-opt-pixelated-title")),
+      toggle("adjacent", t("act-opt-adjacent"), t("act-opt-adjacent-title"), true),
+      toggle("onion", t("act-opt-onion"), t("act-opt-onion-title"), true),
+      toggle("base", t("act-opt-base"), t("act-opt-base-title"), true),
+      toggle("keepLayer", t("act-opt-keep"), t("act-opt-keep-title")),
+      toggle("accurate", t("act-opt-accurate"), t("act-opt-accurate-title")),
+      el("label", { class: "muted", text: `${t("act-opt-speed")} ` }, speed),
+    ),
+  );
+  const side = (png, label) => (png ? el("figure", { class: "adjframe" }, el("img", { src: dataUrl("image/png", png), width: v.width * actZoom(), height: v.height * actZoom(), alt: label, draggable: "false", style: E.opt.pixelated ? "" : "image-rendering:auto" }), el("figcaption", { class: "muted", text: label })) : null);
+  const adjacent = E.opt.adjacent && v.png && (v.prev_png || v.next_png) ? el("div", { class: "adjrow" }, side(v.prev_png, t("act-adj-prev", { n: (v.frame + v.frames - 1) % v.frames + 1 })), side(v.next_png, t("act-adj-next", { n: (v.frame + 1) % v.frames + 1 }))) : null;
+  const left = el("div", {}, zoomBar, viewOpts, el("div", { class: "stagewrap" }, stage), adjacent, v.error ? el("p", { class: "muted", text: t("act-no-picture", { error: v.error }) }) : null, el("p", { class: "muted", text: t("act-stage-note") }));
   const head = ["#", t("act-th-type"), t("act-th-image"), "x", "y", t("act-th-mirror"), v.separate_scale ? t("act-th-scale-xy") : t("act-th-scale"), t("act-th-rot"), t("act-th-colour"), "α", ""];
   const rows = v.layers.map((l, i) => {
     const typeSel = el("select", { onchange: () => setL(i, { sprite_type: Number(typeSel.value) }) }, el("option", { value: 0, text: t("act-type-palette", { n: v.indexed_images }), selected: l.sprite_type === 0 }), el("option", { value: 1, text: t("act-type-rgba", { n: v.rgba_images }), selected: l.sprite_type === 1 }));
@@ -3073,10 +3220,11 @@ async function doNewAct() {
   const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
   const folder = sel ? (sel.folder ? `${sel.name}\\` : sel.name.slice(0, sel.name.lastIndexOf("\\") + 1)) : "data\\sprite\\";
   const path = el("input", { type: "text", class: "field", value: `${folder}new.act`, spellcheck: "false", "aria-label": t("tpl-path") });
-  const go = await ask(t("tpl-title"), [el("p", { text: t("tpl-intro") }), formRow(t("tpl-kind"), kind), formRow(t("tpl-path"), path)], [{ label: t("dlg-add"), value: true, primary: true }, { label: "Cancel", value: null }]);
+  const withSpr = el("input", { type: "checkbox", checked: true });
+  const go = await ask(t("tpl-title"), [el("p", { text: t("tpl-intro") }), formRow(t("tpl-kind"), kind), formRow(t("tpl-path"), path), el("label", { class: "check" }, withSpr, ` ${t("tpl-spr")}`), el("p", { class: "muted", text: t("tpl-note") })], [{ label: t("dlg-add"), value: true, primary: true }, { label: "Cancel", value: null }]);
   if (!go) return;
   try {
-    setPending(await invoke("stage_new_act", { path: path.value, kind: kind.value }));
+    setPending(await invoke("stage_new_act", { path: path.value, kind: kind.value, spr: withSpr.checked }));
     setStatus(t("add-status", { path: path.value }));
   } catch (e) {
     await note(t("tpl-title"), errText(e), true);
@@ -3494,6 +3642,84 @@ async function openAbout() {
   await ask(t("about-title"), body, [{ label: "OK", value: true, primary: true }]);
 }
 
+// ---------- updates ----------
+
+const UPDATE_REPO = "kxdrsrt/RustyGRF";
+
+/** "v1.2.3-beta.1" → [1, 2, 3]; anything that is not a version gives []. */
+const versionParts = (v) => (/^v?(\d+(?:\.\d+)*)/.exec(String(v || "").trim())?.[1] ?? "").split(".").filter(Boolean).map(Number);
+
+/** True when version `a` is newer than `b`. */
+function isNewer(a, b) {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
+/** The installer of the latest release that fits this system, else the release page. */
+function releaseDownload(release) {
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  const wanted = /Mac/i.test(platform) ? [/\.dmg$/i] : /Win/i.test(platform) ? [/\.msi$/i, /\.exe$/i] : [/\.AppImage$/i, /\.deb$/i];
+  const assets = (release.assets || []).filter((a) => typeof a.browser_download_url === "string");
+  for (const re of wanted) {
+    const fits = assets.filter((a) => re.test(a.name));
+    // with several builds (x64 and ARM) the page cannot tell which one this machine needs: let the release page choose
+    if (fits.length === 1) return fits[0].browser_download_url;
+    if (fits.length > 1) break;
+  }
+  return release.html_url;
+}
+
+/** Help › Check for Updates, and the same check once at start. Only a newer release shows anything at start. */
+async function checkForUpdates(manual) {
+  let current = "";
+  try {
+    current = (await T.app?.getVersion?.()) || "";
+  } catch {}
+  if (!current && !manual) return;
+  let release;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
+    if (r.status === 404) {
+      if (manual) await note(t("upd-title"), t("upd-none-yet"));
+      return;
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    release = await r.json();
+  } catch (e) {
+    if (manual) await note(t("upd-title"), t("upd-failed", { reason: String(e?.message || e) }), true);
+    return;
+  }
+  const latest = String(release.tag_name || "").replace(/^v/i, "");
+  if (!isNewer(latest, current || "0")) {
+    if (manual) await note(t("upd-title"), t("upd-latest", { version: current || latest }));
+    return;
+  }
+  if (!manual && SET.skipVersion === latest) return;
+  const notes = String(release.body || "").trim();
+  const body = [
+    el("p", { text: t("upd-available", { latest, current: current || "?" }) }),
+    notes ? el("pre", { class: "update-notes", text: notes.length > 1500 ? `${notes.slice(0, 1500)} …` : notes }) : null,
+    el("p", { class: "muted", text: t("upd-hint") }),
+  ];
+  const choice = await ask(t("upd-title"), body, [
+    { label: t("upd-download"), value: "get", primary: true },
+    { label: t("upd-notes"), value: "notes" },
+    { label: t("upd-skip"), value: "skip" },
+    { label: t("upd-later"), value: null },
+  ], "info");
+  if (choice === "get") invoke("open_link", { url: releaseDownload(release) }).catch(() => {});
+  else if (choice === "notes") invoke("open_link", { url: release.html_url }).catch(() => {});
+  else if (choice === "skip") {
+    SET.skipVersion = latest;
+    saveSettings();
+  }
+}
+
 async function saveEdited() {
   const base = S.info.file_name.replace(/\.[^.]+$/, "");
   const dst = await T.dialog.save({ title: t("save-pick"), defaultPath: `${base}-edited.grf`, filters: [{ name: "GRF archives", extensions: ["grf"] }] });
@@ -3772,7 +3998,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, openAfterExtract: false, extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, openAfterExtract: false, extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", checkUpdates: true, skipVersion: "", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -3902,6 +4128,7 @@ function openSettings() {
       row(t("set-tabs"), check("tabs", t("set-tabs-open"))),
       row(t("set-thor-hash"), check("thorIntegrity", t("set-thor-hash-on")), t("set-thor-hash-hint")),
       row(t("set-tree"), check("rememberTree", t("set-tree-remember")), t("set-tree-hint")),
+      row(t("set-updates"), check("checkUpdates", t("set-updates-on")), t("set-updates-hint")),
       el("h3", { text: t("set-extracting") }),
       row(t("set-decompile"), check("decompileLub", t("set-decompile-on")), t("set-decompile-hint")),
       row(t("set-open-after"), check("openAfterExtract", t("set-open-after-on"))),
@@ -4040,7 +4267,7 @@ function entryMenu(list, row) {
     items.push({ label: t("ctx-extract-root"), icon: "extract", run: guard(async () => {
       const dest = await pickExtractDest();
       if (!dest) return;
-      const indices = await invoke("folder_entries", { view: list.view, path: row.name, root_only: true });
+      const indices = await invoke("folder_entries", { view: list.view, path: row.name, rootOnly: true });
       if (!indices.length) return note(t("ext-title"), t("ext-empty-root"));
       return extractIndices(indices, dest);
     }) });
@@ -4819,6 +5046,7 @@ const MENU_ACTIONS = {
   "save-decrypt": () => saveDialog("decrypt"),
   "archive-settings": () => saveDialog("settings"),
   about: openAbout,
+  "check-updates": () => checkForUpdates(true),
   hash: doHashes,
   compare: doCompare,
   "search-contents": doSearchContents,
@@ -4872,6 +5100,9 @@ buildKindFilter();
 requestAnimationFrame(() => setTimeout(() => invoke("window_ready").catch(() => {}), 0));
 invoke("set_tabs_enabled", { on: SET.tabs !== false }).catch(() => {});
 refreshTabs();
+
+// once per start, from the first window only, after the window has settled
+if (SET.checkUpdates && T.window?.getCurrentWindow?.().label === "main") setTimeout(() => checkForUpdates(false).catch(() => {}), 4000);
 
 invoke("startup_path")
   .then(async (p) => {

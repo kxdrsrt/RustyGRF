@@ -27,6 +27,11 @@ pub trait MapSource {
     /// The decoded content, if the path exists and can be read.
     fn read(&self, path: &[u8]) -> Option<Vec<u8>>;
     fn exists(&self, path: &[u8]) -> bool;
+    /// The files whose path (compared like the client does: lower case, `\` as separator) starts with
+    /// `prefix`, as keys. Sources that cannot list return nothing.
+    fn list(&self, _prefix: &[u8]) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

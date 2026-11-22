@@ -1,51 +1,123 @@
 # RustyGRF
 
-Ein modernes, plattformunabhängiges Werkzeug für Ragnarok-Online-Archive (GRF/GPF/Thor), inspiriert von Tokeiburus **GRF Editor**.
+One tool for **Ragnarok Online** GRF (Gravity Resource File) archives, sprites, animations, palettes and maps, on macOS, Windows and Linux.
 
-**Status:** M0 (Grundlagen), **M1 (Lesen, Prüfen, Extrahieren von GRF 0x200)** und **M1b (GRF 0x300)**, **M2 (`build`, `repack`)** und **M3 (`diff`, `merge`, `patch`)** und **M4 (MCP-Server `rgrf-mcp`, jetzt 13 Tools)** sind abgeschlossen: `rgrf info|ls|find|cat|extract|verify|hash|build|repack|diff|merge|patch` läuft auf allen Test-Archiven; Lesen stimmt mit GRF Editor überein, geschriebene Archive liest GRF Editor ohne Abweichung und die LZMA-Variante läuft im Dev-Client (siehe [docs/03-roadmap.md](docs/03-roadmap.md)). **M5 (Plattformen)**: Tests bestanden auf macOS ARM64, Linux ARM64, Windows ARM64 und x64; CI-Konfiguration liegt bereit, läuft erst nach dem GitHub-Push. **M7a (SPR lesen/schreiben, PNG-Export) ist umgesetzt** (`rgrf spr`), siehe [docs/09-formats.md](docs/09-formats.md); **PAL und ACT (lesen, schreiben, als PNG rendern: `rgrf act`)** ebenfalls; **Bearbeiten (Bild ersetzen/anhängen/entfernen, Palette tauschen, Versatz, Intervall, Aktionen)** ebenfalls; **GIF-Export und Anker-Bindung (Kopf, Kopfbedeckung am Körper)** auch; **Lua-Syntaxprüfung (`rgrf lua check`) und Client-Prüfung (`rgrf client check`)** auch; **Karten (GAT, GND, RSW: `rgrf map info|png|check`)** ebenfalls; **Modelle (RSM) strukturell lesen, Modell-Texturen im Karten-Check**; **erster Wurf der App (M8, `apps/gui`, Tauri 2: Archiv öffnen, suchen, Vorschau, extrahieren, prüfen)** läuft, siehe [apps/gui/README.md](apps/gui/README.md); nächster Schritt: App ausbauen (Bauen, Zusammenführen, Bearbeiten), GND/STR. Lokales Git-Repo, **kein Remote, kein Push**. Golden Files aus der Windows-VM liegen vor (`tests/golden/`). Offene Fragen: [docs/rueckfragen/](docs/rueckfragen/README.md) (aktuell Version 7).
+RustyGRF is a desktop app, a command-line tool (`rgrf`) and an MCP server (`rgrf-mcp`) built on the same Rust libraries. It opens, checks, edits, builds, merges and encrypts GRF, GPF, Thor and RGZ archives, and shows and edits the files inside them.
 
-**Lizenz:** `MIT OR Apache-2.0`. **Inspiration/Credits:** GRF Editor und ActEditor von Tokeiburu (mit seiner Erlaubnis; RustyGRF ist kein Fork), LessGRF von Curiosity. Siehe `NOTICE`.
+> **Status: 0.1.0, beta.** Everything below is implemented and tested, mostly against real kRO client archives (`data.grf` with 202,358 entries). Not everything has been tried in the game yet; see [Status and limits](#status-and-limits).
 
-## Ziele
-1. **Kern-Bibliothek + CLI** (`rgrf`): lesen, auflisten, prüfen, extrahieren, bauen, neu komprimieren, diff/merge/patch.
-2. **MCP-Server**, damit KI-Agenten GRFs direkt untersuchen und bauen können.
-3. **Cross-Platform:** Windows, macOS, Linux (x64 und ARM64), eine einzelne Binärdatei, keine native `cps.dll`-Abhängigkeit.
-4. **Bessere Kompression** bei voller Client-Kompatibilität (Zopfli) und optional LZMA (inoffizielle LessGRF-Erweiterung).
-5. Später: Format-Bibliotheken (SPR, ACT, PAL, GAT, GND, RSW, RSM, STR) und eine Oberfläche mit Vorschau.
+## Features
 
-## Nicht-Ziele (vorerst)
-- Kein Ersatz der kompletten GRF-Editor-GUI in der ersten Version.
-- GRF Editors Verschlüsselung (Passwort, `cps.dll`) wird unterstützt, Gravitys Schutz (Flag 0x80, 0x300 mit Schlüsselblock) nicht (siehe [docs/02-format-notes.md](docs/02-format-notes.md)).
+**Archives**
+- Read, list, search, verify, extract, build, repack, merge, diff and patch archives. GRF 0x102, 0x103, 0x200 and 0x300 (read and write), GPF, GSF, Thor and RGZ.
+- Compression: zlib (works in every client), Zopfli (smaller, still zlib) and LZMA (needs an LZMA-capable `cps.dll`).
+- Names are shown as Korean (CP949) by default, or as Latin-1 / UTF-8.
+- Encrypt and decrypt single entries or the file table with GRF Editor's password scheme.
+- Edit an archive in place with undo/redo, a crash-safe draft, and verified saves (the result is written next to the archive, checked, then swapped in).
 
-## Dokumente
-| Datei | Inhalt |
-|---|---|
-| [docs/01-architecture.md](docs/01-architecture.md) | Aufbau, Crates, Datenfluss, Technologie-Entscheidungen |
-| [docs/02-format-notes.md](docs/02-format-notes.md) | GRF-Format, Kompression, Dateinamen, was belegt/offen ist |
-| [docs/03-roadmap.md](docs/03-roadmap.md) | Meilensteine mit Abnahmekriterien, Risiken, Testdaten |
-| [docs/04-cli-and-mcp.md](docs/04-cli-and-mcp.md) | Befehle, Ausgabeformate, MCP-Tools, Sicherheit |
-| [docs/05-licensing.md](docs/05-licensing.md) | Erlaubnis von Tokeiburu, Lizenz, Clean-Room-Regeln |
-| [docs/06-tooling-and-workflow.md](docs/06-tooling-and-workflow.md) | Modellwahl, Voraussetzungen auf dem Rechner, MCPs (Context7 u. a.), Arbeitsweise |
-| [docs/07-ui-ux.md](docs/07-ui-ux.md) | GUI-Technik (Tauri), UX-Prinzipien, Hauptansicht, Design Tokens |
-| [docs/09-formats.md](docs/09-formats.md) | Dateiformate im Client (SPR, später ACT, PAL, ...), Aufbau und Messungen |
-| [docs/10-feature-matrix.md](docs/10-feature-matrix.md) | Funktionen von GRF Editor und ACT Editor gegen RustyGRF (Plan M7) |
-| [docs/08-translation.md](docs/08-translation.md) | Übersetzung (RO Translation Project) in `core.grf`/`cdata.grf` einspielen, Werkzeug und Messungen |
-| [BENCHMARKS.md](BENCHMARKS.md) | Messungen gegen GRF Editor (`GrfCL`) und auf macOS, ehrlich mit Grenzen (Englisch, für Showcase) |
-| [docs/rueckfragen/](docs/rueckfragen/README.md) | Rückfragen, Antworten, Entscheidungen (je Runde eine versionierte Datei; aktuell v7) |
-| [docs/MASTERPROMPT.md](docs/MASTERPROMPT.md) | Prompt für eine neue Session, um sofort loszulegen |
+**Files inside archives**
+- **Sprites (SPR):** preview, edit pixels, replace or insert frames, convert indexed ⇄ RGBA, export and import PNG.
+- **Animations (ACT):** preview with GIF export, an editor for layers, anchors, sounds, frames and actions, in-betweens, mirror/reverse, scripts, "Setup Headgear/Head/Garment", new ACT from templates.
+- **Palettes (PAL):** view, edit, hue/saturation/brightness, preview a sprite with another palette.
+- **Maps:** GAT, GND, RSW, RSM/RSM2 with a 3D preview, extract a map with every file it needs, downgrade maps for older clients, find missing files.
+- **Lua:** syntax check, compile and decompile `.lub` (Lua 5.0 and 5.1), search inside compiled files.
+- **Audio:** play and edit WAV, MP3 and OGG (trim, cut, fade, gain, resample, effects).
+- **Rare formats:** BSON ⇄ JSON, EBM emblems, ICO, IMF, FNA, `Thumbs.db`, STR effects.
+- **Client checks:** `DATA.INI` priority, hidden files, server address, missing resources (including names from Lua tables), translation update.
 
-## Verwandte Recherche
-`RO/docs/grf-research/` (LZMA, data vs rdata, Messwerte, Roh-Transkripte der Forum-Threads).
+**App**
+- Tree, details, folders and gallery views, search by name or pattern, filters, tabs and multiple windows.
+- Dark and light theme, four accent colours, nine languages (English, German, Spanish, French, Indonesian, Japanese, Korean, Brazilian Portuguese, Filipino; all but English are machine drafts).
+- A native menu bar, file associations for `.grf`, `.gpf`, `.gsf`, `.thor` and `.rgz`, and an update check against the latest GitHub release.
 
-## Schnellstart
+## Download
+
+Installers and command-line archives are attached to each [release](../../releases/latest):
+
+| System | App | Command line |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `.dmg` | `rustygrf-cli-macos-arm64.tar.gz` |
+| Windows x64 | `.msi` or `-setup.exe` | `rustygrf-cli-windows-x64.tar.gz` |
+| Windows ARM64 | `-setup.exe` | `rustygrf-cli-windows-arm64.tar.gz` |
+| Linux x64 | `.AppImage` or `.deb` | `rustygrf-cli-linux-x64.tar.gz` |
+| Linux ARM64 | `.AppImage` or `.deb` | `rustygrf-cli-linux-arm64.tar.gz` |
+
+**The installers are not code-signed** (no paid Apple or Microsoft developer account), so the system warns on first start:
+- **macOS:** right-click the app → *Open*, or run `xattr -dr com.apple.quarantine /Applications/RustyGRF.app`.
+- **Windows:** SmartScreen → *More info* → *Run anyway*.
+
+Intel Macs are not built; build from source instead.
+
+## Command line
+
 ```sh
-cargo build --release                      # Ergebnis in target/ (oder dem Verzeichnis aus .cargo/config.toml)
-rgrf info  data.grf                        # Version, Größe, Einträge
-rgrf ls    data.grf "*.lub" --long         # suchen/auflisten
-rgrf verify data.grf                       # Tabelle prüfen, jeden Eintrag dekodieren
-rgrf extract data.grf ./out "data/sprite*" # entpacken (überschreibt nie ohne --overwrite)
-rgrf build ./out -o neu.grf --method lzma --dedupe   # GRF aus Ordner (Ordner = Archivwurzel)
-rgrf merge custom.grf data.grf -o merged.grf         # das ERSTE Archiv gewinnt (wie DATA.INI)
-rgrf diff a.grf b.grf                      # Unterschiede nach Pfad und Inhalt
+rgrf info  data.grf                          # version, size, entry counts
+rgrf ls    data.grf "*.lub" --long           # search and list
+rgrf verify data.grf                         # check the table and decode every entry
+rgrf extract data.grf ./out "data/sprite*"   # never overwrites without --overwrite
+rgrf build ./out -o new.grf --method lzma --dedupe
+rgrf merge custom.grf data.grf -o merged.grf # the FIRST archive wins, like DATA.INI
+rgrf diff a.grf b.grf                        # differences by path and content
+rgrf patch old.grf new.grf -o update.grf     # only what is new or different
+rgrf --help                                  # act, spr, pal, map, lua, client, thor, rgz, ...
 ```
-Alle Befehle: [docs/04-cli-and-mcp.md](docs/04-cli-and-mcp.md). Standard-Kompression ist zlib (jeder Client); LZMA nur mit LZMA-fähiger `cps.dll`, Zopfli nur ausdrücklich.
+
+Every command can print machine-readable output with `--json`. See [docs/04-cli-and-mcp.md](docs/04-cli-and-mcp.md) (German) for all commands.
+
+## MCP server
+
+`rgrf-mcp` lets an AI agent inspect and build archives over stdio. It is read-only unless you pass `--allow-write <folder>`:
+
+```json
+{
+  "servers": {
+    "rustygrf": {
+      "type": "stdio",
+      "command": "/path/to/rgrf-mcp",
+      "args": ["--allow-write", "/path/to/output-folder"]
+    }
+  }
+}
+```
+
+Passwords for encrypted archives are read from `RGRF_PASSWORD` or `RGRF_KEY_FILE`, never from a tool argument.
+
+## Build from source
+
+You need a current stable Rust toolchain.
+
+```sh
+cargo build --release                 # rgrf and rgrf-mcp
+cargo test --release                  # tests with real archives run when RGRF_TESTDATA points at them
+
+cd apps/gui                           # the desktop app (Tauri 2)
+npm ci
+npx tauri build                       # installers for your system
+```
+
+On Linux the app needs `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` and `libxdo-dev`. Details: [docs/11-release.md](docs/11-release.md).
+
+## Status and limits
+
+- Reading agrees with GRF Editor on every entry of the kRO archives (over 950,000 entries, identical hashes on macOS, Linux and Windows). Archives RustyGRF writes are read by GRF Editor without differences, and the LZMA variant runs in the dev client.
+- Gravity's own protection (flag 0x80, the 0x300 key block) is not supported: it cannot be read without Gravity's keys. GRF Editor's password encryption is supported.
+- Tested on macOS (Apple Silicon), Linux ARM64 and Windows ARM64 and x64. Linux x64, the AppImage and the Windows installers on real hardware are built by CI but not tried by hand.
+- Several client tools (resource checker, translation update, the new sprite and animation edits) are measured on files but not yet checked in the running game.
+- The installers are unsigned and the translations are machine drafts.
+
+The documentation in `docs/` is in German, with the milestones, measurements and decisions: [architecture](docs/01-architecture.md), [formats](docs/02-format-notes.md) and [09-formats](docs/09-formats.md), [roadmap](docs/03-roadmap.md), [CLI and MCP](docs/04-cli-and-mcp.md), [feature comparison with GRF Editor](docs/10-feature-matrix.md), [release notes for packagers](docs/11-release.md), [localization](docs/12-localization.md). Measurements against GRF Editor's `GrfCL` are in [BENCHMARKS.md](BENCHMARKS.md).
+
+## Thanks
+
+- **[Tokeiburu](https://github.com/Tokeiburu)** for GRF Editor and ACT Editor: the source code to study, and the inspiration. RustyGRF is not a fork.
+- **Curiosity** for LessGRF and the LZMA extension of `cps.dll` ([curio-r/rag-cps-dll](https://github.com/curio-r/rag-cps-dll)).
+- **[Lua](https://www.lua.org/)** 5.0 and 5.1 (MIT), whose compiler is ported for checking and compiling Lua files.
+- **[Tauri](https://github.com/tauri-apps/tauri)** for the window around the app.
+
+More in [NOTICE](NOTICE) and [THIRD-PARTY.md](THIRD-PARTY.md).
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+RustyGRF is not affiliated with Gravity Co., Ltd. It contains no game data: no archives, sprites or textures.

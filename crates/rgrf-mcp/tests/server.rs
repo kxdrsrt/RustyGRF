@@ -120,7 +120,7 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 30);
+    assert_eq!(names(&rw).len(), 32);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -679,6 +679,22 @@ fn client_refs_needs_all_archives_and_counts_per_kind() {
     assert_eq!(v["by_kind"]["unreadable_sprite"], 1);
     assert!(v["by_kind"]["missing_sprite"].is_null());
     assert!(fails(&s, "grf_client_refs", json!({"paths": []})).contains("paths"));
+    // the Lua tables of an archive are read too: a map the table names and the archive lacks
+    let t = make_grf(
+        &dir,
+        "tables.grf",
+        &[
+            (
+                "data/luafiles514/lua files/agit/agitconfig.lub",
+                b"tbl_AgitInfo = { [\"here.gat\"] = {}, [\"gone.gat\"] = {} }",
+            ),
+            ("data/here.gat", b"x"),
+        ],
+    );
+    let v = ok(&s, "grf_client_refs", json!({"paths": [t], "only": "lua"}));
+    assert_eq!(v["tables_checked"], 1);
+    assert_eq!(v["table_by_kind"]["missing_map"], 1, "{v}");
+    assert_eq!(v["table_problems"][0]["missing"], "data\\gone.gat");
 
     // unused: a texture that a Lua file names and one nothing names
     let u = make_grf(

@@ -889,9 +889,16 @@ async fn act_frame(
     action: usize,
     frame: usize,
     references: Option<Vec<backend::ReferenceSpec>>,
+    adjacent: Option<bool>,
 ) -> Res<act_editor::ActFrameView> {
     with_session(&state, &window, move |s| {
-        s.act_view_with(index, action, frame, &references.unwrap_or_default())
+        s.act_view_with(
+            index,
+            action,
+            frame,
+            &references.unwrap_or_default(),
+            adjacent.unwrap_or(false),
+        )
     })
     .await
 }
@@ -946,32 +953,33 @@ async fn stage_act_anchors(
     .await
 }
 
-/// The starting point of "Setup Headgear/Head": a row for each image of the reference head.
+/// The starting point of "Setup Headgear/Head/Garment": a row for each image of the reference.
 #[tauri::command]
 async fn act_setup_info(
     window: WebviewWindow,
     state: State<'_, AppState>,
     index: usize,
     reference: String,
+    garment: Option<bool>,
 ) -> Res<act_editor::SetupInfo> {
     with_session(&state, &window, move |s| {
-        s.act_setup_info(index, &reference)
+        s.act_setup_info(index, &reference, garment.unwrap_or(false))
     })
     .await
 }
 
-/// "Setup Headgear/Head": builds the animation from the reference head (staged).
+/// "Setup Headgear/Head/Garment": builds the animation from the reference (staged).
 #[tauri::command]
 async fn stage_act_setup(
     window: WebviewWindow,
     state: State<'_, AppState>,
     index: usize,
     reference: String,
-    head: bool,
+    kind: String,
     choices: Vec<act_editor::SetupChoice>,
 ) -> Res<Vec<PendingRow>> {
     with_session(&state, &window, move |s| {
-        s.stage_act_setup(index, &reference, head, &choices)?;
+        s.stage_act_setup(index, &reference, &kind, &choices)?;
         Ok(s.pending())
     })
     .await
@@ -1040,10 +1048,42 @@ async fn stage_new_act(
     state: State<'_, AppState>,
     path: String,
     kind: String,
+    spr: Option<bool>,
 ) -> Res<Vec<PendingRow>> {
     with_session(&state, &window, move |s| {
-        s.stage_new_act(&path, &kind)?;
+        s.stage_new_act(&path, &kind, spr.unwrap_or(true))?;
         Ok(s.pending())
+    })
+    .await
+}
+
+/// How alike the kRO garments are to the sprite of the animation `index` (best first).
+#[tauri::command]
+async fn act_garment_matches(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+) -> Res<Vec<backend::GarmentMatch>> {
+    with_session(&state, &window, move |s| s.garment_matches(index, 30)).await
+}
+
+/// ACT Editor's list of the jobs of a garment, as text.
+#[tauri::command]
+fn act_garment_jobs() -> String {
+    backend::Session::garment_default_jobs()
+}
+
+/// "Save as garment": the animation of `index` for every job and gender, as new entries (staged).
+#[tauri::command]
+async fn stage_save_garment(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    index: usize,
+    spec: backend::GarmentSpec,
+) -> Res<(Vec<PendingRow>, backend::GarmentReport)> {
+    with_session(&state, &window, move |s| {
+        let report = s.stage_save_garment(index, &spec)?;
+        Ok((s.pending(), report))
     })
     .await
 }
@@ -1758,6 +1798,7 @@ fn build_menu(
     )?);
     let info = app.package_info();
     let about = item("about", &format!("About {}...", info.name), None)?;
+    let updates = item("check-updates", "Check for Updates...", None)?;
 
     let new: Item = Box::new(submenu(
         &lab("new", "New"),
@@ -1880,6 +1921,7 @@ fn build_menu(
             &info.name,
             &[
                 about,
+                updates,
                 sep()?,
                 settings,
                 sep()?,
@@ -1899,7 +1941,7 @@ fn build_menu(
         file.push(Box::new(PredefinedMenuItem::quit(app, None)?));
         edit.push(sep()?);
         edit.push(settings);
-        help = Some(submenu(&lab("help", "Help"), &[about])?);
+        help = Some(submenu(&lab("help", "Help"), &[about, updates])?);
     }
     menus.push(submenu(&lab("file", "File"), &file)?);
     menus.push(submenu(&lab("edit", "Edit"), &edit)?);
@@ -2069,6 +2111,9 @@ pub fn run() {
             act_setup_info,
             stage_act_setup,
             stage_new_act,
+            act_garment_matches,
+            act_garment_jobs,
+            stage_save_garment,
             stage_removals,
             open_folder,
             text_for_edit,

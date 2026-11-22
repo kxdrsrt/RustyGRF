@@ -331,6 +331,15 @@ dialog.wide { width: min(1180px, 96vw); max-width: 96vw; }
 .acted .cross-h, .acted .cross-v { position: absolute; background: var(--accent); opacity: 0.55; pointer-events: none; }
 .acted .cross-h { height: 1px; left: 0; right: 0; }
 .acted .cross-v { width: 1px; top: 0; bottom: 0; }
+.acted .stage img.ghost { position: absolute; left: 0; top: 0; opacity: 0.3; pointer-events: none; }
+.acted .pixgrid { position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(to right, rgba(128, 128, 128, 0.45) 1px, transparent 1px), linear-gradient(to bottom, rgba(128, 128, 128, 0.45) 1px, transparent 1px); }
+.acted .viewopts { margin: 4px 0 8px; }
+.acted .viewopts summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.acted .viewopts .bar { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 6px 0 0; font-size: 12px; }
+.acted .adjrow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.acted .adjframe { margin: 0; line-height: 1.2; }
+.acted .adjframe img { display: block; max-width: 100%; height: auto; background: repeating-conic-gradient(#8884 0% 25%, transparent 0% 50%) 0 0 / 12px 12px; }
+.acted .refchip.hiddenref .name { opacity: 0.5; text-decoration: line-through; }
 .acted .dot { position: absolute; width: 9px; height: 9px; margin: -4px 0 0 -4px; border: 1px solid #fff; background: #d33; border-radius: 50%; cursor: move; }
 /* a larger target than the dot itself */
 .acted .dot::after { content: ""; position: absolute; inset: -6px; }
@@ -521,6 +530,7 @@ input.hexb[aria-invalid="true"] { border-color: #d33; }
 .about { display: flex; gap: 16px; align-items: center; margin-bottom: 8px; }
 .about h3 { margin: 0 0 2px; font-size: 20px; letter-spacing: -0.01em; }
 .about p { margin: 2px 0; }
+.update-notes { max-height: 180px; overflow: auto; white-space: pre-wrap; font: inherit; font-size: 12px; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--border, rgba(128, 128, 128, 0.3)); border-radius: 6px; }
 #dlg-body h4 { margin: 14px 0 4px; font-size: 13px; }
 .credits { margin: 0; padding-left: 18px; }
 .credits li { margin: 3px 0; }

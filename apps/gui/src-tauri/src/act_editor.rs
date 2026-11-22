@@ -5,7 +5,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use rgrf_formats::act::{Act, Anchor, Layer, V2_1, V2_3, V2_4, sound_name};
 use rgrf_formats::act_fx;
-use rgrf_formats::act_ops::{EffectKind, EffectScope, RotationCopy, Template, parse_indexes};
+use rgrf_formats::act_ops::{
+    EffectKind, EffectScope, RotationCopy, Template, empty_spr, parse_indexes,
+};
 use rgrf_formats::act_setup::{self, Model, Placement, SetupError, SetupKind};
 use rgrf_formats::edit::EditError;
 use rgrf_formats::gif_io::upscale;
@@ -69,6 +71,10 @@ pub struct ActFrameView {
     pub error: Option<String>,
     /// The reference animations drawn with this frame, and what kept one from showing.
     pub references: Vec<ReferenceView>,
+    /// The frames before and after this one (wrapping round) on the same canvas, when asked for:
+    /// ACT Editor's "Show the adjacent frames" and the onion skin.
+    pub prev_png: Option<String>,
+    pub next_png: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -85,6 +91,9 @@ pub struct Reference<'a> {
     pub spr: Option<&'a [u8]>,
     /// Behind the edited animation instead of in front of it.
     pub under: bool,
+    /// The edited animation follows the reference by their anchors, instead of the other way
+    /// round ("Use body as base": garments and wings).
+    pub base_follows: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -322,12 +331,14 @@ fn spr_png(spr: &Spr, abs: usize) -> Option<String> {
     Some(B64.encode(rgba_to_png(&img).ok()?))
 }
 
-/// What "Setup Headgear/Head" starts from: one row for each image of the reference head.
+/// What "Setup Headgear/Head/Garment" starts from: one row for each image of the reference head;
+/// for a garment (the reference is a body) one row for each body image that the body shows.
 pub fn setup_info(
     act_bytes: &[u8],
     spr_bytes: &[u8],
     ref_act: &[u8],
     ref_spr: &[u8],
+    garment: bool,
 ) -> Result<SetupInfo, String> {
     let act = Act::parse(act_bytes).map_err(|e| e.to_string())?;
     let spr = Spr::parse(spr_bytes).map_err(|e| e.to_string())?;
@@ -341,6 +352,7 @@ pub fn setup_info(
     Ok(SetupInfo {
         rows: models
             .iter()
+            .filter(|m| !garment || m.usage.is_some())
             .map(|m| SetupRow {
                 reference_image: m.reference_image,
                 usage: m.usage,
@@ -365,6 +377,19 @@ pub struct SetupChoice {
     pub dx: i32,
     #[serde(default)]
     pub dy: i32,
+    /// The image of the reference this row is for; without it the row's position counts.
+    #[serde(default)]
+    pub reference_image: Option<usize>,
+}
+
+/// Which animation "Setup" builds: `headgear`, `head` or `garment`.
+pub fn setup_kind(name: &str) -> Result<SetupKind, String> {
+    match name {
+        "headgear" => Ok(SetupKind::Headgear),
+        "head" => Ok(SetupKind::Head),
+        "garment" => Ok(SetupKind::Garment),
+        _ => Err(err!("err-act-no-match")),
+    }
 }
 
 /// Builds the frames of the animation from the choices (one for each reference image).
@@ -373,34 +398,40 @@ pub fn apply_setup(
     spr_bytes: &[u8],
     ref_act: &[u8],
     ref_spr: &[u8],
-    head: bool,
+    kind: SetupKind,
     choices: &[SetupChoice],
 ) -> Result<Vec<u8>, String> {
     let mut act = Act::parse(act_bytes).map_err(|e| e.to_string())?;
     let spr = Spr::parse(spr_bytes).map_err(|e| e.to_string())?;
     let reference = Act::parse(ref_act).map_err(|e| e.to_string())?;
     let rspr = Spr::parse(ref_spr).map_err(|e| e.to_string())?;
-    let placements: Vec<Placement> = choices
+    // rows that name their reference image may skip some; the images left out stay as they are
+    let size = choices
         .iter()
-        .map(|c| Placement {
-            image: c.image,
-            dx: c.dx.clamp(-10_000, 10_000),
-            dy: c.dy.clamp(-10_000, 10_000),
-        })
-        .collect();
-    let n = act_setup::apply(
-        &mut act,
-        &spr,
-        &reference,
-        &rspr,
-        &placements,
-        if head {
-            SetupKind::Head
-        } else {
-            SetupKind::Headgear
-        },
-    )
-    .map_err(setup_error)?;
+        .enumerate()
+        .map(|(i, c)| c.reference_image.unwrap_or(i) + 1)
+        .max()
+        .unwrap_or(0)
+        .min(rspr.indexed.len().max(choices.len()));
+    let mut placements = vec![
+        Placement {
+            image: -1,
+            dx: 0,
+            dy: 0,
+        };
+        size
+    ];
+    for (i, c) in choices.iter().enumerate() {
+        if let Some(slot) = placements.get_mut(c.reference_image.unwrap_or(i)) {
+            *slot = Placement {
+                image: c.image,
+                dx: c.dx.clamp(-10_000, 10_000),
+                dy: c.dy.clamp(-10_000, 10_000),
+            };
+        }
+    }
+    let n = act_setup::apply(&mut act, &spr, &reference, &rspr, &placements, kind)
+        .map_err(setup_error)?;
     if n == 0 {
         return Err(err!("err-act-no-match"));
     }
@@ -702,18 +733,16 @@ pub fn anchors_from(data: &[u8], other: &[u8], adjust: bool) -> Result<Vec<u8>, 
 
 /// The bytes of a new animation shaped like one of ACT Editor's templates.
 pub fn new_from_template(kind: &str) -> Result<Vec<u8>, String> {
-    let t = match kind {
-        "empty" => Template::Empty,
-        "npc" => Template::Npc,
-        "monster" => Template::Monster,
-        "homunculus" => Template::Homunculus,
-        "weapon" => Template::Weapon,
-        "headgear_male" => Template::HeadgearMale,
-        "headgear_female" => Template::HeadgearFemale,
-        _ => return Err(err!("err-act-no-match")),
-    };
+    let t = Template::from_name(kind).ok_or_else(|| err!("err-act-no-match"))?;
     let act = Act::template(t);
     act.to_bytes(act.version).map_err(|e| e.to_string())
+}
+
+/// The empty sprite that ACT Editor writes next to a new animation.
+pub fn new_empty_spr() -> Result<Vec<u8>, String> {
+    empty_spr()
+        .to_bytes(rgrf_formats::spr::Version::V2_1)
+        .map_err(|e| e.to_string())
 }
 
 /// The animation with the anchors of ACT Editor's male or female head sprite (set from its
@@ -897,16 +926,18 @@ pub fn view(
     action: usize,
     frame: usize,
 ) -> Result<ActFrameView, String> {
-    view_with(act_data, spr_data, action, frame, &[])
+    view_with(act_data, spr_data, action, frame, &[], false)
 }
 
-/// [`view`] with reference animations drawn in the same picture.
+/// [`view`] with reference animations drawn in the same picture, and with the neighbouring frames
+/// when `adjacent` is set.
 pub fn view_with(
     act_data: &[u8],
     spr_data: Option<&[u8]>,
     action: usize,
     frame: usize,
     references: &[Reference<'_>],
+    adjacent: bool,
 ) -> Result<ActFrameView, String> {
     let act = Act::parse(act_data).map_err(|e| e.to_string())?;
     let actions = act.actions.len();
@@ -969,6 +1000,8 @@ pub fn view_with(
         scale: 1,
         error: None,
         references: Vec::new(),
+        prev_png: None,
+        next_png: None,
     };
     let Some(spr) = spr else {
         v.error = Some("the matching .spr is not in this archive".into());
@@ -1004,13 +1037,14 @@ pub fn view_with(
             problem,
         });
         if let Ok(p) = parsed {
-            loaded.push((p, r.under));
+            loaded.push((p, r.under, r.base_follows));
         }
     }
     let mut parts = vec![Part::new(&act, &spr)];
-    parts.extend(loaded.iter().map(|((ra, rs), under)| Part {
+    parts.extend(loaded.iter().map(|((ra, rs), under, follows)| Part {
         anchored: true,
         under: *under,
+        base_follows: *follows,
         ..Part::new(ra, rs)
     }));
     // the picture keeps the size of the whole action, so frames can be compared while stepping
@@ -1052,6 +1086,20 @@ pub fn view_with(
     v.scale = scale as u32;
     v.origin_x = -bounds.min_x * scale as i32;
     v.origin_y = -bounds.min_y * scale as i32;
+    let n_frames = a.frames.len();
+    if adjacent && n_frames > 1 {
+        let side = |i: usize| -> Option<String> {
+            let c = render_parts(&parts, action, i, bounds).ok()?;
+            let img = RgbaImage {
+                width: (w * scale) as u16,
+                height: (h * scale) as u16,
+                pixels: upscale(&c.pixels, w, h, scale),
+            };
+            Some(B64.encode(rgba_to_png(&img).ok()?))
+        };
+        v.prev_png = side((frame + n_frames - 1) % n_frames);
+        v.next_png = side((frame + 1) % n_frames);
+    }
     let k = scale as i32;
     for (l, b) in v
         .layers

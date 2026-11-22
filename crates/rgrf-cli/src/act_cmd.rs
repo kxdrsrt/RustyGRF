@@ -139,6 +139,7 @@ pub fn render(a: &RenderArgs<'_>) -> Result<i32> {
         spr,
         anchored: !a.no_anchor,
         under: false,
+        base_follows: false,
     }));
 
     let n_frames = base_act

@@ -218,8 +218,8 @@ pub const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "grf_client_refs",
-        title: "Check what animations and effects name",
-        description: "Checks every animation (.act) and effect (.str) of the archives against the files that exist: the .spr next to an animation, the images its layers use (a layer asking for an image the sprite does not have), the sounds its frames play (`data\\wav\\<name>`, from ACT 2.1; \"atk\" marks the frame that hits and is no file) and the textures of an effect. Give ALL archives of the client, highest priority first (as in DATA.INI): with only one, sprites that live in another archive are reported missing. Names inside Lua tables are not checked. Missing sprites are counted per folder; they are often harmless leftovers (the kRO robe animations), so look at the other kinds first.",
+        title: "Check what animations, effects and Lua tables name",
+        description: "Checks every animation (.act) and effect (.str) of the archives against the files that exist: the .spr next to an animation, the images its layers use (a layer asking for an image the sprite does not have), the sounds its frames play (`data\\wav\\<name>`, from ACT 2.1; \"atk\" marks the frame that hits and is no file) and the textures of an effect. It also reads the client's Lua tables that have a rule (jobname: monster/NPC sprites, headgear, pets, robes, skill icons, item tables inside the archives, state icons, hat effects, skill and weapon sounds, map names, map effect textures) and reports what they name and no archive holds (`table_by_kind`, `table_problems`; `tables_checked`, `table_names_checked`). The item tables in the client's loose `System` folder are only read by the CLI. Give ALL archives of the client, highest priority first (as in DATA.INI): with only one, files that live in another archive are reported missing. Missing sprites are counted per folder; they are often harmless leftovers (the kRO robe animations), so look at the other kinds first.",
         params: &[
             req(
                 "paths",
@@ -228,8 +228,8 @@ pub const TOOLS: &[Tool] = &[
             ),
             opt(
                 "only",
-                Ty::Enum(&["act", "str"]),
-                "Only animations (act) or only effects (str).",
+                Ty::Enum(&["act", "str", "lua"]),
+                "Only animations (act), only effects (str) or only Lua tables (lua).",
             ),
             NAMES,
             LIMIT,
@@ -252,6 +252,60 @@ pub const TOOLS: &[Tool] = &[
         ],
         writes: false,
         run: client_unused_tool,
+    },
+    Tool {
+        name: "grf_client_translate_assemble",
+        title: "Assemble the RO Translation Project for a client",
+        description: "Puts the folders of a ROenglishRE checkout together in the order of the project's ClientGenerator.bat (Renewal, Pre-Renewal, the Compatibility folders up to the client date, deletions for newer clients) into `out/grf` (the archive root, give it to `grf_build`) and `out/loose` (files next to the client). `out` must not exist. Maintained version of tools/translation/assemble.py.",
+        params: &[
+            req(
+                "repo",
+                Ty::Str,
+                "A checkout of https://github.com/llchrisll/ROenglishRE.",
+            ),
+            req(
+                "mode",
+                Ty::Enum(&["pre", "re"]),
+                "pre = pre-renewal server, re = renewal server.",
+            ),
+            req(
+                "client",
+                Ty::Str,
+                "Client date from the generator's menu, e.g. `2018-06-20`.",
+            ),
+            req(
+                "out",
+                Ty::Str,
+                "New folder to write to (inside an allowed folder).",
+            ),
+            opt(
+                "exclude",
+                Ty::StrList,
+                "Files of your own server to drop (path in the archive with `/`, case-insensitive, `*` and `?` allowed).",
+            ),
+        ],
+        writes: true,
+        run: translate_assemble_tool,
+    },
+    Tool {
+        name: "grf_client_translate_fill",
+        title: "Fill Korean entries of the client's text tables",
+        description: "Reads the text tables of the client from its archives (the first archive that has a table wins, as in DATA.INI) and replaces entries that are still Korean with the English entry of the same key from a ROenglishRE checkout (Pre-Renewal first, then Renewal): buff texts (stateiconinfo), skill descriptions, map and card name tables, tipoftheday symbols, hotkey names. Entries that are English already are never touched. Writes the changed tables to `out` with their path inside the archive (`out/data/...`); the archives are only read. The loose item tables of the client folder are filled by the CLI (`rgrf client translate fill --out-loose`). Maintained version of tools/translation/fill_untranslated.py.",
+        params: &[
+            req(
+                "paths",
+                Ty::StrList,
+                "The archives of the client, highest priority first.",
+            ),
+            req("roen", Ty::Str, "A checkout of ROenglishRE."),
+            req(
+                "out",
+                Ty::Str,
+                "Folder to write the changed tables to (inside an allowed folder).",
+            ),
+        ],
+        writes: true,
+        run: translate_fill_tool,
     },
     Tool {
         name: "grf_lua_decompile",
@@ -1659,6 +1713,19 @@ fn client_refs_tool(ctx: &Ctx, a: &Args) -> Out {
         fn exists(&self, path: &[u8]) -> bool {
             self.find(path).is_some()
         }
+        fn list(&self, prefix: &[u8]) -> Vec<Vec<u8>> {
+            let prefix = GrfPath::new(prefix.to_vec()).key();
+            let mut out: Vec<Vec<u8>> = self
+                .0
+                .iter()
+                .flat_map(|(_, m)| m.keys())
+                .filter(|k| k.starts_with(&prefix))
+                .cloned()
+                .collect();
+            out.sort();
+            out.dedup();
+            out
+        }
     }
     let paths = a.list("paths");
     if paths.is_empty() {
@@ -1670,6 +1737,9 @@ fn client_refs_tool(ctx: &Ctx, a: &Args) -> Out {
         .collect::<Result<Vec<_>, _>>()?;
     let src = Src(archives.iter().map(|x| (x, x.index_by_key())).collect());
     let only = a.opt_str("only");
+    let tables = only
+        .is_none_or(|o| o == "lua")
+        .then(|| rgrf_formats::refs_tables::check_tables(&src));
     let mode = names_mode(a);
     let limit = a.opt_u64("limit").map_or(100, |n| n as usize);
     // the files that win: the first archive that has the path
@@ -1734,10 +1804,38 @@ fn client_refs_tool(ctx: &Ctx, a: &Args) -> Out {
     }
     let mut folders: Vec<_> = missing_sprites.into_iter().collect();
     folders.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(&y.0)));
+    let mut table_kinds = std::collections::BTreeMap::<&str, usize>::new();
+    let mut table_list = Vec::new();
+    if let Some(t) = &tables {
+        let mut sorted: Vec<_> = t.problems.iter().collect();
+        sorted.sort_by(|x, y| {
+            (x.table, x.problem.kind, &x.problem.path).cmp(&(
+                y.table,
+                y.problem.kind,
+                &y.problem.path,
+            ))
+        });
+        for p in sorted {
+            *table_kinds.entry(p.problem.kind).or_default() += 1;
+            table_list.push(json!({
+                "kind": p.problem.kind,
+                "table": p.table,
+                "file": GrfPath::new(p.file.clone()).display(mode),
+                "missing": GrfPath::new(p.problem.path.clone()).display(mode),
+                "note": p.problem.note,
+            }));
+        }
+    }
     Ok(json!({
         "animations_checked": acts, "effects_checked": work.len() - acts,
         "files_with_problems": found.len(),
         "by_kind": by_kind,
+        "tables_checked": tables.as_ref().map(|t| t.files),
+        "table_names_checked": tables.as_ref().map(|t| t.names),
+        "table_names_skipped_utf8": tables.as_ref().map(|t| t.skipped_utf8),
+        "table_by_kind": table_kinds,
+        "table_problems": table_list.iter().take(limit).collect::<Vec<_>>(),
+        "table_problems_truncated": table_list.len() > limit,
         "problems": list.iter().take(limit).collect::<Vec<_>>(),
         "problems_truncated": list.len() > limit,
         "animations_without_sprite_by_folder": folders.iter().take(limit)
@@ -2248,6 +2346,67 @@ fn patch_tool(ctx: &Ctx, a: &Args) -> Out {
     v["changed"] = r.changed.into();
     v["removed_in_new"] = r.removed.into();
     Ok(v)
+}
+
+fn translate_assemble_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::translate::assemble;
+    let repo = ctx.policy.read(a.str("repo"))?;
+    let out = ctx.policy.write_dir(a.str("out"))?;
+    let opts = assemble::Options {
+        pre_renewal: a.str("mode") == "pre",
+        client: a.str("client").to_string(),
+        out: out.clone(),
+        exclude: a.list("exclude").iter().map(|s| (*s).to_string()).collect(),
+    };
+    let mut lines = Vec::new();
+    assemble::assemble(&repo, &opts, &mut |l| lines.push(l.to_string())).map_err(err)?;
+    Ok(json!({
+        "out": out.display().to_string(),
+        "grf": out.join("grf").display().to_string(),
+        "loose": out.join("loose").display().to_string(),
+        "lines": lines,
+    }))
+}
+
+fn translate_fill_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_formats::translate::fill;
+    let paths = a.list("paths");
+    if paths.is_empty() {
+        return Err("give at least one archive in `paths`".into());
+    }
+    let archives = paths
+        .iter()
+        .map(|p| open(ctx, p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let keyed: Vec<_> = archives.iter().map(Archive::index_by_key).collect();
+    let roen = ctx.policy.read(a.str("roen"))?;
+    let out = ctx.policy.write_dir(a.str("out"))?;
+    let mut read_table =
+        |rel: &str| -> Result<Option<(String, Vec<u8>)>, rgrf_formats::translate::Error> {
+            let key = GrfPath::new(rel.replace('/', "\\").into_bytes()).key();
+            for (n, arc) in archives.iter().enumerate() {
+                let Some(&i) = keyed[n].get(&key).and_then(|v| v.last()) else {
+                    continue;
+                };
+                if let Ok(d) = arc.read(i)
+                    && d.status.is_ok()
+                    && !d.data.is_empty()
+                {
+                    return Ok(Some((paths[n].to_string(), d.data)));
+                }
+            }
+            Ok(None)
+        };
+    let opts = fill::Options {
+        full: PathBuf::new(),
+        roen,
+        out: out.clone(),
+        out_loose: None,
+    };
+    let mut lines = Vec::new();
+    let total =
+        fill::run_with(&mut read_table, &opts, &mut |l| lines.push(l.to_string())).map_err(err)?;
+    Ok(json!({"out": out.display().to_string(), "entries_filled": total, "lines": lines}))
 }
 
 #[cfg(test)]

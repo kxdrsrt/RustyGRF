@@ -5,7 +5,10 @@
 //! image once against its reference image, and the whole animation (all directions, frames and
 //! mirrored copies) is built from those placements.
 //!
-//! Left out on purpose: "Setup Garment", which ACT Editor itself disables as too buggy.
+//! "Setup Garment" (`HeadEditorDialog` with flag 2) is the same with the body as the reference:
+//! ACT Editor switched it off ("just too buggy"). Its intent is rebuilt here without the bugs
+//! (see `docs/10-feature-matrix.md`): no limit to the first five body images, no head poses and
+//! no half-pixel rule, which only make sense for a head.
 
 use thiserror::Error;
 
@@ -13,11 +16,13 @@ use crate::act::{Act, Layer};
 use crate::spr::Spr;
 
 /// Which animation is set up. A head has an empty layer in front of its picture (the layer that
-/// the body animation attaches to), a headgear does not.
+/// the body animation attaches to), a headgear does not. A garment follows the body animation
+/// instead of the head one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupKind {
     Headgear,
     Head,
+    Garment,
 }
 
 /// Where the animation's own image sits against one image of the reference head.
@@ -80,11 +85,12 @@ fn first_usage(reference: &Act, image: usize) -> Option<(usize, usize, &Layer)> 
 
 /// The frame of `reference` that goes with frame `frame` of action `action` of the animation.
 /// Standing and sitting actions of a head have three frames (looking ahead, right, left); an
-/// animation with more frames shows each of them for a third of its frames.
-fn reference_frame(act: &Act, reference: &Act, action: usize, frame: usize) -> usize {
+/// animation with more frames shows each of them for a third of its frames. Other references
+/// (a body) have no such poses.
+fn reference_frame(act: &Act, reference: &Act, action: usize, frame: usize, poses: bool) -> usize {
     let ref_frames = reference.actions[action].frames.len();
     let own = act.actions[action].frames.len();
-    let looks = (ref_frames == 3 && action < 8) || (16..24).contains(&action);
+    let looks = poses && ((ref_frames == 3 && action < 8) || (16..24).contains(&action));
     if looks && own / 3 > 0 {
         let group = own / 3;
         let part = (frame / group).min(2);
@@ -198,7 +204,7 @@ pub fn apply(
             if reference.actions[aid].frames.is_empty() {
                 continue;
             }
-            let rf = reference_frame(act, reference, aid, fid);
+            let rf = reference_frame(act, reference, aid, fid, kind != SetupKind::Garment);
             let ref_frame = &reference.actions[aid].frames[rf];
             let Some(ref_layer) = first_picture(ref_frame) else {
                 continue;
@@ -241,7 +247,7 @@ pub fn apply(
                 let own_w = image_width(spr, place.image).unwrap_or(0) % 2;
                 let ref_w =
                     image_width(reference_spr, absolute(reference_spr, ref_layer)).unwrap_or(0) % 2;
-                if own_w != ref_w {
+                if kind != SetupKind::Garment && own_w != ref_w {
                     if own_w == 0 {
                         vx -= 1;
                     }
@@ -455,6 +461,49 @@ mod tests {
             apply(&mut a, &own, &empty, &rs, &p, SetupKind::Head),
             Err(SetupError::EmptyReference)
         );
+    }
+
+    #[test]
+    fn a_garment_follows_the_body_frame_by_frame_without_head_rules() {
+        // a body: three frames in action 0, its mirror in action 1, the pictures 0 to 2
+        let body = reference();
+        let rs = spr(&[3, 4, 5]);
+        let own = spr(&[4, 4, 4]);
+        let mut a = act(vec![
+            vec![layer(0, 9.0, 9.0, false); 6],
+            vec![layer(0, 9.0, 9.0, true); 3],
+        ]);
+        let p = [
+            Placement {
+                image: 0,
+                dx: 1,
+                dy: 0,
+            },
+            Placement {
+                image: 1,
+                dx: 1,
+                dy: 0,
+            },
+            Placement {
+                image: 2,
+                dx: 1,
+                dy: 0,
+            },
+        ];
+        let n = apply(&mut a, &own, &body, &rs, &p, SetupKind::Garment).unwrap();
+        assert_eq!(n, 9);
+        // six frames against three: the body frames repeat, no third of the frames per pose
+        let used: Vec<i32> = a.actions[0]
+            .frames
+            .iter()
+            .map(|f| f.layers[0].sprite_index)
+            .collect();
+        assert_eq!(used, [0, 1, 2, 0, 1, 2]);
+        // one layer only, and a mirrored frame turns the shift around without a half pixel
+        assert!(a.actions[0].frames.iter().all(|f| f.layers.len() == 1));
+        let m = &a.actions[1].frames[0].layers[0];
+        assert!(m.mirror);
+        assert_eq!((m.offset_x, m.offset_y), (-1.0, -30.0));
     }
 
     #[test]

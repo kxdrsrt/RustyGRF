@@ -23,6 +23,7 @@ use rgrf_core::verify::{Severity, VerifyOptions, verify};
 use rgrf_core::writer::Format;
 use rgrf_core::{Archive, DecodeStatus, GrfPath, NameMode};
 use rgrf_formats::act::Act;
+use rgrf_formats::act_garment::{self, Sizes};
 use rgrf_formats::edit::{Kind, quantize};
 use rgrf_formats::gat::{self, Gat};
 use rgrf_formats::gif_io::{delay_cs, encode_gif, upscale};
@@ -603,12 +604,59 @@ pub fn reduce_images(
     Ok(sum)
 }
 
+/// Where kRO keeps the garment animations: `data\sprite\로브\<garment>\<gender>\<job>_<gender>.act`.
+const GARMENT_DIR: &str = "data\\sprite\\로브\\";
+
+/// A kRO garment and how alike its sprite is to the one being turned into a garment.
+#[derive(Serialize, Debug)]
+pub struct GarmentMatch {
+    pub name: String,
+    pub ratio: f64,
+}
+
+/// What "Save as garment" is asked to do.
+#[derive(Deserialize, Debug)]
+pub struct GarmentSpec {
+    /// The name of the new garment (its folder and sprite).
+    pub base: String,
+    /// Where it goes (default: kRO's garment folder).
+    #[serde(default)]
+    pub folder: String,
+    /// Offset of the whole animation: `dx` mirrors for the directions that look the other way.
+    #[serde(default)]
+    pub dx: i32,
+    #[serde(default)]
+    pub dy: i32,
+    /// One sprite for every job instead of one shared sprite.
+    #[serde(default)]
+    pub copy_spr: bool,
+    /// Take the animations of the closest kRO garment and fit them to this sprite.
+    #[serde(default)]
+    pub guess: bool,
+    /// That kRO garment by name (default: the closest one).
+    #[serde(default)]
+    pub robe: Option<String>,
+    /// The jobs, one per line (`male#female`); empty means ACT Editor's list.
+    #[serde(default)]
+    pub jobs: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct GarmentReport {
+    pub files: usize,
+    pub robe: Option<String>,
+    pub ratio: f64,
+}
+
 /// An animation of the archive shown with the one being edited (see `act_editor::Reference`).
 #[derive(Deserialize, Debug, Clone)]
 pub struct ReferenceSpec {
     pub path: String,
     #[serde(default)]
     pub under: bool,
+    /// "Use body as base": the edited animation follows this one by the anchors.
+    #[serde(default)]
+    pub base: bool,
 }
 
 /// Starts the program the system has for the file (not waiting for it).
@@ -2875,7 +2923,7 @@ impl Session {
         action: usize,
         frame: usize,
     ) -> Result<ActFrameView, String> {
-        self.act_view_with(index, action, frame, &[])
+        self.act_view_with(index, action, frame, &[], false)
     }
 
     /// The topmost layer of the animation `index` with a visible pixel at a frame point.
@@ -2895,13 +2943,15 @@ impl Session {
         act_editor::layer_at_point(&act, &spr, action, frame, x, y)
     }
 
-    /// [`Self::act_view`] with reference animations of this archive drawn in the picture.
+    /// [`Self::act_view`] with reference animations of this archive drawn in the picture, and the
+    /// frames next to this one when `adjacent` is set.
     pub fn act_view_with(
         &self,
         index: usize,
         action: usize,
         frame: usize,
         references: &[ReferenceSpec],
+        adjacent: bool,
     ) -> Result<ActFrameView, String> {
         let pair = |i: usize| -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
             let act = self.working_bytes(i)?.1;
@@ -2930,9 +2980,10 @@ impl Session {
                 act: a,
                 spr: s.as_deref(),
                 under: r.under,
+                base_follows: r.base,
             })
             .collect();
-        let mut v = act_editor::view_with(&act, spr.as_deref(), action, frame, &refs)?;
+        let mut v = act_editor::view_with(&act, spr.as_deref(), action, frame, &refs, adjacent)?;
         v.references.extend(
             missing
                 .into_iter()
@@ -3148,11 +3199,12 @@ impl Session {
         Ok((act, self.working_bytes(spr)?.1))
     }
 
-    /// The starting point of "Setup Headgear/Head" for the animation `index`.
+    /// The starting point of "Setup Headgear/Head/Garment" for the animation `index`.
     pub fn act_setup_info(
         &self,
         index: usize,
         reference: &str,
+        garment: bool,
     ) -> Result<act_editor::SetupInfo, String> {
         let (ract, rspr) = self.reference_pair(index, reference)?;
         let act = self.working_bytes(index)?.1;
@@ -3160,31 +3212,26 @@ impl Session {
             .sibling(index, "spr")
             .ok_or_else(|| err!("err-no-spr"))?;
         let spr = self.working_bytes(spr_i)?.1;
-        act_editor::setup_info(&act, &spr, &ract, &rspr)
+        act_editor::setup_info(&act, &spr, &ract, &rspr, garment)
     }
 
-    /// "Setup Headgear/Head": the animation is built from the reference head and the choices.
+    /// "Setup Headgear/Head/Garment" (`kind`: `headgear`, `head`, `garment`): the animation is
+    /// built from the reference (a head, or a body for a garment) and the choices.
     pub fn stage_act_setup(
         &mut self,
         index: usize,
         reference: &str,
-        head: bool,
+        kind: &str,
         choices: &[act_editor::SetupChoice],
     ) -> Result<(), String> {
         self.transact(|s| {
+            let k = act_editor::setup_kind(kind)?;
             let (ract, rspr) = s.reference_pair(index, reference)?;
             let (name, act, mut what) = s.working_bytes(index)?;
             let spr_i = s.sibling(index, "spr").ok_or_else(|| err!("err-no-spr"))?;
             let spr = s.working_bytes(spr_i)?.1;
-            let out = act_editor::apply_setup(&act, &spr, &ract, &rspr, head, choices)?;
-            what.push(
-                if head {
-                    "head set up"
-                } else {
-                    "headgear set up"
-                }
-                .into(),
-            );
+            let out = act_editor::apply_setup(&act, &spr, &ract, &rspr, k, choices)?;
+            what.push(format!("{kind} set up"));
             s.stage(Change::PutBytes {
                 name,
                 data: Arc::new(out),
@@ -3238,24 +3285,272 @@ impl Session {
         })
     }
 
-    /// A new animation (`kind` like `monster`, see `act_editor::new_from_template`) under `path`.
-    pub fn stage_new_act(&mut self, path: &str, kind: &str) -> Result<(), String> {
-        self.transact(|s| s.stage_new_act_impl(path, kind))
+    /// A new animation (`kind` like `monster`, see `act_editor::new_from_template`) under `path`;
+    /// with `with_spr` the empty sprite beside it, as ACT Editor makes the pair.
+    pub fn stage_new_act(&mut self, path: &str, kind: &str, with_spr: bool) -> Result<(), String> {
+        self.transact(|s| s.stage_new_act_impl(path, kind, with_spr))
     }
 
-    fn stage_new_act_impl(&mut self, path: &str, kind: &str) -> Result<(), String> {
+    fn stage_new_act_impl(&mut self, path: &str, kind: &str, with_spr: bool) -> Result<(), String> {
         let text = path.trim().replace('/', "\\");
         if text.is_empty() || text.ends_with('\\') {
             return Err(err!("err-enter-path"));
         }
         let name = GrfPath::from_display(&text, self.mode).ok_or_else(|| err!("err-name-chars"))?;
         let data = act_editor::new_from_template(kind)?;
+        let bytes = name.as_bytes();
+        if with_spr && (bytes.len() <= 4 || !bytes[bytes.len() - 4..].eq_ignore_ascii_case(b".act"))
+        {
+            return Err(err!("err-act-new-ext"));
+        }
+        let spr_name = with_spr.then(|| {
+            let mut b = bytes[..bytes.len() - 3].to_vec();
+            b.extend(b"spr");
+            GrfPath::new(b)
+        });
         self.stage(Change::PutBytes {
             name,
             data: Arc::new(data),
             what: vec![format!("new animation ({kind})")],
         });
+        if let Some(spr_name) = spr_name {
+            self.stage(Change::PutBytes {
+                name: spr_name,
+                data: Arc::new(act_editor::new_empty_spr()?),
+                what: vec!["new empty sprite".into()],
+            });
+        }
         Ok(())
+    }
+
+    /// The job names of ACT Editor's garment list as text (one per line, `male#female` where the
+    /// two differ), to start the "Save as garment" dialog from.
+    pub fn garment_default_jobs() -> String {
+        GrfPath::new(act_garment::DEFAULT_JOB_PATHS.to_vec())
+            .display(NameMode::Cp949)
+            .replace("\r\n", "\n")
+    }
+
+    /// The kRO garments of this archive (`data\sprite\로브\<name>\<name>.spr`): display name, the
+    /// folder name as stored, and the entry of the sprite.
+    fn garment_candidates(&self) -> Vec<(String, Vec<u8>, usize)> {
+        let prefix = GrfPath::from_display(GARMENT_DIR, self.mode)
+            .map(|p| p.as_bytes().to_vec())
+            .unwrap_or_default();
+        let genders: Vec<Vec<u8>> = ["남", "여"]
+            .iter()
+            .filter_map(|g| GrfPath::from_display(g, self.mode))
+            .map(|p| p.as_bytes().to_vec())
+            .collect();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for (i, e) in self.arc.entries().iter().enumerate() {
+            let b = e.name.as_bytes();
+            if prefix.is_empty()
+                || b.len() <= prefix.len()
+                || !b[..prefix.len()].eq_ignore_ascii_case(&prefix)
+            {
+                continue;
+            }
+            let rest: Vec<&[u8]> = b[prefix.len()..].split(|&c| c == b'\\').collect();
+            let [dir, file] = rest[..] else { continue };
+            let mut want = dir.to_vec();
+            want.extend(b".spr");
+            if !file.eq_ignore_ascii_case(&want)
+                || genders.iter().any(|g| g == dir)
+                || !seen.insert(dir.to_vec())
+            {
+                continue;
+            }
+            out.push((
+                GrfPath::new(dir.to_vec()).display(self.mode),
+                dir.to_vec(),
+                i,
+            ));
+        }
+        out
+    }
+
+    /// How alike the sprite of the animation `index` is to each kRO garment of the archive, best
+    /// first (at most `limit`): "Save as garment" copies the animations of the closest one.
+    pub fn garment_matches(&self, index: usize, limit: usize) -> Result<Vec<GarmentMatch>, String> {
+        let spr_i = self
+            .sibling(index, "spr")
+            .ok_or_else(|| err!("err-no-spr"))?;
+        let spr = Spr::parse(&self.working_bytes(spr_i)?.1).map_err(|e| e.to_string())?;
+        let (own, trimmed) = (Sizes::of(&spr), Sizes::trimmed(&spr));
+        let mut out: Vec<GarmentMatch> = self
+            .garment_candidates()
+            .into_iter()
+            .filter_map(|(name, _, at)| {
+                let kro = Spr::parse(&self.working_bytes(at).ok()?.1).ok()?;
+                let (ratio, _) = act_garment::best_match(&own, &trimmed, &Sizes::of(&kro));
+                Some(GarmentMatch { name, ratio })
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.ratio
+                .total_cmp(&a.ratio)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// ACT Editor's "Save as garment": the animation of `index` becomes the animations of a
+    /// garment for every job and both genders under `folder\base`, staged as new entries.
+    pub fn stage_save_garment(
+        &mut self,
+        index: usize,
+        spec: &GarmentSpec,
+    ) -> Result<GarmentReport, String> {
+        self.transact(|s| s.stage_save_garment_impl(index, spec))
+    }
+
+    fn stage_save_garment_impl(
+        &mut self,
+        index: usize,
+        spec: &GarmentSpec,
+    ) -> Result<GarmentReport, String> {
+        let base = spec.base.trim();
+        if base.is_empty() || base.contains(['\\', '/']) {
+            return Err(err!("err-garment-name"));
+        }
+        let mut folder = spec.folder.trim().replace('/', "\\");
+        if folder.is_empty() {
+            folder = GARMENT_DIR.into();
+        }
+        if !folder.ends_with('\\') {
+            folder.push('\\');
+        }
+        let jobs_text = if spec.jobs.trim().is_empty() {
+            Self::garment_default_jobs()
+        } else {
+            spec.jobs.clone()
+        };
+        let jobs: Vec<(String, String)> = act_garment::job_paths(jobs_text.as_bytes())
+            .into_iter()
+            .map(|(m, f)| {
+                (
+                    String::from_utf8_lossy(&m).into_owned(),
+                    String::from_utf8_lossy(&f).into_owned(),
+                )
+            })
+            .collect();
+        if jobs.is_empty() {
+            return Err(err!("err-garment-no-jobs"));
+        }
+        let (_, act_bytes, _) = self.working_bytes(index)?;
+        let spr_i = self
+            .sibling(index, "spr")
+            .ok_or_else(|| err!("err-no-spr"))?;
+        let spr_bytes = self.working_bytes(spr_i)?.1;
+        let source = Act::parse(&act_bytes).map_err(|e| e.to_string())?;
+        let spr = Spr::parse(&spr_bytes).map_err(|e| e.to_string())?;
+        let path = |dir: &str, g: &str, job: &str, ext: &str| {
+            let text = format!("{dir}{g}\\{job}_{g}.{ext}");
+            GrfPath::from_display(&text, self.mode).ok_or_else(|| err!("err-name-chars"))
+        };
+        let mut staged: Vec<(GrfPath, Arc<Vec<u8>>, String)> = Vec::new();
+        let target = format!("{folder}{base}\\");
+        let mut report = GarmentReport {
+            files: 0,
+            robe: None,
+            ratio: 0.0,
+        };
+        // the sprite that goes with the animations (the one without borders when it matched better)
+        let mut out_spr = spr.clone();
+        let mut closest = None;
+        if spec.guess {
+            let (own, trimmed) = (Sizes::of(&spr), Sizes::trimmed(&spr));
+            let mut best: Option<(f64, bool, String, Vec<u8>, Sizes)> = None;
+            for (name, dir, at) in self.garment_candidates() {
+                if spec.robe.as_deref().is_some_and(|r| r != name) {
+                    continue;
+                }
+                let Ok(kro) = Spr::parse(&self.working_bytes(at)?.1) else {
+                    continue;
+                };
+                let kro = Sizes::of(&kro);
+                let (ratio, used_trimmed) = act_garment::best_match(&own, &trimmed, &kro);
+                if best.as_ref().is_none_or(|b| ratio > b.0) {
+                    best = Some((ratio, used_trimmed, name, dir, kro));
+                }
+            }
+            let (ratio, used_trimmed, name, dir, kro) =
+                best.ok_or_else(|| err!("err-garment-no-match"))?;
+            if used_trimmed {
+                out_spr = act_garment::trim_sprite(&spr);
+            }
+            report.robe = Some(name);
+            report.ratio = ratio;
+            closest = Some((dir, kro, Sizes::of(&out_spr)));
+        }
+        let robe_prefix = GrfPath::from_display(GARMENT_DIR, self.mode)
+            .map(|p| p.as_bytes().to_vec())
+            .unwrap_or_default();
+        for (male, female) in &jobs {
+            for (g, job) in [("남", male), ("여", female)] {
+                let own = path(&target, g, job, "act")?;
+                let act = match &closest {
+                    Some((dir, kro, new)) => {
+                        let tail =
+                            GrfPath::from_display(&format!("\\{g}\\{job}_{g}.act"), self.mode);
+                        let found = tail.and_then(|t| {
+                            let mut b = robe_prefix.clone();
+                            b.extend(dir);
+                            b.extend(t.as_bytes());
+                            self.arc.find(&GrfPath::new(b))
+                        });
+                        match found.and_then(|i| self.working_bytes(i).ok()) {
+                            Some((_, data, _)) => {
+                                let mut a = Act::parse(&data).map_err(|e| e.to_string())?;
+                                act_garment::fit_to_sprite(&mut a, kro, new, spec.dx, spec.dy);
+                                a
+                            }
+                            // no such job in that garment: the animation as it is
+                            None => source.clone(),
+                        }
+                    }
+                    None => {
+                        let mut a = source.clone();
+                        act_garment::shift(&mut a, spec.dx, spec.dy);
+                        a
+                    }
+                };
+                let v = act.version;
+                staged.push((
+                    own,
+                    Arc::new(act.to_bytes(v).map_err(|e| e.to_string())?),
+                    "garment animation".into(),
+                ));
+            }
+        }
+        let spr_out = Arc::new(out_spr.to_bytes(spr.version).map_err(|e| e.to_string())?);
+        if spec.copy_spr {
+            for (male, female) in &jobs {
+                for (g, job) in [("남", male), ("여", female)] {
+                    staged.push((
+                        path(&target, g, job, "spr")?,
+                        spr_out.clone(),
+                        "garment sprite".into(),
+                    ));
+                }
+            }
+        } else {
+            let one = GrfPath::from_display(&format!("{target}{base}.spr"), self.mode)
+                .ok_or_else(|| err!("err-name-chars"))?;
+            staged.push((one, spr_out, "garment sprite".into()));
+        }
+        report.files = staged.len();
+        for (name, data, what) in staged {
+            self.stage(Change::PutBytes {
+                name,
+                data,
+                what: vec![what],
+            });
+        }
+        Ok(report)
     }
 
     /// Sets the frame interval of an action of an animation, in milliseconds.
@@ -6308,6 +6603,103 @@ mod tests {
         s.stage_text_edit(kr, "\u{b098}\n").unwrap();
         assert_eq!(s.working_bytes(kr).unwrap().1, [0xb3, 0xaa, 0x0a]);
         assert!(s.stage_text_edit(kr, "\u{1f600}\n").is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_animation_comes_with_its_empty_sprite_and_the_view_shows_neighbours() {
+        let (dir, grf) = sample("newact");
+        let mut s = Session::open(&grf).unwrap();
+        s.stage_new_act(r"data\sprite\mob.act", "monster", true)
+            .unwrap();
+        let names: Vec<_> = s.pending().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, [r"data\sprite\mob.act", r"data\sprite\mob.spr"]);
+        // without the sprite only the animation, and a wrong name or template stages nothing
+        s.stage_new_act(r"data\sprite\npc.act", "npc", false)
+            .unwrap();
+        assert_eq!(s.pending().len(), 3);
+        assert!(s.stage_new_act(r"data\sprite\x.txt", "npc", true).is_err());
+        assert!(
+            s.stage_new_act(r"data\sprite\y.act", "garment", true)
+                .is_err()
+        );
+        assert_eq!(s.pending().len(), 3);
+
+        // the frames before and after wrap round and sit on the canvas of the frame
+        assert_eq!(s.search("a.act"), 1);
+        let act_i = s.page(0, 1)[0].index;
+        let v = s.act_view_with(act_i, 0, 0, &[], true).unwrap();
+        assert!(v.prev_png.is_some() && v.next_png.is_some());
+        assert_ne!(v.prev_png, v.png, "frame 1 sits 3 px further right");
+        assert_eq!(
+            v.prev_png, v.next_png,
+            "two frames: each is the other's neighbour"
+        );
+        assert!(
+            s.act_view_with(act_i, 1, 0, &[], true)
+                .unwrap()
+                .prev_png
+                .is_none()
+        );
+        assert!(
+            s.act_view_with(act_i, 0, 0, &[], false)
+                .unwrap()
+                .next_png
+                .is_none()
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saving_as_a_garment_stages_every_job_for_both_genders() {
+        use crate::backend::GarmentSpec;
+        let (dir, grf) = sample("garment");
+        let mut s = Session::open(&grf).unwrap();
+        assert_eq!(s.search("a.act"), 1);
+        let act_i = s.page(0, 1)[0].index;
+        let spec = |jobs: &str, copy_spr| GarmentSpec {
+            base: "wings".into(),
+            folder: r"data\sprite\cape".into(),
+            dx: 2,
+            dy: -1,
+            copy_spr,
+            guess: false,
+            robe: None,
+            jobs: jobs.into(),
+        };
+        let r = s
+            .stage_save_garment(act_i, &spec("knight\nlord#lady // c\n", false))
+            .unwrap();
+        // two jobs, two genders, and one shared sprite
+        assert_eq!(r.files, 5);
+        let names: Vec<_> = s.pending().into_iter().map(|p| p.name).collect();
+        assert!(names.contains(&"data\\sprite\\cape\\wings\\wings.spr".to_string()));
+        assert!(
+            names.contains(&"data\\sprite\\cape\\wings\\\u{c5ec}\\lady_\u{c5ec}.act".to_string())
+        );
+        let at = s
+            .pending()
+            .iter()
+            .position(|p| p.name.ends_with("\\\u{b0a8}\\knight_\u{b0a8}.act"))
+            .unwrap();
+        assert_eq!(at, 0);
+        s.discard_pending();
+        assert_eq!(
+            s.stage_save_garment(act_i, &spec("ab", true))
+                .unwrap()
+                .files,
+            4
+        );
+        s.discard_pending();
+        assert!(
+            s.stage_save_garment(act_i, &spec("\n// nothing\n", false))
+                .is_err()
+        );
+        // there is no garment of kRO in this archive to take animations from
+        let mut guess = spec("ab", false);
+        guess.guess = true;
+        assert!(s.stage_save_garment(act_i, &guess).is_err());
+        assert!(s.pending().is_empty());
         let _ = fs::remove_dir_all(dir);
     }
 

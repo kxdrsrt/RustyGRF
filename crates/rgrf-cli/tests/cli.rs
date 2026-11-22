@@ -1049,6 +1049,36 @@ fn spr_from_a_real_grf_entry() {
 }
 
 #[test]
+fn act_new_writes_a_template_and_its_empty_sprite() {
+    let dir = tmpdir("act-new");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("mob.act");
+    let o = out.to_str().unwrap();
+    let r = rgrf(&["--json", "act", "new", "--template", "monster", "-o", o]);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let v = json(&r);
+    assert_eq!(v["details"]["actions"], 40);
+    assert_eq!(v["details"]["frames"], 504);
+    assert!(dir.join("mob.spr").exists());
+    let info = json(&rgrf(&["--json", "act", "info", o]));
+    assert_eq!(info["version"], "2.5");
+    assert_eq!(info["sounds"][0], "atk");
+    // nothing is overwritten without --overwrite, and a wrong name lists the templates
+    assert!(!rgrf(&["act", "new", "-o", o]).status.success());
+    let bad = rgrf(&[
+        "act",
+        "new",
+        "--template",
+        "garment",
+        "-o",
+        dir.join("x.act").to_str().unwrap(),
+    ]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("headgear_male"));
+    assert!(!dir.join("x.act").exists());
+}
+
+#[test]
 fn act_info_and_render_round_trip() {
     use rgrf_formats::act::{Act, Action, Frame, Layer, V2_5};
     use rgrf_formats::spr::{IndexedImage, PALETTE_LEN, Spr, Version};
@@ -3298,5 +3328,127 @@ fn rare_formats_convert_back_and_forth() {
         .success()
     );
     assert_eq!(std::fs::read(&back).unwrap(), data);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn client_refs_checks_the_names_in_lua_tables() {
+    let dir = tmpdir("refs-lua");
+    let lua = dir.join("src/data/luafiles514/lua files");
+    std::fs::create_dir_all(lua.join("stateicon")).unwrap();
+    std::fs::create_dir_all(lua.join("agit")).unwrap();
+    std::fs::create_dir_all(dir.join("src/data/texture/effect")).unwrap();
+    std::fs::write(
+        lua.join("stateicon/stateiconimginfo.lub"),
+        "StateIconImgList = { [0] = { \"A.tga\", \"B.TGA\" } }",
+    )
+    .unwrap();
+    std::fs::write(
+        lua.join("agit/agitconfig.lub"),
+        "tbl_AgitInfo = { [\"here_cas.gat\"] = { Name = \"x\" }, [\"gone_cas.gat\"] = { Name = \"y\" } }",
+    )
+    .unwrap();
+    std::fs::write(dir.join("src/data/texture/effect/a.tga"), b"x").unwrap();
+    std::fs::write(dir.join("src/data/here_cas.gat"), b"x").unwrap();
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    assert!(
+        rgrf(&["build", &p("src"), "-o", &p("a.grf"), "--quiet"])
+            .status
+            .success()
+    );
+    let o = rgrf(&["client", "refs", &p("a.grf"), "--only", "lua", "--json"]);
+    assert_eq!(o.status.code(), Some(3));
+    let v = json(&o);
+    assert_eq!(v["tables_checked"], 2);
+    assert_eq!(v["table_names_checked"], 4);
+    assert_eq!(v["table_by_kind"]["missing_state_icon"], 1, "{v}");
+    assert_eq!(v["table_by_kind"]["missing_map"], 1, "{v}");
+    let missing: Vec<&str> = v["table_list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["detail"].as_str().unwrap())
+        .collect();
+    assert!(
+        missing.contains(&"data\\texture\\effect\\B.TGA"),
+        "{missing:?}"
+    );
+    assert!(missing.contains(&"data\\gone_cas.gat"), "{missing:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn client_translate_assemble_overlays_in_the_generators_order() {
+    let dir = tmpdir("translate");
+    let repo = dir.join("repo/Translation");
+    let write = |rel: &str, text: &str| {
+        let p = repo.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("Renewal/data/a.txt", "renewal");
+    write("Renewal/data/LuaFiles514/x.lub", "base");
+    write("Renewal/data/mine.txt", "server");
+    write("Renewal/SystemEN/s.lub", "loose");
+    write("Renewal/data/p.txt", "renewal");
+    write("Pre-Renewal/data/p.txt", "pre");
+    write("Compatibility/2017-06-14/Pre-Renewal/data/a.txt", "compat");
+    write(
+        "Compatibility/2019-06-05/Pre-Renewal/data/b.txt",
+        "after the client",
+    );
+    write(
+        "Compatibility/2017-12-13/Pre-Renewal/data/luafiles514/X.LUB",
+        "later",
+    );
+    write("Compatibility/2018-06-20/Pre-Renewal/data/b.txt", "client");
+    let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    let o = rgrf(&[
+        "client",
+        "translate",
+        "assemble",
+        &p("repo"),
+        "--mode",
+        "pre",
+        "--client",
+        "2018-06-20",
+        "--out",
+        &p("out"),
+        "--exclude",
+        "DATA/mine.*",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let read = |rel: &str| std::fs::read_to_string(dir.join("out").join(rel)).unwrap();
+    // later folders win (Pre-Renewal over Renewal, a client date over both, a date after the
+    // client's not at all), names match without regard to case, and the dropped file is gone; what is not `data` stays loose
+    assert_eq!(read("grf/data/p.txt"), "pre");
+    assert_eq!(read("grf/data/a.txt"), "compat");
+    assert_eq!(read("grf/data/b.txt"), "client");
+    assert_eq!(read("grf/data/LuaFiles514/x.lub"), "later");
+    assert_eq!(
+        std::fs::read_dir(dir.join("out/grf/data/LuaFiles514"))
+            .unwrap()
+            .count(),
+        1
+    );
+    assert!(!dir.join("out/grf/data/mine.txt").exists());
+    assert_eq!(read("loose/SystemEN/s.lub"), "loose");
+    // an existing output folder is never written into
+    assert!(
+        !rgrf(&[
+            "client",
+            "translate",
+            "assemble",
+            &p("repo"),
+            "--mode",
+            "pre",
+            "--client",
+            "2018-06-20",
+            "--out",
+            &p("out"),
+        ])
+        .status
+        .success()
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

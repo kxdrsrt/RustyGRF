@@ -165,6 +165,10 @@ pub struct Part<'a> {
     /// Draw the part below the base instead of on top (a reference behind the animation that is
     /// edited). Ignored for the base.
     pub under: bool,
+    /// With `anchored`: move the base instead of the part, so that the base's first anchor meets
+    /// the part's (ACT Editor's "Use body as base" for garments and wings, where the edited
+    /// animation follows the body). Ignored for the base.
+    pub base_follows: bool,
 }
 
 impl<'a> Part<'a> {
@@ -174,6 +178,7 @@ impl<'a> Part<'a> {
             spr,
             anchored: false,
             under: false,
+            base_follows: false,
         }
     }
 }
@@ -200,6 +205,22 @@ fn frame_layers<'a>(
         };
     };
     let base_anchor = base_frame.anchors.first().map(|a| (a.x, a.y));
+    let anchor_shift = |n: usize, f: &crate::act::Frame| match (base_anchor, f.anchors.first()) {
+        (Some((bx, by)), Some(a)) if parts[n].anchored => {
+            Some((f64::from(bx - a.x), f64::from(by - a.y)))
+        }
+        _ => None,
+    };
+    // with `base_follows` the base moves to the part's anchor and the part stays where it is
+    let mut base_shift = (0.0, 0.0);
+    for (n, part) in parts.iter().enumerate().skip(1) {
+        if part.base_follows
+            && let Some(f) = frame_of(part)
+            && let Some((dx, dy)) = anchor_shift(n, f)
+        {
+            base_shift = (-dx, -dy);
+        }
+    }
     let order = (1..parts.len())
         .filter(|&n| parts[n].under)
         .chain([0])
@@ -208,9 +229,12 @@ fn frame_layers<'a>(
     for n in order {
         let part = &parts[n];
         let Some(f) = frame_of(part) else { continue };
-        let (dx, dy) = match (part.anchored && n > 0, base_anchor, f.anchors.first()) {
-            (true, Some((bx, by)), Some(a)) => (f64::from(bx - a.x), f64::from(by - a.y)),
-            _ => (0.0, 0.0),
+        let (dx, dy) = if n == 0 {
+            base_shift
+        } else if part.base_follows {
+            (0.0, 0.0)
+        } else {
+            anchor_shift(n, f).unwrap_or((0.0, 0.0))
         };
         for l in &f.layers {
             if let Some(mut p) = prepare(l, part.spr) {
@@ -532,6 +556,17 @@ mod tests {
         let c = render_parts(&parts, 0, 0, b).unwrap();
         assert_eq!(px(&c, 0, 0)[3], 255);
         assert_eq!(px(&c, 10, 3)[3], 255);
+        // "use as base": the base meets the part instead, which stays at the origin
+        let follow = [
+            Part::new(&base, &s),
+            Part {
+                anchored: true,
+                base_follows: true,
+                ..Part::new(&hat, &s)
+            },
+        ];
+        let b = bounds_of_parts(&follow, 0, [0]).unwrap().unwrap();
+        assert_eq!((b.min_x, b.max_x, b.min_y, b.max_y), (-10, 1, -4, 1));
         // a part without the action is skipped, a base without it is an error
         let short = act(vec![]);
         let two = [Part::new(&base, &s), Part::new(&short, &s)];

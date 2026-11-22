@@ -590,13 +590,14 @@ fn an_animation_is_shown_with_reference_animations() {
     let spec = |path: &str, under| ReferenceSpec {
         path: path.into(),
         under,
+        base: false,
     };
     let refs = [
         spec("data\\sprite\\인간족\\몸통\\남\\초보자_남.act", true),
         spec("data/sprite/인간족/머리통/남/1_남.act", true),
         spec("data\\sprite\\no_such.act", true),
     ];
-    let v = s.act_view_with(hat, 0, 0, &refs).unwrap();
+    let v = s.act_view_with(hat, 0, 0, &refs, false).unwrap();
     let problems: Vec<_> = v.references.iter().map(|r| r.problem.clone()).collect();
     assert_eq!(
         problems,
@@ -614,6 +615,7 @@ fn an_animation_is_shown_with_reference_animations() {
                 "data\\sprite\\악세사리\\남\\남_Crushed_Snow_Man.act",
                 false,
             )],
+            false,
         )
         .unwrap();
     assert_eq!(
@@ -709,7 +711,7 @@ fn setting_up_a_real_headgear_from_its_own_placement_changes_almost_nothing() {
         out
     };
     let before = first_layers(&s);
-    let info = s.act_setup_info(hat, reference).unwrap();
+    let info = s.act_setup_info(hat, reference, false).unwrap();
     assert!(info.rows.len() >= 9, "{} reference images", info.rows.len());
     assert!(info.rows.iter().any(|r| r.image >= 0));
     assert!(info.rows.iter().all(|r| r.reference_png.is_some()));
@@ -720,9 +722,11 @@ fn setting_up_a_real_headgear_from_its_own_placement_changes_almost_nothing() {
             image: r.image,
             dx: r.dx,
             dy: r.dy,
+            reference_image: Some(r.reference_image),
         })
         .collect();
-    s.stage_act_setup(hat, reference, false, &choices).unwrap();
+    s.stage_act_setup(hat, reference, "headgear", &choices)
+        .unwrap();
     let after = first_layers(&s);
     assert_eq!(before.len(), after.len());
     // the artist's own offsets differ a little from "reference offset plus a constant" (for
@@ -748,8 +752,98 @@ fn setting_up_a_real_headgear_from_its_own_placement_changes_almost_nothing() {
     );
     assert!(near * 2 >= before.len(), "{near} of {}", before.len());
     // a head is set up the same way, and the reference must exist
-    assert!(s.act_setup_info(hat, "data\\sprite\\no_such.act").is_err());
-    assert!(s.stage_act_setup(hat, reference, true, &choices).is_ok());
+    assert!(
+        s.act_setup_info(hat, "data\\sprite\\no_such.act", false)
+            .is_err()
+    );
+    assert!(s.stage_act_setup(hat, reference, "head", &choices).is_ok());
+}
+
+#[test]
+fn a_real_garment_is_set_up_from_the_body_and_saved_for_all_jobs() {
+    use rustygrf_gui_lib::act_editor::SetupChoice;
+    use rustygrf_gui_lib::backend::GarmentSpec;
+    let Some(mut s) = open() else { return };
+    s.set_names("cp949").unwrap();
+    let n = s.search("data\\sprite\\로브\\*\\남\\초보자_남.act");
+    assert!(n > 20, "{n} garments");
+    let cape = s
+        .page(0, 500)
+        .into_iter()
+        .find(|r| r.name.contains("\\남\\초보자_남.act"))
+        .expect("a garment")
+        .index;
+    let body = "data\\sprite\\인간족\\몸통\\남\\초보자_남.act";
+    // the garment is read against the body: every body image that the body shows is a row
+    let info = s.act_setup_info(cape, body, true).unwrap();
+    assert!(info.rows.len() >= 5 && info.rows.iter().all(|r| r.usage.is_some()));
+    assert!(info.rows.iter().any(|r| r.image >= 0));
+    let before = s.act_view(cape, 0, 0).unwrap();
+    let first_layers = |s: &Session| {
+        let mut out = Vec::new();
+        for a in 0..before.actions {
+            let n = s.act_view(cape, a, 0).unwrap().frames;
+            for f in 0..n {
+                let l = &s.act_view(cape, a, f).unwrap().layers;
+                out.push(l.first().map(|l| (l.sprite_index, l.offset_x, l.offset_y)));
+            }
+        }
+        out
+    };
+    let layers_before = first_layers(&s);
+    let choices: Vec<SetupChoice> = info
+        .rows
+        .iter()
+        .map(|r| SetupChoice {
+            image: r.image,
+            dx: r.dx,
+            dy: r.dy,
+            reference_image: Some(r.reference_image),
+        })
+        .collect();
+    s.stage_act_setup(cape, body, "garment", &choices).unwrap();
+    let after = s.act_view(cape, 0, 0).unwrap();
+    assert_eq!(before.actions, after.actions);
+    assert_eq!(after.layers.len(), 1);
+    // a garment follows the body: most frames keep the picture the artist chose
+    let layers_after = first_layers(&s);
+    assert_eq!(layers_before.len(), layers_after.len());
+    let same = layers_before
+        .iter()
+        .zip(&layers_after)
+        .filter(|(b, a)| matches!((b, a), (Some(b), Some(a)) if b.0 == a.0))
+        .count();
+    eprintln!(
+        "{same} of {} garment frames keep their picture",
+        layers_before.len()
+    );
+    assert!(
+        same * 2 >= layers_before.len(),
+        "{same} of {}",
+        layers_before.len()
+    );
+    assert!(s.act_setup_info(cape, body, false).is_ok());
+    s.discard_pending();
+
+    // the garment's own sprite is closest to itself, and saving it as a garment with the kRO
+    // animations stages every job for both genders
+    let m = s.garment_matches(cape, 5).unwrap();
+    assert!(m[0].ratio > 0.99, "{} {}", m[0].name, m[0].ratio);
+    let spec = GarmentSpec {
+        base: "my_cape".into(),
+        folder: String::new(),
+        dx: 0,
+        dy: 0,
+        copy_spr: false,
+        guess: true,
+        robe: Some(m[0].name.clone()),
+        jobs: String::new(),
+    };
+    let report = s.stage_save_garment(cape, &spec).unwrap();
+    assert!(report.files > 300, "{} files", report.files);
+    assert_eq!(report.robe.as_deref(), Some(m[0].name.as_str()));
+    assert_eq!(s.pending().len(), report.files);
+    assert!(s.undo() && s.pending().is_empty());
 }
 
 #[test]

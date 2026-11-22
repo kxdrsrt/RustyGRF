@@ -20,11 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Linux x64, os: ubuntu-latest, args: "--bundles deb,appimage" }
-          - { name: Linux ARM64, os: ubuntu-24.04-arm, args: "--bundles deb,appimage" }
-          - { name: macOS ARM64, os: macos-latest, args: "--bundles app,dmg" }
-          - { name: Windows x64, os: windows-latest, args: "--bundles msi,nsis" }
-          - { name: Windows ARM64, os: windows-11-arm, args: "--bundles nsis" }
+          - { name: Linux x64, slug: linux-x64, os: ubuntu-latest, args: "--bundles deb,appimage" }
+          - { name: Linux ARM64, slug: linux-arm64, os: ubuntu-24.04-arm, args: "--bundles deb,appimage" }
+          - { name: macOS ARM64, slug: macos-arm64, os: macos-latest, args: "--bundles app,dmg" }
+          - { name: Windows x64, slug: windows-x64, os: windows-latest, args: "--bundles msi,nsis" }
+          - { name: Windows ARM64, slug: windows-arm64, os: windows-11-arm, args: "--bundles nsis" }
     defaults:
       run:
         working-directory: apps/gui
@@ -45,6 +45,15 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils
       - run: npm ci
       - run: npx tauri build ${{ matrix.args }}
+      - name: Command-line tools (rgrf, rgrf-mcp)
+        shell: bash
+        working-directory: .
+        run: |
+          cargo build --release --locked -p rgrf-cli -p rgrf-mcp
+          mkdir -p apps/gui/target/release/bundle/cli
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          tar -czf "apps/gui/target/release/bundle/cli/rustygrf-cli-${{ matrix.slug }}.tar.gz" -C target/release "rgrf$ext" "rgrf-mcp$ext"
       - uses: actions/upload-artifact@v4
         with:
           name: rustygrf-${{ matrix.name }}
@@ -54,5 +63,28 @@ jobs:
             apps/gui/target/release/bundle/**/*.deb
             apps/gui/target/release/bundle/**/*.AppImage
             apps/gui/target/release/bundle/**/*.dmg
+            apps/gui/target/release/bundle/cli/*.tar.gz
             apps/gui/target/release/bundle/macos/*.app
           if-no-files-found: error
+
+  # Bei einem Tag `v*`: die Installer als Release veröffentlichen; die Update-Abfrage der App
+  # (Hilfe → Nach Updates suchen) liest genau dieses Release.
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: rustygrf-*
+          merge-multiple: true
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(find dist -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*.dmg' -o -name 'rustygrf-cli-*.tar.gz' \))
+          gh release create "$GITHUB_REF_NAME" $files --repo "$GITHUB_REPOSITORY" --title "RustyGRF ${GITHUB_REF_NAME#v}" --generate-notes
