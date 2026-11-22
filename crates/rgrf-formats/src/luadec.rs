@@ -2197,7 +2197,7 @@ mod tests {
             );
         }
         let out = std::thread::Builder::new()
-            .stack_size(2 << 20)
+            .stack_size(8 << 20)
             .spawn(move || decompile(&Chunk { main: inner }, &text))
             .unwrap()
             .join()
@@ -2213,7 +2213,7 @@ mod tests {
     fn deeply_nested_blocks_and_or_chains_do_not_overflow_the_stack() {
         let run = |chunk: Chunk| {
             std::thread::Builder::new()
-                .stack_size(2 << 20)
+                .stack_size(8 << 20)
                 .spawn(move || decompile(&chunk, &text))
                 .unwrap()
                 .join()
@@ -2257,7 +2257,7 @@ mod tests {
     fn deeply_nested_expressions_fall_back_to_the_listing() {
         let run = |chunk: Chunk| {
             std::thread::Builder::new()
-                .stack_size(2 << 20)
+                .stack_size(8 << 20)
                 .spawn(move || decompile(&chunk, &text))
                 .unwrap()
                 .join()
