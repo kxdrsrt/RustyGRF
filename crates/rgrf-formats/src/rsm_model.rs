@@ -62,6 +62,8 @@ pub struct TexTrack {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
+    /// The version the model is read and shown as (a stored 2.1 is laid out like 2.2, but for the
+    /// faces, and is 2.2 here, see [`crate::rsm::layout`]).
     pub version: Version,
     pub animation_length: i32,
     pub shade_type: i32,
@@ -76,10 +78,11 @@ pub fn parse(bytes: &[u8]) -> Result<Model, RsmError> {
     if bytes.len() < 6 || (&bytes[..4] != b"GRSM" && &bytes[..4] != b"GRSX") {
         return Err(RsmError::BadMagic);
     }
-    let version = Version::new(bytes[4], bytes[5]);
-    if version < Version::new(1, 0) || version > V2_3 {
-        return Err(RsmError::UnsupportedVersion(version));
+    let stored = Version::new(bytes[4], bytes[5]);
+    if stored < Version::new(1, 0) || stored > V2_3 {
+        return Err(RsmError::UnsupportedVersion(stored));
     }
+    let version = crate::rsm::layout(stored);
     let mut r = Reader { d: bytes, pos: 6 };
     let animation_length = r.i32()?;
     let shade_type = r.i32()?;
@@ -126,7 +129,7 @@ pub fn parse(bytes: &[u8]) -> Result<Model, RsmError> {
     };
     let mut nodes = Vec::with_capacity(n_nodes.min(256));
     for _ in 0..n_nodes {
-        nodes.push(read_node(&mut r, version, &textures)?);
+        nodes.push(read_node(&mut r, stored, &textures)?);
     }
     Ok(Model {
         version,
@@ -147,7 +150,12 @@ fn floats<const N: usize>(r: &mut Reader<'_>) -> Result<[f32; N], RsmError> {
     Ok(out)
 }
 
-fn read_node(r: &mut Reader<'_>, v: Version, model_textures: &[Vec<u8>]) -> Result<Node, RsmError> {
+fn read_node(
+    r: &mut Reader<'_>,
+    stored: Version,
+    model_textures: &[Vec<u8>],
+) -> Result<Node, RsmError> {
+    let v = crate::rsm::layout(stored);
     let (name, parent) = if v >= V2_2 {
         (r.lstr()?, r.lstr()?)
     } else {
@@ -198,7 +206,7 @@ fn read_node(r: &mut Reader<'_>, v: Version, model_textures: &[Vec<u8>]) -> Resu
     let n = r.count("face", 20)?;
     let mut faces = Vec::with_capacity(n);
     for _ in 0..n {
-        let len = if v >= V2_2 {
+        let len = if stored >= V2_2 {
             r.count("face length", 1)?.max(24)
         } else if v >= V1_2 {
             24

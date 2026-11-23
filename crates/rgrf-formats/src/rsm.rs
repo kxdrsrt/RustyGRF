@@ -8,6 +8,10 @@
 //! before 2.2 16 reserved bytes, the texture list (`i32` count, 40-byte names) and the main mesh
 //! name (40 bytes); 2.2 an `f32` frame rate, the texture list and the main mesh names with `i32`
 //! length prefixes; 2.3 the frame rate and the main mesh names (textures live in each mesh).
+//! Version 2.1 is stored like 2.2 except that faces have no length in front (24 bytes as before
+//! 2.2). Measured: the only two such files in kRO, `engine\biggear_s_01.rsm2` and
+//! `engine\position_j_01.rsm2` (used by the maps `vr_hero00` and `vr_hero01`), read to their
+//! last byte that way and no other combination does; see [`layout`].
 //!
 //! Derived from GRF Editor (Tokeiburu), used with permission, see `docs/05-licensing.md`.
 
@@ -121,15 +125,22 @@ pub(crate) const V1_6: Version = Version::new(1, 6);
 pub(crate) const V2_2: Version = Version::new(2, 2);
 pub(crate) const V2_3: Version = Version::new(2, 3);
 
+/// The version whose layout a file of version `v` has: 2.1 is laid out like 2.2 (but for the
+/// faces, which follow the stored version).
+pub(crate) fn layout(v: Version) -> Version {
+    if v == Version::new(2, 1) { V2_2 } else { v }
+}
+
 impl Rsm {
     pub fn parse(bytes: &[u8]) -> Result<Self, RsmError> {
         if bytes.len() < 6 || (&bytes[..4] != b"GRSM" && &bytes[..4] != b"GRSX") {
             return Err(RsmError::BadMagic);
         }
-        let version = Version::new(bytes[4], bytes[5]);
-        if version < Version::new(1, 0) || version > V2_3 {
-            return Err(RsmError::UnsupportedVersion(version));
+        let stored = Version::new(bytes[4], bytes[5]);
+        if stored < Version::new(1, 0) || stored > V2_3 {
+            return Err(RsmError::UnsupportedVersion(stored));
         }
+        let version = layout(stored);
         let mut r = Reader { d: bytes, pos: 6 };
         let animation_length = r.i32()?;
         let shade_type = r.i32()?;
@@ -166,7 +177,7 @@ impl Rsm {
 
         let mut meshes = Vec::with_capacity(n_meshes.min(256));
         for _ in 0..n_meshes {
-            meshes.push(read_mesh(&mut r, version)?);
+            meshes.push(read_mesh(&mut r, stored)?);
         }
         if version < V1_6 {
             let n = r.count("scale key frame", 20)?;
@@ -185,7 +196,7 @@ impl Rsm {
             r.skip(volume_boxes * size)?;
         }
         Ok(Self {
-            version,
+            version: stored,
             animation_length,
             shade_type,
             alpha,
@@ -210,7 +221,8 @@ impl Rsm {
     }
 }
 
-fn read_mesh(r: &mut Reader<'_>, v: Version) -> Result<MeshInfo, RsmError> {
+fn read_mesh(r: &mut Reader<'_>, stored: Version) -> Result<MeshInfo, RsmError> {
+    let v = layout(stored);
     let (name, parent) = if v >= V2_2 {
         (r.lstr()?, r.lstr()?)
     } else {
@@ -236,7 +248,7 @@ fn read_mesh(r: &mut Reader<'_>, v: Version) -> Result<MeshInfo, RsmError> {
     r.skip(tv * if v >= V1_2 { 12 } else { 8 })?;
     let faces = r.count("face", 20)?;
     for _ in 0..faces {
-        if v >= V2_2 {
+        if stored >= V2_2 {
             let len = r.count("face length", 1)?;
             r.skip(len.max(24))?;
         } else {
@@ -279,9 +291,10 @@ mod tests {
     use super::*;
 
     /// A model with one mesh of one triangle, built for `version`.
-    fn model(version: Version) -> Vec<u8> {
+    fn model(stored: Version) -> Vec<u8> {
+        let version = layout(stored);
         let mut b = b"GRSM".to_vec();
-        b.extend([version.major, version.minor]);
+        b.extend([stored.major, stored.minor]);
         b.extend(100i32.to_le_bytes()); // animation length
         b.extend(1i32.to_le_bytes()); // shade type
         if version >= V1_4 {
@@ -337,7 +350,7 @@ mod tests {
         b.extend(3i32.to_le_bytes()); // texture vertices
         b.extend(vec![0u8; 3 * if version >= V1_2 { 12 } else { 8 }]);
         b.extend(1i32.to_le_bytes()); // faces
-        if version >= V2_2 {
+        if stored >= V2_2 {
             b.extend(40i32.to_le_bytes());
             b.extend(vec![0u8; 40]);
         } else {
@@ -387,6 +400,21 @@ mod tests {
             };
             assert_eq!(r.all_textures(), want, "version {v}");
         }
+    }
+
+    #[test]
+    fn version_2_1_is_laid_out_like_2_2_with_fixed_faces() {
+        // measured: engine\biggear_s_01.rsm2 and engine\position_j_01.rsm2 of kRO (maps vr_hero00/01)
+        let f = model(Version::new(2, 1));
+        assert_eq!(&f[15..19], &30.0f32.to_le_bytes(), "frame rate as in 2.2");
+        let r = Rsm::parse(&f).unwrap();
+        assert_eq!(
+            (r.version, r.trailing, r.meshes[0].faces),
+            (Version::new(2, 1), 0, 1)
+        );
+        assert_eq!(r.all_textures(), [b"a.bmp"]);
+        let m = crate::rsm_model::parse(&f).unwrap();
+        assert_eq!((m.version, m.nodes.len(), m.frame_rate), (V2_2, 1, 30.0));
     }
 
     #[test]
