@@ -534,6 +534,21 @@ async fn locate(
     .await
 }
 
+/// Type-to-select: the line of the next name that starts with `prefix`.
+#[tauri::command]
+async fn find_line(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    view: usize,
+    prefix: String,
+    start: usize,
+) -> Res<Option<usize>> {
+    with_session(&state, &window, move |s| {
+        Ok(s.find_line(view, &prefix, start))
+    })
+    .await
+}
+
 /// The entries below a folder of a tree list.
 #[tauri::command]
 async fn folder_entries(
@@ -1024,6 +1039,17 @@ fn open_folder(path: String) -> Res<()> {
         return Err(err!("err-no-folder", "path": path));
     }
     backend::open_with_system(&p)?;
+    Ok(())
+}
+
+/// Shows a file or folder on disk selected in the system's file manager (after extracting).
+#[tauri::command]
+fn reveal_path(path: String) -> Res<()> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(err!("err-no-folder", "path": path));
+    }
+    backend::reveal_with_system(&p)?;
     Ok(())
 }
 
@@ -1799,6 +1825,7 @@ fn build_menu(
     let info = app.package_info();
     let about = item("about", &format!("About {}...", info.name), None)?;
     let updates = item("check-updates", "Check for Updates...", None)?;
+    let shortcuts = item("shortcuts", "Keyboard Shortcuts", Some("CmdOrCtrl+/"))?;
 
     let new: Item = Box::new(submenu(
         &lab("new", "New"),
@@ -1856,6 +1883,11 @@ fn build_menu(
         item("build", "Build from Folder...", None)?,
         item("merge", "Merge...", None)?,
         item("extract", "Extract...", None)?,
+        item(
+            "extract-selection",
+            "Extract Selection",
+            Some("CmdOrCtrl+E"),
+        )?,
         sep()?,
         Box::new(PredefinedMenuItem::close_window(app, None)?),
     ];
@@ -1915,8 +1947,7 @@ fn build_menu(
         Box::new(PredefinedMenuItem::maximize(app, None)?),
     ];
     let mut menus = Vec::new();
-    let mut help = None;
-    if cfg!(target_os = "macos") {
+    let help = if cfg!(target_os = "macos") {
         menus.push(submenu(
             &info.name,
             &[
@@ -1937,18 +1968,19 @@ fn build_menu(
         view.push(Box::new(PredefinedMenuItem::fullscreen(app, None)?));
         window.push(sep()?);
         window.push(Box::new(PredefinedMenuItem::close_window(app, None)?));
+        submenu(&lab("help", "Help"), &[shortcuts])?
     } else {
         file.push(Box::new(PredefinedMenuItem::quit(app, None)?));
         edit.push(sep()?);
         edit.push(settings);
-        help = Some(submenu(&lab("help", "Help"), &[about, updates])?);
-    }
+        submenu(&lab("help", "Help"), &[shortcuts, sep()?, about, updates])?
+    };
     menus.push(submenu(&lab("file", "File"), &file)?);
     menus.push(submenu(&lab("edit", "Edit"), &edit)?);
     menus.push(submenu(&lab("view", "View"), &view)?);
     menus.push(submenu(&lab("tools", "Tools"), &tools)?);
     menus.push(submenu(&lab("window", "Window"), &window)?);
-    menus.extend(help);
+    menus.push(help);
     let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = menus
         .iter()
         .map(|m| m as &dyn IsMenuItem<tauri::Wry>)
@@ -2053,6 +2085,7 @@ pub fn run() {
             tree_state,
             tree_restore,
             locate,
+            find_line,
             folder_entries,
             details,
             preview,
@@ -2116,6 +2149,7 @@ pub fn run() {
             stage_save_garment,
             stage_removals,
             open_folder,
+            reveal_path,
             text_for_edit,
             stage_text_edit,
             pending,

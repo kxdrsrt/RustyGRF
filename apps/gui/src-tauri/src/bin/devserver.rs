@@ -97,6 +97,13 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.locate(arg(a, "view")?, arg(a, "entry")?, folder.as_deref())?)
         }),
         "tree_state" => with(state, |s| to_json(s.tree_state(arg(a, "view")?)?)),
+        "find_line" => with(state, |s| {
+            to_json(s.find_line(
+                arg(a, "view")?,
+                &arg::<String>(a, "prefix")?,
+                arg(a, "start")?,
+            ))
+        }),
         "tree_restore" => with(state, |s| {
             let keys: Vec<String> = arg(a, "keys")?;
             to_json(s.tree_restore(arg(a, "view")?, &keys)?)
@@ -318,7 +325,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             s.stage_act_default_anchors(arg(a, "index")?, arg(a, "female")?)?;
             to_json(s.pending())
         }),
-        "open_folder" => Ok(Value::Null),
+        "open_folder" | "reveal_path" => Ok(Value::Null),
         "act_garment_matches" => with(state, |s| to_json(s.garment_matches(arg(a, "index")?, 30)?)),
         "act_garment_jobs" => to_json(backend::Session::garment_default_jobs()),
         "stage_save_garment" => with(state, |s| {

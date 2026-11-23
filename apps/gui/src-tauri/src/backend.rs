@@ -1439,6 +1439,8 @@ pub struct ExtractSummary {
     pub files: usize,
     pub damaged: usize,
     pub dest: String,
+    /// What to select in the file manager: the file (one entry) or the deepest folder holding them all.
+    pub reveal: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -4302,6 +4304,41 @@ impl Session {
         Ok(Located { line, rows })
     }
 
+    /// Type-to-select: the first line from `start` on (wrapping around) whose name, without its
+    /// folders, starts with `prefix` (any case), as in Finder and Explorer.
+    pub fn find_line(&self, view: usize, prefix: &str, start: usize) -> Option<usize> {
+        let st = self.views.get(view)?;
+        let want = prefix.to_lowercase();
+        if want.is_empty() {
+            return None;
+        }
+        let starts = |name: &str| {
+            let base = name.trim_end_matches('\\');
+            let base = base.rsplit_once('\\').map_or(base, |(_, b)| b);
+            base.to_lowercase().starts_with(&want)
+        };
+        let name_at = |n: usize| -> Option<&str> {
+            match &st.tree {
+                Some(t) => match st.lines.get(n)? {
+                    Line::File { entry, .. } => Some(self.names[*entry].as_str()),
+                    Line::Folder { node, .. } => Some(t.nodes[*node].path.as_str()),
+                },
+                None if st.flat.is_empty() && self.views_unset(view) => {
+                    Some(self.names[*self.filtered.get(n)?].as_str())
+                }
+                None => Some(self.names[*st.flat.get(n)?].as_str()),
+            }
+        };
+        let total = match &st.tree {
+            Some(_) => st.lines.len(),
+            None if st.flat.is_empty() && self.views_unset(view) => self.filtered.len(),
+            None => st.flat.len(),
+        };
+        (0..total)
+            .map(|k| (start + k) % total)
+            .find(|&n| name_at(n).is_some_and(starts))
+    }
+
     /// The entries below a folder of a tree list (all matches for an empty path); with
     /// `root_only` only the files directly in the folder (GRF Editor's "Extract root files only").
     pub fn folder_entries(
@@ -5324,7 +5361,44 @@ impl Session {
             files: indices.len(),
             damaged: rep.damaged.len(),
             dest: dest.display().to_string(),
+            reveal: self
+                .reveal_target(indices, dest, rep.renamed > 0)
+                .map(|p| p.display().to_string()),
         })
+    }
+
+    /// The extracted file (one entry, not renamed) or the deepest folder that holds all of them.
+    fn reveal_target(&self, indices: &[usize], dest: &Path, renamed: bool) -> Option<PathBuf> {
+        let root = std::fs::canonicalize(dest).ok()?;
+        let rels: Vec<PathBuf> = indices
+            .iter()
+            .filter_map(|&i| {
+                let e = self.arc.entry(i).ok()?;
+                rgrf_core::extract::safe_relative_path(&e.name, NameMode::Cp1252).ok()
+            })
+            .collect();
+        let first = rels.first()?;
+        if rels.len() == 1 && !renamed {
+            let file = root.join(first);
+            return Some(if file.exists() { file } else { root });
+        }
+        let mut common: Vec<_> = first.parent()?.components().collect();
+        for r in &rels[1..] {
+            let parts: Vec<_> = r
+                .parent()
+                .map(|p| p.components().collect())
+                .unwrap_or_default();
+            let same = common
+                .iter()
+                .zip(&parts)
+                .take_while(|(a, b)| a == b)
+                .count();
+            common.truncate(same);
+        }
+        let mut dir = root.clone();
+        dir.extend(common);
+        // case may differ from the archive on case-insensitive file systems; the folder exists either way
+        Some(if dir.exists() { dir } else { root })
     }
 
     /// Extracts the map of entry `index` (its RSW, GAT or GND) with every file it needs, see
@@ -5935,6 +6009,61 @@ mod tests {
         .unwrap();
         assert!(s.page_view(1, 0, 100).iter().all(|r| r.folder));
         assert!(s.set_view(2, spec(&|_| {})).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typing_finds_the_next_name_with_that_start_and_extracting_says_what_to_select() {
+        let (dir, grf) = sample("typeahead");
+        let mut s = Session::open(&grf).unwrap();
+        s.set_view(
+            0,
+            ViewSpec {
+                layout: "flat".into(),
+                ..ViewSpec::default()
+            },
+        )
+        .unwrap();
+        let rows = s.page_view(0, 0, 500);
+        let at = |n: Option<usize>| n.map(|n| rows[n].name.clone());
+        // the name without its folders counts, in any case
+        let r = at(s.find_line(0, "READ", 0)).unwrap();
+        assert!(r.ends_with("readme.txt"), "{r}");
+        assert_eq!(
+            s.find_line(0, "data", 0),
+            None,
+            "folders of a flat list are not names"
+        );
+        // from the last line it wraps around to the first match
+        let first = s.find_line(0, "r", 0).unwrap();
+        let last = rows.len() - 1;
+        if !rows[last]
+            .name
+            .rsplit('\\')
+            .next()
+            .unwrap()
+            .starts_with('r')
+        {
+            assert_eq!(s.find_line(0, "r", last), Some(first));
+        }
+        assert_eq!(s.find_line(0, "", 0), None);
+
+        let out = dir.join("out");
+        let one = rows
+            .iter()
+            .find(|r| r.name.ends_with("readme.txt"))
+            .unwrap()
+            .index;
+        let r = s.extract(&[one], &out, false, false).unwrap();
+        assert!(r.reveal.unwrap().ends_with("readme.txt"));
+        let all: Vec<usize> = rows.iter().map(|r| r.index).collect();
+        let r = s.extract(&all, &dir.join("out2"), false, false).unwrap();
+        let shown = PathBuf::from(r.reveal.unwrap());
+        assert!(
+            shown.is_dir() && shown.ends_with("data"),
+            "{}",
+            shown.display()
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

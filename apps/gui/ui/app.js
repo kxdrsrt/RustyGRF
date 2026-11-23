@@ -1615,11 +1615,36 @@ async function doExtractMap(row, shown = {}) {
 
 const LAST_EXTRACT_KEY = "rustygrf-last-extract";
 
-/** Where to extract to: the folder of the setting "Override the extraction path", else a question. */
+/** The folder of the open archive and the separator its path uses, or null for a new archive. */
+function archiveFolder() {
+  const p = S.untitled ? "" : S.info?.path || "";
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i > 0 ? { dir: p.slice(0, i), sep: p[i] } : null;
+}
+
+/**
+ * Where to extract to, by the setting "Extract to": a folder named after the archive next to it
+ * (`data-extracted`, the archive's paths kept), the archive's own folder (the client), a fixed
+ * folder, or a question.
+ */
 async function pickExtractDest() {
-  if (SET.extractTo) return SET.extractTo;
-  const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest") });
+  const at = archiveFolder();
+  if (SET.extractMode === "fixed" && SET.extractTo) return SET.extractTo;
+  if (at && SET.extractMode === "beside") return `${at.dir}${at.sep}${S.info.file_name.replace(/\.[^.]+$/, "")}-extracted`;
+  if (at && SET.extractMode === "client") return at.dir;
+  const dest = await T.dialog.open({ directory: true, multiple: false, title: t("ext-dest"), defaultPath: at?.dir });
   return Array.isArray(dest) ? dest[0] : dest;
+}
+
+/** Cmd/Ctrl+E: the selected file or folder goes straight to the usual place, without the question what. */
+async function quickExtract() {
+  if (!S.info) return;
+  const sel = S.selected != null ? S.rows[S.selected - S.offset] : null;
+  if (!sel) return doExtract();
+  const indices = await entriesOf(sel);
+  if (!indices.length) return note(t("ext-title"), t("ext-empty-folder"));
+  const dest = await pickExtractDest();
+  if (dest) return extractIndices(indices, dest);
 }
 
 async function doExtract() {
@@ -1647,7 +1672,10 @@ async function extractIndices(indices, dest) {
     try {
       const r = await invoke("extract", { indices, dest, rename, decompileLub: !!SET.decompileLub });
       setStatus(t("ext-done-status", { files: r.files, dest: r.dest }));
-      if (SET.openAfterExtract) invoke("open_folder", { path: r.dest }).catch(() => {});
+      if (SET.afterExtract === "reveal") invoke("reveal_path", { path: r.reveal || r.dest }).catch(() => {});
+      else if (SET.afterExtract === "open") invoke("open_folder", { path: r.dest }).catch(() => {});
+      // the file manager shows the result; the status line says where it went
+      if (SET.afterExtract !== "nothing" && !r.damaged) return;
       await ask(t("ext-done-title"), el("p", { text: `${t("ext-done-body", { files: r.files, dest: r.dest })}${r.damaged ? ` ${t("ext-damaged", { n: r.damaged })}` : ""}` }), [{ label: "OK", value: true, primary: true }], "success");
       return;
     } catch (e) {
@@ -3613,6 +3641,45 @@ async function doTextEncoding() {
   ], [{ label: "Close", value: null }], "info");
 }
 
+// A shortcut that is both a menu accelerator and a key the page handles must run once.
+const LAST_RUN = {};
+function once(id, f) {
+  const now = Date.now();
+  if (now - (LAST_RUN[id] || 0) < 400) return;
+  LAST_RUN[id] = now;
+  return f();
+}
+
+/** Help › Keyboard Shortcuts (Cmd/Ctrl+/). */
+async function openShortcuts() {
+  const mac = /Mac/.test(navigator.platform);
+  const m = mac ? "⌘" : "Ctrl+";
+  const sh = mac ? "⇧" : "Shift+";
+  const rows = [
+    [`${m}O`, "ks-open"],
+    [`${m}F`, "ks-search"],
+    ["↓ / Enter · Esc", "ks-search-go"],
+    [`${sh}${m}F`, "ks-search-files"],
+    ["a–z, 0–9", "ks-type"],
+    ["↑ ↓ ← → · Home End", "ks-move"],
+    [`${m}E`, "ks-extract"],
+    ["F2", "ks-rename"],
+    [mac ? "⌘⌫" : "Delete", "ks-remove"],
+    [mac ? "⌘I" : "Alt+Enter", "ks-props"],
+    [`${sh}${m}C`, "ks-copy-path"],
+    [mac ? "⌥⌘R" : "Shift+Alt+R", "ks-reveal"],
+    [`${m}Z · ${sh}${m}Z`, "ks-undo"],
+    [`${m}S · ${sh}${m}S`, "ks-save"],
+    [`${m}1 – ${m}4`, "ks-layout"],
+    [`${sh}${m}P`, "ks-preview"],
+    ["Ctrl+Tab", "ks-tabs"],
+    [`${m},`, "ks-settings"],
+    [`${m}/`, "ks-shortcuts"],
+  ];
+  const table = el("dl", { class: "facts shortcuts" }, ...rows.flatMap(([keys, key]) => [el("dt", {}, el("kbd", { text: keys })), el("dd", { text: t(key, { app: FILE_MANAGER() }) })]));
+  await ask(t("ks-title"), table, [{ label: "OK", value: true, primary: true }], "info");
+}
+
 /** Help › About: version, who made it, and whose work it stands on. */
 async function openAbout() {
   let version = "";
@@ -3998,10 +4065,15 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, openAfterExtract: false, extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", checkUpdates: true, skipVersion: "", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, extractMode: "beside", afterExtract: "reveal", extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", checkUpdates: true, skipVersion: "", lastArchive: "", recent: [] };
 const SET = (() => {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+    // settings of 0.1.0: a chosen folder meant "always there", the checkbox meant "open the folder"
+    if (saved.extractMode == null && saved.extractTo) saved.extractMode = "fixed";
+    if (saved.afterExtract == null && saved.openAfterExtract) saved.afterExtract = "open";
+    delete saved.openAfterExtract;
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -4098,6 +4170,13 @@ function openSettings() {
       ].filter(Boolean),
     );
   drawExtractTo();
+  const modeSel = pick("extractMode", t("set-extract-mode"), [["beside", t("set-extract-beside")], ["client", t("set-extract-client")], ["fixed", t("set-extract-fixed")], ["ask", t("set-extract-ask")]]);
+  // the folder picker belongs to "always this folder" only
+  modeSel.addEventListener("change", () => {
+    const y = $("settings-body").scrollTop;
+    openSettings();
+    $("settings-body").scrollTop = y;
+  });
   const bgColour = el("input", { type: "color", value: SET.previewBgColor || "#808080", "aria-label": t("set-bg-custom") });
   bgColour.addEventListener("input", () => change("previewBgColor", bgColour.value));
   const layouts = [["last", t("set-as-last")], ...LAYOUTS.map((k) => [k, t(`view-${k}`)])];
@@ -4131,8 +4210,9 @@ function openSettings() {
       row(t("set-updates"), check("checkUpdates", t("set-updates-on")), t("set-updates-hint")),
       el("h3", { text: t("set-extracting") }),
       row(t("set-decompile"), check("decompileLub", t("set-decompile-on")), t("set-decompile-hint")),
-      row(t("set-open-after"), check("openAfterExtract", t("set-open-after-on"))),
-      row(t("set-extract-to"), extractTo, t("set-extract-to-hint")),
+      row(t("set-extract-mode"), modeSel, t("set-extract-mode-hint")),
+      SET.extractMode === "fixed" ? row(t("set-extract-fixed"), extractTo) : null,
+      row(t("set-open-after"), pick("afterExtract", t("set-open-after"), [["reveal", t("set-after-reveal", { app: FILE_MANAGER() })], ["open", t("set-after-open")], ["nothing", t("set-after-nothing")]])),
       row(t("set-previewbg"), el("span", {}, pick("previewBg", t("set-previewbg"), [["checker", t("set-bg-checker")], ["black", t("set-bg-black")], ["white", t("set-bg-white")], ["gray", t("set-bg-gray")], ["green", t("set-bg-green")], ["custom", t("set-bg-custom")]]), " ", bgColour)),
       el("h3", { text: t("set-building") }),
       L(t("set-compression"), "method", METHODS()),
@@ -4782,6 +4862,32 @@ $("search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => runSearch(e.target.value.trim()), 180);
 });
+// from the search field to the results: ↓ or Enter; Esc clears it, a second Esc goes to the list
+$("search").addEventListener("keydown", async (e) => {
+  if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+  const toList = async () => {
+    $("viewport").focus();
+    if (!S.total || mainList.st.selected != null) return;
+    // in a tree the first lines are the folders of the hits: the first file is what was searched for
+    const first = S.rows.findIndex((r) => r && !r.folder);
+    await select(first >= 0 ? S.offset + first : 0);
+  };
+  if (e.key === "Enter" || e.key === "ArrowDown") {
+    e.preventDefault();
+    if (e.key === "Enter") {
+      clearTimeout(searchTimer);
+      await runSearch(e.target.value.trim());
+    }
+    return toList();
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (!e.target.value) return toList();
+    e.target.value = "";
+    clearTimeout(searchTimer);
+    await runSearch("");
+  }
+});
 $("names").addEventListener("change", async (e) => {
   try {
     await invoke("set_names", { mode: e.target.value });
@@ -4792,6 +4898,27 @@ $("names").addEventListener("change", async (e) => {
     setStatus(`Error: ${errText(err)}`);
   }
 });
+// type-to-select: the letters typed within a second form one prefix
+const TYPE_AHEAD = { buf: "", at: 0, seq: 0, timer: 0 };
+async function typeAhead(list, ch) {
+  const now = Date.now();
+  TYPE_AHEAD.buf = now - TYPE_AHEAD.at > 1000 ? ch : TYPE_AHEAD.buf + ch;
+  TYPE_AHEAD.at = now;
+  clearTimeout(TYPE_AHEAD.timer);
+  TYPE_AHEAD.timer = setTimeout(() => (TYPE_AHEAD.buf = ""), 1000);
+  const buf = TYPE_AHEAD.buf;
+  // one letter, or the same letter again and again, steps to the next match; a longer prefix may stay
+  const repeat = [...buf].every((c) => c.toLowerCase() === buf[0].toLowerCase());
+  const cur = list.st.selected ?? -1;
+  const seq = ++TYPE_AHEAD.seq;
+  try {
+    const line = await invoke("find_line", { view: list.view, prefix: repeat ? buf[0] : buf, start: Math.max(0, repeat ? cur + 1 : cur) });
+    if (seq !== TYPE_AHEAD.seq) return;
+    if (line != null) await list.pick(line);
+    else setStatus(t("ta-none", { prefix: buf }));
+  } catch {}
+}
+
 function wireList(list) {
   const { vp } = list;
   vp.addEventListener("scroll", () => list.scrolled(), { passive: true });
@@ -4823,7 +4950,25 @@ function wireList(list) {
     if (row && list.row(Number(row.dataset.pos))?.folder) toggleFolder(list, Number(row.dataset.pos));
   });
   vp.addEventListener("keydown", async (e) => {
+    const st0 = list.st;
+    const sel0 = st0.selected != null ? list.row(st0.selected) : null;
+    const mac = /Mac/.test(navigator.platform);
+    const cmd = mac ? e.metaKey : e.ctrlKey;
+    // shortcuts on the selected line, as in Finder and Explorer
+    if (sel0 && S.info) {
+      const run = (f) => (e.preventDefault(), f());
+      if (e.key === "F2" && !cmd && !e.altKey) return run(() => renameRow(list, sel0));
+      if ((e.key === "Delete" && !cmd) || (mac && e.key === "Backspace" && e.metaKey)) return run(() => deleteRow(list, sel0));
+      if ((mac && e.metaKey && e.key.toLowerCase() === "i") || (!mac && e.altKey && e.key === "Enter")) return run(() => showProperties(list, sel0));
+      if (cmd && e.shiftKey && e.key.toLowerCase() === "c") return run(() => copyText(sel0.name));
+      if (!sel0.folder && ((mac && e.metaKey && e.altKey && e.code === "KeyR") || (!mac && e.shiftKey && e.altKey && e.code === "KeyR"))) return run(() => invoke("reveal_entry", { index: sel0.index }).catch(() => {}));
+    }
     if (e.altKey || e.ctrlKey || e.metaKey) return;
+    // type-to-select: letters jump to the next name that starts with them ("*" in a tree opens all)
+    if (e.key.length === 1 && (e.key !== " " || TYPE_AHEAD.buf) && !(e.key === "*" && !TYPE_AHEAD.buf)) {
+      e.preventDefault();
+      return typeAhead(list, e.key);
+    }
     const st = list.st;
     const page = Math.max(1, Math.floor(vp.clientHeight / ROW_H) - 1);
     const cur = st.selected ?? -1;
@@ -5004,6 +5149,16 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     chooseArchive();
   }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "e" && S.info && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    once("extract-selection", quickExtract);
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && (e.key === "/" || e.key === "?") && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    once("shortcuts", openShortcuts);
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f" && S.info && !document.querySelector("dialog[open]")) {
     e.preventDefault();
     doSearchContents();
@@ -5030,7 +5185,7 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
-const NEEDS_ARCHIVE = new Set(["new-act", "new-folder", "thor-removals", "nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
+const NEEDS_ARCHIVE = new Set(["extract-selection", "new-act", "new-folder", "thor-removals", "nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
 const MENU_ACTIONS = {
   "new-window": () => invoke("open_in_window", { path: null }),
   "new-grf": () => newArchive("grf"),
@@ -5050,6 +5205,8 @@ const MENU_ACTIONS = {
   hash: doHashes,
   compare: doCompare,
   "search-contents": doSearchContents,
+  "extract-selection": () => once("extract-selection", quickExtract),
+  shortcuts: () => once("shortcuts", openShortcuts),
   "data-folder": () => invoke("open_data_folder"),
   history: openHistory,
   "text-encoding": doTextEncoding,

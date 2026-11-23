@@ -526,6 +526,8 @@ input.hexb[aria-invalid="true"] { border-color: #d33; }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 .facts.selectable dd, .facts.selectable code { user-select: text; -webkit-user-select: text; }
 .facts code { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.shortcuts { align-items: baseline; }
+.shortcuts kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 6px; border: 1px solid var(--border, rgba(128, 128, 128, 0.35)); border-bottom-width: 2px; border-radius: 5px; white-space: nowrap; color: var(--fg, inherit); }
 /* About */
 .about { display: flex; gap: 16px; align-items: center; margin-bottom: 8px; }
 .about h3 { margin: 0 0 2px; font-size: 20px; letter-spacing: -0.01em; }
