@@ -1826,6 +1826,7 @@ fn build_menu(
     let about = item("about", &format!("About {}...", info.name), None)?;
     let updates = item("check-updates", "Check for Updates...", None)?;
     let shortcuts = item("shortcuts", "Keyboard Shortcuts", Some("CmdOrCtrl+/"))?;
+    let tour = item("tour", "Getting Started", None)?;
 
     let new: Item = Box::new(submenu(
         &lab("new", "New"),
@@ -1968,12 +1969,15 @@ fn build_menu(
         view.push(Box::new(PredefinedMenuItem::fullscreen(app, None)?));
         window.push(sep()?);
         window.push(Box::new(PredefinedMenuItem::close_window(app, None)?));
-        submenu(&lab("help", "Help"), &[shortcuts])?
+        submenu(&lab("help", "Help"), &[tour, shortcuts])?
     } else {
         file.push(Box::new(PredefinedMenuItem::quit(app, None)?));
         edit.push(sep()?);
         edit.push(settings);
-        submenu(&lab("help", "Help"), &[shortcuts, sep()?, about, updates])?
+        submenu(
+            &lab("help", "Help"),
+            &[tour, shortcuts, sep()?, about, updates],
+        )?
     };
     menus.push(submenu(&lab("file", "File"), &file)?);
     menus.push(submenu(&lab("edit", "Edit"), &edit)?);

@@ -158,6 +158,11 @@ main.pv-bottom #split-main { cursor: row-resize; width: auto; height: 6px; }
 }
 .empty h1 { margin: 0; color: var(--accent); font-size: 28px; letter-spacing: 0.5px; }
 .empty p { margin: 0 0 8px; }
+.empty .empty-links { margin-top: 10px; font-size: 12px; }
+.tour-step { color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+.tour ul { margin: 6px 0 10px; padding-left: 20px; }
+.tour li { margin: 4px 0; }
+.tour kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 0 5px; border: 1px solid var(--border, rgba(128, 128, 128, 0.35)); border-bottom-width: 2px; border-radius: 4px; white-space: nowrap; }
 
 #lists { display: grid; grid-template-columns: 1fr; height: 100%; min-height: 0; }
 #lists.with-folders { grid-template-columns: var(--folders-w, 210px) 6px minmax(0, 1fr); }

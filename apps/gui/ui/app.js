@@ -3680,6 +3680,42 @@ async function openShortcuts() {
   await ask(t("ks-title"), table, [{ label: "OK", value: true, primary: true }], "info");
 }
 
+/**
+ * Help › Getting Started: a few pages about what the app does and how to move in it.
+ * Shown once on the first start; the keys are written for this system.
+ */
+async function openTour() {
+  const mac = /Mac/.test(navigator.platform);
+  const k = (s) => el("kbd", { text: s });
+  const cmd = (key) => (mac ? `⌘${key}` : `Ctrl+${key}`);
+  const item = (key, ...keys) => el("li", {}, ...t(key, { app: FILE_MANAGER() }).split(/(%\d)/).map((part) => {
+    const m = /^%(\d)$/.exec(part);
+    return m ? k(keys[Number(m[1])]) : part;
+  }));
+  const pages = [
+    ["tour-1-title", [el("p", { text: t("tour-1-intro") }), el("ul", {}, item("tour-1-open", cmd("O")), item("tour-1-formats"), item("tour-1-safe"))]],
+    ["tour-2-title", [el("p", { text: t("tour-2-intro") }), el("ul", {}, item("tour-2-search", cmd("F")), item("tour-2-type"), item("tour-2-views", cmd("1"), cmd("4")), item("tour-2-files", mac ? "⇧⌘F" : "Ctrl+Shift+F"))]],
+    ["tour-3-title", [el("p", { text: t("tour-3-intro") }), el("ul", {}, item("tour-3-preview"), item("tour-3-edit", "F2", mac ? "⌘⌫" : "Delete"), item("tour-3-undo", cmd("Z")), item("tour-3-save", cmd("S")))]],
+    ["tour-4-title", [el("p", { text: t("tour-4-intro") }), el("ul", {}, item("tour-4-extract", cmd("E")), item("tour-4-where"), item("tour-4-build"))]],
+    ["tour-5-title", [el("p", { text: t("tour-5-intro") }), el("ul", {}, item("tour-5-keys", cmd("/")), item("tour-5-settings", cmd(",")), item("tour-5-again"))]],
+  ];
+  let at = 0;
+  for (;;) {
+    const [title, body] = pages[at];
+    const buttons = [];
+    if (at < pages.length - 1) buttons.push({ label: t("tour-next"), value: "next", primary: true });
+    else buttons.push({ label: t("tour-done"), value: "done", primary: true });
+    if (at > 0) buttons.push({ label: t("tour-back"), value: "back" });
+    if (at < pages.length - 1) buttons.push({ label: t("tour-skip"), value: "done" });
+    const go = await ask(t(title), [el("div", { class: "tour" }, el("p", { class: "tour-step", text: t("tour-step", { n: at + 1, total: pages.length }) }), ...body)], buttons, "info");
+    SET.tourSeen = true;
+    saveSettings();
+    if (go === "next") at++;
+    else if (go === "back") at--;
+    else return;
+  }
+}
+
 /** Help › About: version, who made it, and whose work it stands on. */
 async function openAbout() {
   let version = "";
@@ -4065,7 +4101,7 @@ async function doVerify() {
 // ---------- settings ----------
 
 const SETTINGS_KEY = "rustygrf-settings";
-const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, extractMode: "beside", afterExtract: "reveal", extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", checkUpdates: true, skipVersion: "", lastArchive: "", recent: [] };
+const DEFAULTS = { language: "system", theme: "system", accent: "orange", fontsize: "normal", density: "normal", plainIcons: false, motion: "system", names: "cp949", layout: "last", preview: "last", reopen: false, warnDiscard: true, autoplay: true, tabs: true, decompileLub: false, rememberTree: false, thorIntegrity: false, extractMode: "beside", afterExtract: "reveal", extractTo: "", previewBg: "checker", previewBgColor: "#808080", method: "zlib", format: "0x200", checkUpdates: true, skipVersion: "", tourSeen: false, lastArchive: "", recent: [] };
 const SET = (() => {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
@@ -4208,6 +4244,10 @@ function openSettings() {
       row(t("set-thor-hash"), check("thorIntegrity", t("set-thor-hash-on")), t("set-thor-hash-hint")),
       row(t("set-tree"), check("rememberTree", t("set-tree-remember")), t("set-tree-hint")),
       row(t("set-updates"), check("checkUpdates", t("set-updates-on")), t("set-updates-hint")),
+      row(t("set-help"), el("span", { class: "bar" },
+        el("button", { type: "button", class: "small", text: t("ks-title"), onclick: () => (dlg.close(), openShortcuts()) }),
+        el("button", { type: "button", class: "small", text: t("tour-open"), onclick: () => (dlg.close(), openTour()) }),
+      ), t("set-help-hint", { key: /Mac/.test(navigator.platform) ? "⌘/" : "Ctrl+/" })),
       el("h3", { text: t("set-extracting") }),
       row(t("set-decompile"), check("decompileLub", t("set-decompile-on")), t("set-decompile-hint")),
       row(t("set-extract-mode"), modeSel, t("set-extract-mode-hint")),
@@ -4812,6 +4852,8 @@ let searchTimer = 0;
 $("btn-open").addEventListener("click", chooseArchive);
 $("btn-settings").addEventListener("click", openSettings);
 $("btn-open-2").addEventListener("click", chooseArchive);
+$("btn-tour").addEventListener("click", () => openTour());
+$("btn-keys").addEventListener("click", () => openShortcuts());
 $("btn-merge").addEventListener("click", doMerge);
 $("btn-replace").addEventListener("click", doReplace);
 $("btn-add").addEventListener("click", doAdd);
@@ -5207,6 +5249,7 @@ const MENU_ACTIONS = {
   "search-contents": doSearchContents,
   "extract-selection": () => once("extract-selection", quickExtract),
   shortcuts: () => once("shortcuts", openShortcuts),
+  tour: () => openTour(),
   "data-folder": () => invoke("open_data_folder"),
   history: openHistory,
   "text-encoding": doTextEncoding,
@@ -5260,9 +5303,12 @@ refreshTabs();
 
 // once per start, from the first window only, after the window has settled
 if (SET.checkUpdates && T.window?.getCurrentWindow?.().label === "main") setTimeout(() => checkForUpdates(false).catch(() => {}), 4000);
+// the first start shows the tour (not when a file was opened with the app, and only in the first window)
+const FIRST_WINDOW = !IN_APP || T.window?.getCurrentWindow?.().label === "main";
 
 invoke("startup_path")
   .then(async (p) => {
+    if (!p && !SET.tourSeen && FIRST_WINDOW && !(SET.reopen && SET.lastArchive)) setTimeout(() => !document.querySelector("dialog[open]") && openTour(), 600);
     if (!p && SET.reopen && SET.lastArchive) return openPath(SET.lastArchive);
     if (!p) return;
     await openPath(p);

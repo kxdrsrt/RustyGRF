@@ -1,7 +1,7 @@
 {
   "name": "rustygrf-gui",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "RustyGRF desktop app (Tauri 2). The UI is plain HTML/CSS/JS, so the only npm package is the Tauri CLI.",
   "scripts": {
     "tauri": "tauri",

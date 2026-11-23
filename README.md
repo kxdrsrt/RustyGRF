@@ -8,7 +8,7 @@
 
 A free, open-source desktop app, command-line tool and MCP server for Ragnarok Online client files. Open, check, edit, build, merge and encrypt archives, and edit what is inside them, on macOS, Windows and Linux.
 
-**macOS · Windows · Linux** · **Rust + Tauri 2** · **MIT or Apache-2.0** · **v0.2.0 (beta)**
+**macOS · Windows · Linux** · **Rust + Tauri 2** · **MIT or Apache-2.0** · **v0.2.1 (beta)**
 
 <p align="center">
   <a href="https://github.com/kxdrsrt/RustyGRF/releases/latest"><img src="https://img.shields.io/github/v/release/kxdrsrt/RustyGRF?style=flat-square&color=ea580c" alt="Latest release"></a>
@@ -61,7 +61,7 @@ A free, open-source desktop app, command-line tool and MCP server for Ragnarok O
     <td valign="top" width="50%"><strong>Made for scripts and agents</strong><br>Every function is also a <code>rgrf</code> command with <code>--json</code> output, and an MCP server lets AI agents inspect and build archives.</td>
   </tr>
   <tr>
-    <td valign="top" width="50%"><strong>Nice to use</strong><br>Tree, details, folders and gallery views, type a name's first letters to jump to it, keyboard shortcuts (<kbd>⌘/Ctrl</kbd>+<kbd>/</kbd> lists them), one-key extract that shows the result in Finder or Explorer, tabs, dark and light theme.</td>
+    <td valign="top" width="50%"><strong>Nice to use</strong><br>Tree, details, folders and gallery views, type a name's first letters to jump to it, keyboard shortcuts (<kbd>⌘/Ctrl</kbd>+<kbd>/</kbd> lists them), a short getting-started tour on first start, one-key extract that shows the result in Finder or Explorer, tabs, dark and light theme.</td>
     <td valign="top" width="50%"><strong>Nine languages</strong><br>English, German, Spanish, French, Indonesian, Japanese, Korean, Brazilian Portuguese and Filipino (all but English are machine drafts).</td>
   </tr>
 </table>
