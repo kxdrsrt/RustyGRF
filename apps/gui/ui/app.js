@@ -746,6 +746,7 @@ async function navigate(back) {
 
 const mainList = new VList(S, { vp: "viewport", spacer: "spacer", rows: "rows" }, 0, mainRow, (r) => {
   updateEditBar();
+  updatePathBar(r);
   if (!r.folder) noteVisit(r.index);
   if (V.preview === "off") return;
   if (r.folder) showFolderPreview(r);
@@ -755,11 +756,145 @@ const folderList = new VList(F, { vp: "folder-viewport", spacer: "folder-spacer"
   V.folder = r.name;
   F.selected = pos;
   folderList.draw();
+  updatePathBar(r);
   $("folder-all").classList.remove("on");
   applyView({ keepSelection: false, pane: false });
 });
 
 const visibleRange = () => mainList.range();
+
+// ---------- path bar (like the address bar of Explorer) ----------
+
+const PATH = { current: "", folder: false };
+
+/** Shows the path of the selected file or folder as clickable folders. */
+function updatePathBar(r) {
+  PATH.current = r ? r.name.replace(/\\+$/, "") : "";
+  PATH.folder = !!r?.folder;
+  if (!$("pb-input").hidden) return;
+  const crumbs = $("pb-crumbs");
+  $("pb-copy").disabled = !PATH.current;
+  $("pb-edit").disabled = !S.info;
+  if (!PATH.current) {
+    crumbs.replaceChildren(el("span", { class: "pb-empty", text: S.info ? t("pb-hint") : "" }));
+    return;
+  }
+  const parts = PATH.current.split("\\");
+  const out = [];
+  parts.forEach((p, i) => {
+    if (i) out.push(el("span", { class: "pb-sep", text: "›", "aria-hidden": "true" }));
+    const path = parts.slice(0, i + 1).join("\\");
+    const last = i === parts.length - 1;
+    if (last && !PATH.folder) out.push(el("span", { class: "pb-file", text: p }));
+    else out.push(el("button", { type: "button", class: "pb-part", text: p, title: path, onclick: (e) => (e.stopPropagation(), goToFolder(path)) }));
+  });
+  crumbs.replaceChildren(...out);
+  // a long path keeps its end in view, as Explorer does
+  crumbs.scrollLeft = crumbs.scrollWidth;
+}
+
+/** Cmd/Ctrl+L or a click on the bar: the path as text, to copy or to type another one. */
+function editPath() {
+  if (!S.info) return;
+  const input = $("pb-input");
+  input.value = PATH.current;
+  $("pb-crumbs").hidden = true;
+  input.hidden = false;
+  input.focus();
+  input.select();
+}
+
+function endEditPath() {
+  $("pb-input").hidden = true;
+  $("pb-crumbs").hidden = false;
+  updatePathBar(PATH.current ? { name: PATH.current, folder: PATH.folder } : null);
+}
+
+/** A typed path: a file is shown in its folder and selected, a folder is opened. */
+async function jumpToPath(text) {
+  const hit = await invoke("find_path", { path: text });
+  if (hit.entry != null) return showInFolder(hit.entry);
+  if (hit.folder) return goToFolder(hit.folder);
+  setStatus(t("pb-not-found", { path: text.trim() }));
+  return false;
+}
+
+/** Clears search and filters so that any entry can be shown again. */
+function clearFiltersQuietly() {
+  S.query = "";
+  $("search").value = "";
+  V.kinds = [];
+  V.size = "";
+  savePrefs();
+  buildKindFilter();
+  syncViewBar();
+}
+
+/** Goes to a folder (as the archive spells it): its line in the tree, or its files in the folders view. */
+async function goToFolder(path) {
+  if (!S.info) return;
+  clearFiltersQuietly();
+  if (V.layout === "folders") {
+    V.folder = path || null;
+    await applyView({ keepSelection: false });
+    if (path) {
+      const at = await invoke("locate", { view: 1, entry: null, folder: path });
+      if (at.line != null) {
+        await folderList.reset(at.rows, true);
+        F.selected = at.line;
+        folderList.scrollTo(at.line);
+        folderList.draw();
+        $("folder-all").classList.remove("on");
+      }
+    }
+    updatePathBar(path ? { name: path, folder: true } : null);
+    return;
+  }
+  if (V.layout !== "tree") {
+    V.layout = "tree";
+    savePrefs();
+    syncViewBar();
+  }
+  await applyView({ keepSelection: false });
+  if (!path) return updatePathBar(null);
+  const at = await invoke("locate", { view: 0, entry: null, folder: path });
+  if (at.line == null) return;
+  await mainList.reset(at.rows, true);
+  await select(at.line);
+}
+
+/** Context menu "Show in folder": the file where it lies, with the search and filters cleared. */
+async function showInFolder(index) {
+  const d = await invoke("details", { index });
+  await goToFolder(dirOf(d.name));
+  const at = await invoke("locate", { view: 0, entry: index, folder: null });
+  if (at.line == null) return;
+  await mainList.reset(at.rows, true);
+  await select(at.line);
+  $("viewport").focus();
+}
+
+$("pb-crumbs").addEventListener("click", (e) => !e.target.closest(".pb-part") && editPath());
+$("pb-edit").addEventListener("click", editPath);
+$("pb-copy").addEventListener("click", () => PATH.current && copyText(PATH.current));
+$("pb-input").addEventListener("keydown", async (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    endEditPath();
+    $("viewport").focus();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const text = e.target.value;
+    if (!text.trim()) return endEditPath();
+    const done = await jumpToPath(text);
+    if (done !== false) {
+      endEditPath();
+      $("viewport").focus();
+    }
+  }
+});
+$("pb-input").addEventListener("blur", () => setTimeout(() => !$("pb-input").hidden && document.activeElement !== $("pb-input") && endEditPath(), 100));
 const loadWindow = () => mainList.load();
 const render = () => mainList.draw();
 const onScroll = () => mainList.scrolled();
@@ -1013,6 +1148,7 @@ function showFolderPreview(r) {
 // ---------- preview ----------
 
 function clearPreview() {
+  updatePathBar(V.layout === "folders" && V.folder ? { name: V.folder, folder: true } : null);
   stopAudio();
   $("preview-head").replaceChildren();
   $("preview-body").replaceChildren(el("p", { class: "placeholder", text: S.info ? t("pvw-select") : "" }));
@@ -3658,6 +3794,7 @@ async function openShortcuts() {
   const rows = [
     [`${m}O`, "ks-open"],
     [`${m}F`, "ks-search"],
+    [`${m}L`, "ks-path"],
     ["↓ / Enter · Esc", "ks-search-go"],
     [`${sh}${m}F`, "ks-search-files"],
     ["a–z, 0–9", "ks-type"],
@@ -4383,6 +4520,8 @@ function entryMenu(list, row) {
   };
   const guard = (fn) => () => Promise.resolve(fn()).catch((e) => note(t("open-failed"), errText(e), true));
   if (row.folder) {
+    // in a search the folder lines only lead to hits; this opens the folder as it is
+    if (filtersActive()) items.push({ label: t("ctx-show-folder"), icon: "folder", run: guard(() => goToFolder(row.name)) }, "-");
     items.push({ label: t("ctx-extract-folder"), icon: "extract", run: guard(pickAndExtract) });
     items.push({ label: t("ctx-extract-root"), icon: "extract", run: guard(async () => {
       const dest = await pickExtractDest();
@@ -4404,6 +4543,7 @@ function entryMenu(list, row) {
   }
   const ext = extOf(row.name).toLowerCase();
   items.push({ label: t("ctx-open"), icon: "open", run: guard(async () => setStatus(t("ctx-opened", { path: await invoke("open_external", { index: row.index }) }))) });
+  items.push({ label: t("ctx-show-folder"), icon: "folder", run: guard(() => showInFolder(row.index)) });
   items.push({ label: t("ctx-reveal", { app: FILE_MANAGER() }), icon: "folder", run: guard(() => invoke("reveal_entry", { index: row.index })) });
   items.push("-", { label: t("ctx-extract"), icon: "extract", run: guard(pickAndExtract) });
   if (last) items.push({ label: t("ctx-extract-last", { folder: baseOf(last.replace(/\//g, "\\")) || last }), icon: "extract", run: guard(() => extractIndices([row.index], last)) });
@@ -5191,6 +5331,11 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     chooseArchive();
   }
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "l" && S.info && !document.querySelector("dialog[open]")) {
+    e.preventDefault();
+    once("go-path", editPath);
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "e" && S.info && !document.querySelector("dialog[open]")) {
     e.preventDefault();
     once("extract-selection", quickExtract);
@@ -5227,7 +5372,7 @@ if (T.event?.listen) {
 
 // the native menu bar offers every toolbar command; a disabled button means the command does not apply now
 const MENU_BUTTONS = { open: "btn-open", build: "btn-build", merge: "btn-merge", extract: "btn-extract", verify: "btn-verify", add: "btn-add", replace: "btn-replace", remove: "btn-remove", changes: "btn-changes" };
-const NEEDS_ARCHIVE = new Set(["extract-selection", "new-act", "new-folder", "thor-removals", "nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
+const NEEDS_ARCHIVE = new Set(["go-path", "extract-selection", "new-act", "new-folder", "thor-removals", "nav-back", "nav-forward", "history", "search-contents", "close-archive", "save", "save-as", "save-repack", "save-compact", "save-encrypt", "save-decrypt", "archive-settings", "hash", "compare", "reduce-images", "flat-maps"]);
 const MENU_ACTIONS = {
   "new-window": () => invoke("open_in_window", { path: null }),
   "new-grf": () => newArchive("grf"),
@@ -5248,6 +5393,7 @@ const MENU_ACTIONS = {
   compare: doCompare,
   "search-contents": doSearchContents,
   "extract-selection": () => once("extract-selection", quickExtract),
+  "go-path": () => once("go-path", editPath),
   shortcuts: () => once("shortcuts", openShortcuts),
   tour: () => openTour(),
   "data-folder": () => invoke("open_data_folder"),

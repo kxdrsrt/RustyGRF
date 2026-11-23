@@ -73,8 +73,21 @@ html, body {
   overflow: hidden;
 }
 
-body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
-body.has-tabs { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+body { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+body.has-tabs { grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+
+.pathbar { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 10px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; }
+.pathbar .pb-icon { flex: none; color: var(--muted); }
+.pb-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; overflow: hidden; white-space: nowrap; cursor: text; min-height: 24px; border-radius: 5px; padding: 0 4px; }
+.pb-crumbs:hover { background: var(--hover); }
+.pb-crumbs .pb-part { border: none; background: none; padding: 2px 5px; border-radius: 4px; color: var(--text); font: inherit; cursor: pointer; flex: none; }
+.pb-crumbs .pb-part:hover { background: var(--line); }
+.pb-crumbs .pb-file { padding: 2px 5px; font-weight: 600; flex: none; }
+.pb-crumbs .pb-sep { color: var(--muted); padding: 0 1px; flex: none; }
+.pb-crumbs .pb-empty { color: var(--muted); padding: 0 5px; }
+.pb-input { flex: 1; min-width: 0; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: 5px; padding: 3px 8px; outline: none; }
+.pb-btn { flex: none; padding: 2px 6px; border: none; background: none; }
+.pb-btn .ic { width: 15px; height: 15px; }
 
 .muted { color: var(--muted); }
 .spacer { flex: 1; }

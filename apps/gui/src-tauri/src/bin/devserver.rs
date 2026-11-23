@@ -97,6 +97,7 @@ fn invoke(state: &State, cmd: &str, a: &Value) -> Result<Value, String> {
             to_json(s.locate(arg(a, "view")?, arg(a, "entry")?, folder.as_deref())?)
         }),
         "tree_state" => with(state, |s| to_json(s.tree_state(arg(a, "view")?)?)),
+        "find_path" => with(state, |s| to_json(s.find_path(&arg::<String>(a, "path")?))),
         "find_line" => with(state, |s| {
             to_json(s.find_line(
                 arg(a, "view")?,

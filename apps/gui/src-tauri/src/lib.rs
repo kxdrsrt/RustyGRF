@@ -534,6 +534,16 @@ async fn locate(
     .await
 }
 
+/// The path bar: the file or folder a typed path names.
+#[tauri::command]
+async fn find_path(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    path: String,
+) -> Res<backend::PathHit> {
+    with_session(&state, &window, move |s| Ok(s.find_path(&path))).await
+}
+
 /// Type-to-select: the line of the next name that starts with `prefix`.
 #[tauri::command]
 async fn find_line(
@@ -1926,6 +1936,8 @@ fn build_menu(
         item("preview-right", "Preview on the Right", None)?,
         item("preview-bottom", "Preview at the Bottom", None)?,
         item("preview-off", "Hide Preview", None)?,
+        sep()?,
+        item("go-path", "Go to Path...", Some("CmdOrCtrl+L"))?,
     ];
     let tools = vec![
         item("verify", "Verify Archive", None)?,
@@ -2090,6 +2102,7 @@ pub fn run() {
             tree_restore,
             locate,
             find_line,
+            find_path,
             folder_entries,
             details,
             preview,

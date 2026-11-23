@@ -264,6 +264,13 @@ pub struct Located {
     pub rows: usize,
 }
 
+/// What a path typed into the path bar names: a file, a folder (as the archive spells it), or nothing.
+#[derive(Serialize, Debug, PartialEq, Eq, Default)]
+pub struct PathHit {
+    pub entry: Option<usize>,
+    pub folder: Option<String>,
+}
+
 #[derive(Serialize, Debug, PartialEq, Eq)]
 pub struct ViewSummary {
     /// Lines the list shows (folders count in a tree).
@@ -4304,6 +4311,36 @@ impl Session {
         Ok(Located { line, rows })
     }
 
+    /// The path bar: the file or folder a typed path names, in any case, with `/` or `\`, as shown
+    /// (the names follow the chosen name mode).
+    pub fn find_path(&self, path: &str) -> PathHit {
+        let want = path
+            .trim()
+            .replace('/', "\\")
+            .trim_matches('\\')
+            .to_lowercase();
+        if want.is_empty() {
+            return PathHit::default();
+        }
+        let prefix = format!("{want}\\");
+        let mut hit = PathHit::default();
+        for (i, name) in self.names.iter().enumerate() {
+            let low = name.to_lowercase();
+            if hit.entry.is_none() && low == want {
+                hit.entry = Some(i);
+            }
+            if hit.folder.is_none() && low.starts_with(&prefix) {
+                // the folder as the archive spells it (the lower-case form has the same char count)
+                let n = want.chars().count();
+                hit.folder = Some(name.chars().take(n).collect());
+            }
+            if hit.entry.is_some() && hit.folder.is_some() {
+                break;
+            }
+        }
+        hit
+    }
+
     /// Type-to-select: the first line from `start` on (wrapping around) whose name, without its
     /// folders, starts with `prefix` (any case), as in Finder and Explorer.
     pub fn find_line(&self, view: usize, prefix: &str, start: usize) -> Option<usize> {
@@ -6047,6 +6084,20 @@ mod tests {
             assert_eq!(s.find_line(0, "r", last), Some(first));
         }
         assert_eq!(s.find_line(0, "", 0), None);
+
+        // the path bar: a file or a folder, any case, `/` or `\`
+        let readme = rows
+            .iter()
+            .find(|r| r.name.ends_with("readme.txt"))
+            .unwrap();
+        let typed = readme.name.to_uppercase().replace('\\', "/");
+        assert_eq!(s.find_path(&typed).entry, Some(readme.index));
+        let folder = s.find_path("DATA/sprite/");
+        assert_eq!(
+            (folder.entry, folder.folder.as_deref()),
+            (None, Some("data\\sprite"))
+        );
+        assert_eq!(s.find_path("data\\nothing"), PathHit::default());
 
         let out = dir.join("out");
         let one = rows

@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "rgrf-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes",
  "crc32fast",
@@ -3139,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "rgrf-formats"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "crc32fast",
  "encoding_rs",
@@ -3190,7 +3190,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustygrf-gui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.23.1",
  "encoding_rs",
