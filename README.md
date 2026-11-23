@@ -8,7 +8,7 @@
 
 A free, open-source desktop app, command-line tool and MCP server for Ragnarok Online client files. Open, check, edit, build, merge and encrypt archives, and edit what is inside them, on macOS, Windows and Linux.
 
-**macOS · Windows · Linux** · **Rust + Tauri 2** · **MIT or Apache-2.0** · **v0.2.2 (beta)**
+**macOS · Windows · Linux** · **Rust + Tauri 2** · **MIT or Apache-2.0** · **v0.2.3 (beta)**
 
 <p align="center">
   <a href="https://github.com/kxdrsrt/RustyGRF/releases/latest"><img src="https://img.shields.io/github/v/release/kxdrsrt/RustyGRF?style=flat-square&color=ea580c" alt="Latest release"></a>

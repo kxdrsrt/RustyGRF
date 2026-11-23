@@ -5081,24 +5081,39 @@ $("names").addEventListener("change", async (e) => {
   }
 });
 // type-to-select: the letters typed within a second form one prefix
-const TYPE_AHEAD = { buf: "", at: 0, seq: 0, timer: 0 };
-async function typeAhead(list, ch) {
+const TYPE_AHEAD = { buf: "", at: 0, chain: Promise.resolve() };
+/**
+ * Type-to-select as in Explorer: the same letter again steps to the next name with it, letters
+ * typed within a second narrow the name ("s", "sc", "scl" …). A prefix nothing matches starts over
+ * with the last letter, so fast typing never gets stuck. Keys are handled one after the other, each
+ * from the line the previous one picked.
+ */
+function typeAhead(list, ch) {
   const now = Date.now();
-  TYPE_AHEAD.buf = now - TYPE_AHEAD.at > 1000 ? ch : TYPE_AHEAD.buf + ch;
+  const fresh = now - TYPE_AHEAD.at > 1000;
   TYPE_AHEAD.at = now;
-  clearTimeout(TYPE_AHEAD.timer);
-  TYPE_AHEAD.timer = setTimeout(() => (TYPE_AHEAD.buf = ""), 1000);
-  const buf = TYPE_AHEAD.buf;
-  // one letter, or the same letter again and again, steps to the next match; a longer prefix may stay
-  const repeat = [...buf].every((c) => c.toLowerCase() === buf[0].toLowerCase());
-  const cur = list.st.selected ?? -1;
-  const seq = ++TYPE_AHEAD.seq;
-  try {
-    const line = await invoke("find_line", { view: list.view, prefix: repeat ? buf[0] : buf, start: Math.max(0, repeat ? cur + 1 : cur) });
-    if (seq !== TYPE_AHEAD.seq) return;
-    if (line != null) await list.pick(line);
-    else setStatus(t("ta-none", { prefix: buf }));
-  } catch {}
+  TYPE_AHEAD.chain = TYPE_AHEAD.chain.then(async () => {
+    const buf = fresh ? ch : TYPE_AHEAD.buf + ch;
+    const low = buf.toLowerCase();
+    const repeat = [...low].every((c) => c === low[0]);
+    const cur = list.st.selected ?? -1;
+    const find = (prefix, start) => invoke("find_line", { view: list.view, prefix, start: Math.max(0, start) });
+    try {
+      // the line itself may stay while the name still fits ("s" → "sc"); a repeated letter moves on
+      let line = repeat ? await find(buf[0], cur + 1) : await find(buf, cur);
+      let used = buf;
+      if (line == null && buf.length > 1) {
+        line = await find(ch, cur + 1);
+        used = ch;
+      }
+      TYPE_AHEAD.buf = line == null ? "" : used;
+      if (line != null) await list.pick(line);
+      else setStatus(t("ta-none", { prefix: ch }));
+    } catch {
+      TYPE_AHEAD.buf = "";
+    }
+  });
+  return TYPE_AHEAD.chain;
 }
 
 function wireList(list) {
@@ -5147,7 +5162,8 @@ function wireList(list) {
     }
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     // type-to-select: letters jump to the next name that starts with them ("*" in a tree opens all)
-    if (e.key.length === 1 && (e.key !== " " || TYPE_AHEAD.buf) && !(e.key === "*" && !TYPE_AHEAD.buf)) {
+    const typing = TYPE_AHEAD.buf && Date.now() - TYPE_AHEAD.at < 1000;
+    if (e.key.length === 1 && (e.key !== " " || typing) && !(e.key === "*" && !typing)) {
       e.preventDefault();
       return typeAhead(list, e.key);
     }

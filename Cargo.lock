@@ -578,7 +578,7 @@ checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "rgrf-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "rgrf-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aes",
  "crc32fast",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "rgrf-formats"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "crc32fast",
  "encoding_rs",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "rgrf-mcp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "encoding_rs",
