@@ -180,9 +180,15 @@ pub fn parse(bytes: &[u8]) -> Result<Ground, GroundError> {
         .ok()
         .zip(usize::try_from(py).ok())
         .zip(usize::try_from(size).ok());
-    let per_cell = per_cell
+    let per_cell = match per_cell
         .map(|((a, b), c)| a.saturating_mul(b).saturating_mul(c))
-        .ok_or(GroundError::Truncated)?;
+        .ok_or(GroundError::Truncated)?
+    {
+        // Some writers leave the size fields at 0 but store 8 x 8 lightmaps all the same
+        // (measured: 15 maps in woero.grf, e.g. rentf1.gnd; tiles and cubes follow 256 bytes on).
+        0 if [px, py, size] == [0, 0, 0] => 64,
+        n => n,
+    };
     if per_cell != 64 || lightmap_count.saturating_mul(per_cell * 4) > r.remaining() {
         return Err(GroundError::Truncated);
     }
@@ -307,6 +313,19 @@ mod tests {
         assert_eq!(back.cubes[0].height, [0.0; 4]);
         assert_eq!(back.textures[0], b"longer_name.bmp");
         assert_eq!(back.tail, [9, 8, 7]);
+    }
+
+    #[test]
+    fn lightmap_size_fields_left_at_zero_mean_8_by_8() {
+        let mut f = file(2, 3, 1, 0);
+        f[110..122].fill(0);
+        let g = parse(&f).unwrap();
+        assert_eq!(
+            (g.lightmaps.len(), g.tiles.len(), g.cubes.len()),
+            (256, 1, 6)
+        );
+        assert_eq!(g.lightmap_dims, [0, 0, 0]);
+        assert_eq!(g.to_bytes(), f);
     }
 
     #[test]
