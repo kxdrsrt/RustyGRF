@@ -131,6 +131,11 @@ fn decode_zlib(stream: &[u8], size: usize) -> Decoded {
     }
     let got = out.len();
     if let Some(msg) = error {
+        let msg = if got == size && deflate_body_is_complete(stream, size) {
+            format!("Adler-32 checksum does not match; the content is complete ({got} bytes)")
+        } else {
+            msg
+        };
         return Decoded {
             data: out,
             status: DecodeStatus::Corrupt(msg),
@@ -158,6 +163,20 @@ fn decode_zlib(stream: &[u8], size: usize) -> Decoded {
         },
     };
     Decoded { data: out, status }
+}
+
+/// Whether the deflate data behind the 2-byte zlib header ends properly after exactly `size`
+/// bytes, i.e. only the Adler-32 checksum behind it is wrong (measured: 284 entries of desu.grf).
+fn deflate_body_is_complete(stream: &[u8], size: usize) -> bool {
+    let Some(body) = stream.get(2..) else {
+        return false;
+    };
+    let mut d = Decompress::new(false);
+    let mut out = Vec::with_capacity(size.saturating_add(1));
+    matches!(
+        d.decompress_vec(body, &mut out, FlushDecompress::Finish),
+        Ok(Status::StreamEnd)
+    ) && out.len() == size
 }
 
 /// Layout (measured, see docs/02-format-notes.md): `00`, LZMA properties byte, dictionary size
@@ -312,6 +331,26 @@ mod tests {
             "{:?}",
             d.status
         );
+    }
+
+    #[test]
+    fn wrong_checksum_with_complete_content_is_named() {
+        let data = sample(5_000);
+        let mut s = zlib(&data, 9);
+        let n = s.len();
+        s[n - 1] ^= 0xff;
+        let d = decode(&s, data.len(), flags::FILE);
+        match &d.status {
+            DecodeStatus::Corrupt(m) => assert!(m.contains("Adler-32"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(d.data, data);
+        // damaged deflate data is not called a checksum problem
+        let mut bad = zlib(&data, 9);
+        bad[10] ^= 0xff;
+        if let DecodeStatus::Corrupt(m) = decode(&bad, data.len(), flags::FILE).status {
+            assert!(!m.contains("Adler-32"), "{m}");
+        }
     }
 
     #[test]
