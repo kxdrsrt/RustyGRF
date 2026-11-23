@@ -310,17 +310,26 @@ fn check_structure<R: ReadAt>(a: &Archive<R>, rep: &mut VerifyReport) -> HashMap
         if e.is_folder() {
             continue;
         }
-        // Both forms occur in real archives: rounded up to 8 (official 0x200, GRF Editor with
-        // alignment) and equal to `zsize` (kRO 0x300, no alignment). Anything else is wrong.
+        // Three forms occur in real archives: rounded up to 8 (official 0x200, GRF Editor with
+        // alignment), equal to `zsize` (kRO 0x300, no alignment) and rounded up to 4 (community
+        // archives, measured: 4,649 entries in kdom.grf, 31 in woero.grf, 2 in dark2.grf; all
+        // decode). DES-scrambled entries are read in blocks of 8, so for them 4 is wrong.
         let rounded = e.zsize.div_ceil(8).saturating_mul(8);
-        if e.zsize_aligned != e.zsize && e.zsize_aligned != rounded {
+        let rounded4 = e.zsize.div_ceil(4).saturating_mul(4);
+        if e.zsize_aligned != e.zsize
+            && e.zsize_aligned != rounded
+            && (e.zsize_aligned != rounded4 || e.is_des())
+        {
             rep.issues.push(Issue {
                 severity: Severity::Warning,
                 kind: IssueKind::Alignment,
                 entry: Some(i),
                 message: format!(
-                    "aligned size {} is neither {} nor {} rounded up to 8",
-                    e.zsize_aligned, e.zsize, e.zsize
+                    "aligned size {} is neither {} nor {} rounded up to 8{}",
+                    e.zsize_aligned,
+                    e.zsize,
+                    e.zsize,
+                    if e.is_des() { "" } else { " or 4" }
                 ),
             });
         }

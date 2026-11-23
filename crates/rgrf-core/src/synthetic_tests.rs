@@ -363,6 +363,30 @@ fn out_of_range_overlap_duplicates_alignment_encrypted_and_sharing() {
 }
 
 #[test]
+fn alignment_rounded_up_to_4_is_accepted_except_for_des_entries() {
+    let s = sample();
+    let mut stream = tests_support::zlib(&s);
+    // trailing bytes after the stream are ignored; make zsize % 8 == 2 so that 4 and 8 differ
+    stream.resize(stream.len() + (10 - stream.len() % 8) % 8, 0);
+    let zsize = stream.len() as u32;
+    assert_eq!(zsize % 8, 2);
+    let four = |name: &str, flags: u8| T {
+        stream: Stream::Literal(stream.clone()),
+        aligned: Some(zsize.div_ceil(4) * 4),
+        flags,
+        ..file(name, &s)
+    };
+    let rep = run_verify(&[four("data\\a", flags::FILE)]);
+    assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
+    let rep = run_verify(&[four("data\\des", flags::FILE | flags::DATA_CRYPT)]);
+    assert!(
+        kinds(&rep, Severity::Warning).contains(&IssueKind::Alignment),
+        "{:?}",
+        rep.issues
+    );
+}
+
+#[test]
 fn partial_overlap_is_an_error() {
     let s = sample();
     let a = file("data\\a", &s);
