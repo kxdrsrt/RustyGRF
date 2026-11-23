@@ -128,7 +128,7 @@ pub fn verify<R: ReadAt>(
             kind: IssueKind::Markers,
             entry: None,
             message: format!(
-                "{} empty marker entries (flags 0, no data), not extracted",
+                "{} empty marker or folder entries (no file flag), not extracted",
                 rep.markers
             ),
         });
@@ -307,6 +307,9 @@ fn check_structure<R: ReadAt>(a: &Archive<R>, rep: &mut VerifyReport) -> HashMap
     let mut spans: Vec<(u64, u64, usize)> = Vec::new();
 
     for (i, e) in a.entries().iter().enumerate() {
+        if e.is_folder() {
+            continue;
+        }
         // Both forms occur in real archives: rounded up to 8 (official 0x200, GRF Editor with
         // alignment) and equal to `zsize` (kRO 0x300, no alignment). Anything else is wrong.
         let rounded = e.zsize.div_ceil(8).saturating_mul(8);

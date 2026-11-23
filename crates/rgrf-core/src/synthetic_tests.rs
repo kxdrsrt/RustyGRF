@@ -376,6 +376,51 @@ fn partial_overlap_is_an_error() {
     );
 }
 
+/// A folder entry as libgrf writes it (measured in Thoth.grf and nodelay.grf): flags 0x02, the
+/// fixed sizes of `GRFFILE_DIR_*` and an offset inside another entry's data.
+fn libgrf_folder(name: &str) -> T {
+    T {
+        stream: Stream::Literal(vec![0x5a; 0x449]),
+        flags: flags::HEADER_CRYPT,
+        size: 0x55C,
+        offset: Some(0x55C),
+        aligned: Some(0x714),
+        ..file(name, b"")
+    }
+}
+
+#[test]
+fn libgrf_folder_entries_are_markers_not_damaged_files() {
+    let big: Vec<u8> = (0..20_000u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect();
+    let entries = [
+        file("data\\sprite\\a.spr", &big),
+        libgrf_folder("data"),
+        libgrf_folder("data\\sprite"),
+    ];
+    let g = open(&entries);
+    let e = g.entry(1).unwrap();
+    assert!(e.is_folder() && e.is_marker() && !e.is_des() && !e.stores_uncompressed());
+    assert_eq!(g.read(1).unwrap().status, DecodeStatus::Ok);
+    let rep = run_verify(&entries);
+    assert_eq!(rep.exit_code(), 0, "{:?}", rep.issues);
+    assert_eq!((rep.files, rep.markers), (1, 2));
+    // extracting used to stop: the entry `data` collided with the folder `data`
+    let dir = tmpdir("libgrf-folder");
+    let r = extract(
+        &g,
+        &all(&g),
+        &dir,
+        &ExtractOptions::default(),
+        &Control::default(),
+    )
+    .unwrap();
+    assert_eq!((r.written, r.skipped_markers), (1, 2));
+    assert_eq!(std::fs::read(dir.join("data/sprite/a.spr")).unwrap(), big);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn verify_can_be_cancelled() {
     let g = open(&[file("data\\a", &sample())]);

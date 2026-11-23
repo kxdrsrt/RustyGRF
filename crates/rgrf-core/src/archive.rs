@@ -376,6 +376,12 @@ impl<R: ReadAt> Archive<R> {
     /// Decoded content with a status; damaged entries yield the recoverable part.
     pub fn read(&self, index: usize) -> Result<Decoded> {
         let e = self.entry(index)?;
+        if e.is_folder() {
+            return Ok(Decoded {
+                data: Vec::new(),
+                status: codec::DecodeStatus::Ok,
+            });
+        }
         if u64::from(e.size).max(u64::from(e.zsize)) > self.max_entry_size {
             return Ok(Decoded {
                 data: Vec::new(),

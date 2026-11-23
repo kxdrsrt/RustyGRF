@@ -161,10 +161,25 @@ impl Entry {
         self.flags & flags::FILE != 0
     }
 
-    /// Empty marker: flags 0 and no data (e.g. a folder entry), or a delete directive of a patch. Measured: 1 entry in the 2024
+    /// Empty marker: flags 0 and no data (e.g. a folder entry), a folder entry of libgrf
+    /// ([`Entry::is_folder`]), or a delete directive of a patch. Measured: 1 entry in the 2024
     /// `data.grf`; the other flags-0 entries of real archives carry data, see [`Entry::is_raw`].
     pub fn is_marker(&self) -> bool {
-        self.is_removal() || self.flags & flags::FILE == 0 && self.zsize == 0 && self.size == 0
+        self.is_removal()
+            || self.is_folder()
+            || self.flags & flags::FILE == 0 && self.zsize == 0 && self.size == 0
+    }
+
+    /// Folder entry as libgrf (GRF Tool and the tools built on it) writes it: no file bit and the
+    /// fixed sizes `0x449`/`0x714`/`0x55C` at offset `0x55C` (`GRFFILE_DIR_*`), whatever the
+    /// other flags say. The client only reads entries with the file bit. Measured: 16 entries in
+    /// `Thoth.grf`, 7 in `nodelay.grf` (flags 0x02, the offset points into another entry).
+    pub fn is_folder(&self) -> bool {
+        self.flags & flags::FILE == 0
+            && self.zsize == 0x449
+            && self.zsize_aligned == 0x714
+            && self.size == 0x55C
+            && self.offset == 0x55C
     }
 
     /// Flags 0 with data: a file stored **uncompressed** (`zsize == size`, GRF Editor:
@@ -184,7 +199,10 @@ impl Entry {
     /// whether or not the old DES scrambling is applied on top. Not Gravity's protected entries
     /// (no file bit either, but their own compressed body).
     pub fn stores_uncompressed(&self) -> bool {
-        self.flags & flags::FILE == 0 && !self.is_protected() && (self.zsize != 0 || self.size != 0)
+        self.flags & flags::FILE == 0
+            && !self.is_protected()
+            && !self.is_folder()
+            && (self.zsize != 0 || self.size != 0)
     }
 
     pub fn is_encrypted(&self) -> bool {
@@ -193,7 +211,8 @@ impl Entry {
 
     /// Scrambled with the old DES scheme of [`crate::des`]: readable without a key.
     pub fn is_des(&self) -> bool {
-        self.flags & (flags::HEADER_CRYPT | flags::DATA_CRYPT) != 0
+        !self.is_folder()
+            && self.flags & (flags::HEADER_CRYPT | flags::DATA_CRYPT) != 0
             && self.flags & (flags::GRF_EDITOR_CRYPT | flags::GRAVITY_CRYPT | flags::DETECTED_CRYPT)
                 == 0
     }
