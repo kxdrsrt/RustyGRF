@@ -212,6 +212,10 @@ pub fn apply(
         if water && let Some(wt) = &mut w.water {
             wt.level = below;
         }
+        if o.flatten {
+            let wave = w.water.as_ref().map(|wt| wt.level - wt.wave_height);
+            recompute_quad_tree(&mut w.tail, &g, a.as_ref(), wave);
+        }
     }
 
     let changed = |new: Vec<u8>, old: &[u8]| (new != old).then_some(new);
@@ -220,6 +224,95 @@ pub fn apply(
         rsw: w.and_then(|w| changed(w.to_bytes(), rsw.unwrap_or_default())),
         gat: a.and_then(|a| changed(a.to_bytes(), gat.unwrap_or_default())),
     })
+}
+
+/// Nodes of the quad tree after the objects of an RSW (from 2.1): 6 levels, 1 + 4 + ... + 1024.
+const QUAD_NODES: usize = 1365;
+const QUAD_NODE: usize = 48;
+
+/// Height range (lowest, highest raw value) of the ground below a leaf of the quad tree, from the node's bytes.
+type LeafRange<'a> = &'a dyn Fn(&[u8], usize) -> (f32, f32);
+
+/// The client finds the cell under the mouse through the bounding boxes of the RSW quad tree. When the ground moves (flat
+/// maps), boxes that still hold the old heights miss the new ground: those cells cannot be clicked and show the "no walk"
+/// cursor although they are walkable. So the heights of every box are computed again from the ground, the walk grid and
+/// the water, like BrowEdit does (`Rsw::recalculateQuadtree`); the horizontal extent stays. Only for a map without models
+/// (flattening removes them), whose boxes would be missing here. A tail of another size is left as it is.
+fn recompute_quad_tree(tail: &mut [u8], g: &Ground, a: Option<&Gat>, wave: Option<f32>) {
+    if tail.len() != QUAD_NODES * QUAD_NODE || g.width == 0 || g.height == 0 {
+        return;
+    }
+    let cube_range = |x: usize, y: usize| {
+        let c = &g.cubes[y * g.width + x];
+        let mut lo = c.height.iter().copied().fold(f32::MAX, f32::min);
+        let mut hi = c.height.iter().copied().fold(f32::MIN, f32::max);
+        if let Some(a) = a {
+            for k in 0..4 {
+                let (gx, gy) = (x * 2 + k % 2, y * 2 + k / 2);
+                if let Some(cell) = (gx < a.width as usize)
+                    .then(|| a.cells.get(gy * a.width as usize + gx))
+                    .flatten()
+                {
+                    lo = cell.heights.iter().copied().fold(lo, f32::min);
+                    hi = cell.heights.iter().copied().fold(hi, f32::max);
+                }
+            }
+        }
+        if let Some(wv) = wave
+            && c.up > -1
+            && c.height.iter().all(|&h| h > wv)
+        {
+            lo = lo.min(wv);
+            hi = hi.max(wv);
+        }
+        (lo, hi)
+    };
+    let f = |t: &[u8], at: usize| f32::from_le_bytes(t[at..at + 4].try_into().expect("4 bytes"));
+    let zoom = if g.zoom > 0.0 { g.zoom } else { 10.0 };
+    // pre-order: a node, then its four children; leaves are on level 5
+    fn walk(tail: &mut [u8], at: &mut usize, level: u32, leaf: LeafRange) -> (f32, f32) {
+        let me = *at;
+        *at += 1;
+        let (lo, hi) = if level >= 5 {
+            leaf(tail, me * QUAD_NODE)
+        } else {
+            let mut r = (f32::MAX, f32::MIN);
+            for _ in 0..4 {
+                let c = walk(tail, at, level + 1, leaf);
+                r = (r.0.min(c.0), r.1.max(c.1));
+            }
+            r
+        };
+        // max (x, y, z), min (x, y, z), half size, centre
+        let o = me * QUAD_NODE;
+        tail[o + 4..o + 8].copy_from_slice(&hi.to_le_bytes());
+        tail[o + 16..o + 20].copy_from_slice(&lo.to_le_bytes());
+        let rd = |i: usize| f32::from_le_bytes(tail[o + i..o + i + 4].try_into().expect("4 bytes"));
+        let (max, min) = ([rd(0), rd(4), rd(8)], [rd(12), rd(16), rd(20)]);
+        for i in 0..3 {
+            let half = (max[i] - min[i]) / 2.0;
+            tail[o + 24 + i * 4..o + 28 + i * 4].copy_from_slice(&half.to_le_bytes());
+            tail[o + 36 + i * 4..o + 40 + i * 4].copy_from_slice(&(max[i] - half).to_le_bytes());
+        }
+        (lo, hi)
+    }
+    let (w, h) = (g.width as i64, g.height as i64);
+    let leaf = |t: &[u8], o: usize| {
+        let (max_x, max_z, min_x, min_z) = (f(t, o), f(t, o + 8), f(t, o + 12), f(t, o + 20));
+        let mut r = (f32::MAX, f32::MIN);
+        for x in (w / 2 + (min_x / zoom).floor() as i64)..(w / 2 + (max_x / zoom).ceil() as i64) {
+            for y in (h / 2 + (min_z / zoom).floor() as i64)..(h / 2 + (max_z / zoom).ceil() as i64)
+            {
+                if (0..w).contains(&x) && (0..h).contains(&y) {
+                    let c = cube_range(x as usize, y as usize);
+                    r = (r.0.min(c.0), r.1.max(c.1));
+                }
+            }
+        }
+        if r.0 > r.1 { (0.0, 0.0) } else { r }
+    };
+    let mut at = 0;
+    walk(tail, &mut at, 0, &leaf);
 }
 
 /// Water stored after the cubes (GND 1.8 and later): a default water, the zone grid size, then
@@ -529,6 +622,76 @@ mod tests {
         assert_eq!(g.cubes[1].up, 3);
         let a = Gat::parse(&r.gat.unwrap()).unwrap();
         assert!(a.cells.iter().all(|c| c.heights == [0.0; 4] && c.kind == 0));
+    }
+
+    /// A quad tree like the client's for a 2 x 2 ground, every box at the old height -30 (raised ground).
+    fn quad_tree_at(y: f32) -> Vec<u8> {
+        fn node(t: &mut Vec<u8>, x: f32, z: f32, w: f32, level: u32, y: f32) {
+            let (max, min) = ([x + w, y, z + w], [x, y, z]);
+            for v in max.iter().chain(&min) {
+                t.extend(v.to_le_bytes());
+            }
+            for i in 0..3 {
+                t.extend(((max[i] - min[i]) / 2.0).to_le_bytes());
+            }
+            for i in 0..3 {
+                t.extend((max[i] - (max[i] - min[i]) / 2.0).to_le_bytes());
+            }
+            if level < 5 {
+                for (dx, dz) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                    node(t, x + dx * w / 2.0, z + dz * w / 2.0, w / 2.0, level + 1, y);
+                }
+            }
+        }
+        let mut t = Vec::new();
+        node(&mut t, -10.0, -10.0, 19.0, 0, y);
+        t
+    }
+
+    #[test]
+    fn flatten_moves_the_quad_tree_boxes_to_the_new_ground() {
+        let mut w = Rsw::parse(&world_with(vec![])).unwrap();
+        w.tail = quad_tree_at(-30.0);
+        assert_eq!(w.tail.len(), QUAD_NODES * QUAD_NODE);
+        let o = FlatOptions {
+            flatten: true,
+            ..Default::default()
+        };
+        let r = apply(&gnd(), Some(&w.to_bytes()), Some(&gat([0; 16])), &o).unwrap();
+        let t = Rsw::parse(&r.rsw.unwrap()).unwrap().tail;
+        let f = |i: usize| f32::from_le_bytes(t[i..i + 4].try_into().unwrap());
+        for n in 0..QUAD_NODES {
+            let o = n * QUAD_NODE;
+            // the client misses a cell whose box does not reach the ground (0 after flattening)
+            assert_eq!((f(o + 4), f(o + 16)), (0.0, 0.0), "node {n}: y range");
+            assert_eq!(
+                (f(o + 28), f(o + 40)),
+                (0.0, 0.0),
+                "node {n}: half size and centre in y"
+            );
+            assert_eq!(
+                (f(o), f(o + 12)),
+                (f(o + 36) + f(o + 24), f(o + 36) - f(o + 24)),
+                "node {n}: x kept"
+            );
+        }
+        // without flattening the tree is not touched
+        let r = apply(
+            &gnd(),
+            Some(&w.to_bytes()),
+            Some(&gat([0; 16])),
+            &FlatOptions {
+                remove_light: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            Rsw::parse(&r.rsw.unwrap_or_else(|| w.to_bytes()))
+                .unwrap()
+                .tail,
+            quad_tree_at(-30.0)
+        );
     }
 
     #[test]
