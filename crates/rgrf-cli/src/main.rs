@@ -29,6 +29,7 @@ mod act_cmd;
 mod audio_cmd;
 mod client_cmd;
 mod crypt_cmd;
+mod dataini_cmd;
 mod edit_cmd;
 mod grfcl_cmd;
 mod image_cmd;
@@ -766,6 +767,12 @@ enum ClientCmd {
         /// Also list the biggest single files
         #[arg(long)]
         files: bool,
+    },
+    /// Show and edit the client's DATA.INI: add, remove, move or replace archives, renumber (keeps
+    /// line endings, other lines and Korean names; keeps the old file as DATA.INI.bak)
+    DataIni {
+        #[command(subcommand)]
+        action: dataini_cmd::DataIniCmd,
     },
     /// Report what could go wrong before the client is started (exit 0 ok, 2 warnings, 3 errors)
     Check {
@@ -2002,6 +2009,7 @@ fn run(cli: &Cli) -> Result<i32> {
             ClientCmd::Check { folder, no_lua } => {
                 client_cmd::check(folder, cli.names, cli.json, !*no_lua)
             }
+            ClientCmd::DataIni { action } => dataini_cmd::run(action, cli.json),
             ClientCmd::Translate { action } => translate_cmd::run(action, cli.json),
         },
         Cmd::Lua { action } => match action {

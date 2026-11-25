@@ -254,6 +254,73 @@ pub const TOOLS: &[Tool] = &[
         run: client_unused_tool,
     },
     Tool {
+        name: "grf_data_ini",
+        title: "Show the client's DATA.INI",
+        description: "Lists the archives a client reads, in priority order (the first wins; the lowest index has the highest priority), from the DATA.INI file or a client folder. Reports indexes used twice and archives that are not next to the DATA.INI.",
+        params: &[req(
+            "path",
+            Ty::Str,
+            "A client folder (its DATA.INI is used) or the DATA.INI file.",
+        )],
+        writes: false,
+        run: data_ini_tool,
+    },
+    Tool {
+        name: "grf_data_ini_edit",
+        title: "Edit the client's DATA.INI",
+        description: "Adds, removes, moves or replaces archives in a DATA.INI, or renumbers it. The entries are numbered one after the other again, starting at the index the file starts with. Line endings, other lines and Korean names are kept; the file as it was is kept once as DATA.INI.bak. Use `dry_run` first. `add` puts new archives at the bottom unless `place` says otherwise; `first` makes an archive win over all others (the usual place for a mod archive).",
+        params: &[
+            req(
+                "path",
+                Ty::Str,
+                "A client folder (its DATA.INI is used) or the DATA.INI file; it must be in a folder allowed for writing.",
+            ),
+            req(
+                "action",
+                Ty::Enum(&["add", "remove", "move", "replace", "normalize"]),
+                "What to do.",
+            ),
+            opt(
+                "archives",
+                Ty::StrList,
+                "add/remove: archive names as the client finds them next to its exe (e.g. \"odin.grf\"); move: exactly one; replace: the archive to replace.",
+            ),
+            opt(
+                "with",
+                Ty::Str,
+                "replace: the archive that takes the place.",
+            ),
+            opt(
+                "place",
+                Ty::Enum(&["first", "last", "before", "after", "at"]),
+                "add/move: where (add defaults to last; move needs it).",
+            ),
+            opt(
+                "relative_to",
+                Ty::Str,
+                "For place before/after: the listed archive.",
+            ),
+            opt(
+                "position",
+                Ty::Int,
+                "For place at: the position in the order, counted from 0.",
+            ),
+            opt(
+                "start",
+                Ty::Int,
+                "normalize: the first index (default: the one the file has).",
+            ),
+            opt(
+                "backup",
+                Ty::Bool,
+                "Keep the old file as DATA.INI.bak if there is none yet (default true).",
+            ),
+            DRY_RUN,
+        ],
+        writes: true,
+        run: data_ini_edit_tool,
+    },
+    Tool {
         name: "grf_client_translate_assemble",
         title: "Assemble the RO Translation Project for a client",
         description: "Puts the folders of a ROenglishRE checkout together in the order of the project's ClientGenerator.bat (Renewal, Pre-Renewal, the Compatibility folders up to the client date, deletions for newer clients) into `out/grf` (the archive root, give it to `grf_build`) and `out/loose` (files next to the client). `out` must not exist. Rust version of the former Python script assemble.py.",
@@ -1841,6 +1908,126 @@ fn client_refs_tool(ctx: &Ctx, a: &Args) -> Out {
         "animations_without_sprite_by_folder": folders.iter().take(limit)
             .map(|(d, n)| json!({"folder": d, "count": n})).collect::<Vec<_>>(),
     }))
+}
+
+fn data_ini_json(file: &std::path::Path, ini: &rgrf_core::dataini::DataIni, extra: Value) -> Value {
+    let dir = file.parent().unwrap_or(std::path::Path::new("."));
+    let has = |n: &str| {
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok()).any(|e| {
+                    e.file_name()
+                        .to_str()
+                        .is_some_and(|f| f.eq_ignore_ascii_case(n))
+                })
+            })
+            .unwrap_or(false)
+    };
+    let items = ini.items();
+    let mut v = json!({
+        "path": file.display().to_string(),
+        "archives": items.iter().map(|i| json!({"index": i.index, "name": i.name, "exists": has(&i.name)})).collect::<Vec<_>>(),
+        "duplicate_indexes": ini.duplicate_indexes(),
+        "missing": items.iter().filter(|i| !has(&i.name)).map(|i| i.name.clone()).collect::<Vec<_>>(),
+    });
+    if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+        o.extend(e.clone());
+    }
+    v
+}
+
+fn data_ini_tool(ctx: &Ctx, a: &Args) -> Out {
+    let p = ctx.policy.read(a.str("path"))?;
+    let file = rgrf_core::dataini::locate(&p).map_err(err)?;
+    let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(data_ini_json(
+        &file,
+        &rgrf_core::dataini::DataIni::parse(&bytes),
+        json!({}),
+    ))
+}
+
+fn data_ini_edit_tool(ctx: &Ctx, a: &Args) -> Out {
+    use rgrf_core::dataini::{DataIni, Op, Place};
+    let p = ctx.policy.read(a.str("path"))?;
+    let file = rgrf_core::dataini::locate(&p).map_err(err)?;
+    let file_str = file.display().to_string();
+    // the file must be inside a folder allowed for writing, even for a dry run
+    let target = ctx.policy.write_file(&file_str, true)?;
+    let old = std::fs::read(&target).map_err(|e| format!("{file_str}: {e}"))?;
+    let mut ini = DataIni::parse(&old);
+
+    let archives: Vec<String> = a.list("archives").into_iter().map(str::to_owned).collect();
+    let place = match a.opt_str("place") {
+        None => None,
+        Some("first") => Some(Place::First),
+        Some("last") => Some(Place::Last),
+        Some(w @ ("before" | "after")) => {
+            let r = a
+                .opt_str("relative_to")
+                .ok_or_else(|| format!("place {w} needs `relative_to`"))?
+                .to_owned();
+            Some(if w == "before" {
+                Place::Before(r)
+            } else {
+                Place::After(r)
+            })
+        }
+        Some(_) => Some(Place::At(
+            a.opt_u64("position").ok_or("place at needs `position`")? as usize,
+        )),
+    };
+    let op = match a.str("action") {
+        "add" => Op::Add {
+            names: archives.clone(),
+            place: place.unwrap_or(Place::Last),
+        },
+        "remove" => Op::Remove {
+            names: archives.clone(),
+        },
+        "move" => {
+            let [name] = archives.as_slice() else {
+                return Err("move needs exactly one archive in `archives`".into());
+            };
+            Op::Move {
+                name: name.clone(),
+                place: place.ok_or("move needs `place`")?,
+            }
+        }
+        "replace" => {
+            let [old_name] = archives.as_slice() else {
+                return Err("replace needs exactly one archive in `archives` and `with`".into());
+            };
+            Op::Replace {
+                old: old_name.clone(),
+                new: a.opt_str("with").ok_or("replace needs `with`")?.to_owned(),
+            }
+        }
+        _ => Op::Normalize {
+            start: a.opt_u64("start").map(|n| n as u32),
+        },
+    };
+    ini.apply(&op).map_err(err)?;
+    let new = ini.to_bytes();
+    let changed = new != old;
+    let dry = a.flag("dry_run");
+    let mut backup = Value::Null;
+    if changed && !dry {
+        if a.opt_bool("backup").unwrap_or(true) {
+            let bak = format!("{file_str}.bak");
+            if !std::path::Path::new(&bak).exists() {
+                let b = ctx.policy.write_file(&bak, false)?;
+                std::fs::write(&b, &old).map_err(|e| format!("{bak}: {e}"))?;
+                backup = json!(b.display().to_string());
+            }
+        }
+        rgrf_core::dataini::write_atomic(&target, &new).map_err(err)?;
+    }
+    Ok(data_ini_json(
+        &target,
+        &ini,
+        json!({"changed": changed, "dry_run": dry, "backup_written": backup}),
+    ))
 }
 
 fn client_unused_tool(ctx: &Ctx, a: &Args) -> Out {

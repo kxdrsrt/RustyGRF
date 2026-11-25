@@ -10,6 +10,7 @@ Legende: ✅ umgesetzt und gemessen, 🔨 geplant (Meilenstein), ❓ Nutzen offe
 |---|---|---|
 | Archive öffnen, Einträge listen, suchen, extrahieren | `info`, `ls`, `find`, `cat`, `extract` | ✅ M1 |
 | Prüfen/Validieren (`GrfValidation`) | `verify` (Tabelle, Überlappung, Dekodieren), `lua check`, `client check` | ✅ M1, M7c; fehlende Ressourcen: `client refs` (Animationen, Effekte, **11 Lua-Tabellen mit eigener Regel**, M7f ✅ 2026-11-22), Karten `map check`; Namen, die der Client zur Laufzeit zusammensetzt ❓ |
+| `DATA.INI` bearbeiten (Archive hinzufügen, entfernen, verschieben, ersetzen, neu nummerieren) | `client data-ini`, MCP `grf_data_ini`, `grf_data_ini_edit` | ✅ 2026-11-25 (Tests: 11 Einheiten, CLI, MCP); Zeilenende und CP949-Namen bleiben erhalten; harte Verknüpfungen bleiben unverändert ❓ nicht auf Windows gelaufen |
 | Bauen, neu komprimieren, `Compact`/`GrfShrinker` | `build`, `repack` | ✅ M2 |
 | Zusammenführen (`MergeDialog`), Subtrahieren (`SubtractDialog`), Patch | `merge`, `diff`, `patch` | ✅ M3 (Subtrahieren: `diff` + Auswahl, nicht eigener Befehl) |
 | Hash (`HashDialog`) | `hash` | ✅ |

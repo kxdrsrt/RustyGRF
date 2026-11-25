@@ -114,13 +114,13 @@ fn read_only_by_default_and_writing_tools_only_with_a_root() {
     };
     let dir = tmp("list");
     let ro = names(&server(&[], &[]));
-    assert_eq!(ro.len(), 15);
+    assert_eq!(ro.len(), 16);
     assert!(
         ro.iter()
             .all(|n| !n.contains("build") && !n.contains("merge"))
     );
     let rw = server(&[], std::slice::from_ref(&dir));
-    assert_eq!(names(&rw).len(), 32);
+    assert_eq!(names(&rw).len(), 34);
 
     // a write tool is not just hidden but refused
     let ro = server(&[], &[]);
@@ -1102,4 +1102,107 @@ fn hash_lists_thor_patchers_and_rare_files_work_through_the_tools() {
             .is_empty()
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn data_ini_is_shown_and_edited_inside_the_write_folder_only() {
+    let dir = tmp("dataini");
+    let client = dir.join("client");
+    put(
+        &client,
+        "data.ini",
+        b"[Data]\r\n1=cdata.grf\r\n2=data.grf\r\n",
+    );
+    for f in ["cdata.grf", "data.grf", "odin.grf"] {
+        put(&client, f, b"x");
+    }
+    let c = client.to_string_lossy().into_owned();
+    let s = server(&[], std::slice::from_ref(&dir));
+
+    let v = ok(&s, "grf_data_ini", json!({"path": c}));
+    assert_eq!(v["archives"][0]["name"], "cdata.grf");
+    assert_eq!(v["missing"], json!([]));
+
+    let v = ok(
+        &s,
+        "grf_data_ini_edit",
+        json!({"path": c, "action": "add", "archives": ["odin.grf", "gone.grf"], "place": "first", "dry_run": true}),
+    );
+    assert_eq!(v["changed"], true);
+    assert_eq!(v["missing"], json!(["gone.grf"]));
+    assert_eq!(
+        std::fs::read(client.join("data.ini")).unwrap(),
+        b"[Data]\r\n1=cdata.grf\r\n2=data.grf\r\n",
+        "a dry run writes nothing"
+    );
+
+    let v = ok(
+        &s,
+        "grf_data_ini_edit",
+        json!({"path": c, "action": "add", "archives": ["odin.grf"], "place": "first"}),
+    );
+    assert_eq!(v["archives"][0]["name"], "odin.grf");
+    assert_eq!(
+        std::fs::read(client.join("data.ini")).unwrap(),
+        b"[Data]\r\n1=odin.grf\r\n2=cdata.grf\r\n3=data.grf\r\n"
+    );
+    assert_eq!(
+        std::fs::read(client.join("data.ini.bak")).unwrap(),
+        b"[Data]\r\n1=cdata.grf\r\n2=data.grf\r\n"
+    );
+
+    ok(
+        &s,
+        "grf_data_ini_edit",
+        json!({"path": c, "action": "move", "archives": ["data.grf"], "place": "after", "relative_to": "odin.grf"}),
+    );
+    ok(
+        &s,
+        "grf_data_ini_edit",
+        json!({"path": c, "action": "replace", "archives": ["cdata.grf"], "with": "odin.grf2"}),
+    );
+    let v = ok(&s, "grf_data_ini", json!({"path": c}));
+    let order: Vec<&str> = v["archives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["odin.grf", "data.grf", "odin.grf2"]);
+    ok(
+        &s,
+        "grf_data_ini_edit",
+        json!({"path": c, "action": "remove", "archives": ["odin.grf2"]}),
+    );
+
+    assert!(
+        fails(
+            &s,
+            "grf_data_ini_edit",
+            json!({"path": c, "action": "move", "archives": ["data.grf"]})
+        )
+        .contains("place")
+    );
+    assert!(
+        fails(
+            &s,
+            "grf_data_ini_edit",
+            json!({"path": c, "action": "remove", "archives": ["nope.grf"]})
+        )
+        .contains("not in DATA.INI")
+    );
+
+    // outside the write folder: readable, not editable
+    let other = tmp("dataini-other");
+    put(&other, "DATA.INI", b"[Data]\n0=a.grf\n");
+    let o = other.to_string_lossy().into_owned();
+    ok(&s, "grf_data_ini", json!({"path": o}));
+    assert!(
+        fails(
+            &s,
+            "grf_data_ini_edit",
+            json!({"path": o, "action": "normalize"})
+        )
+        .contains("outside")
+    );
 }

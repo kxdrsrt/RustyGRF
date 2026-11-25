@@ -5,6 +5,7 @@ pub mod build;
 pub mod clientcrypt;
 pub mod codec;
 pub mod container;
+pub mod dataini;
 pub mod definitions;
 pub mod des;
 pub mod edit;

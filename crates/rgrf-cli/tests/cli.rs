@@ -3453,3 +3453,55 @@ fn client_translate_assemble_overlays_in_the_generators_order() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn data_ini_edit_keeps_the_file_and_never_modifies_a_hard_link() {
+    let d = tmpdir("dataini");
+    std::fs::create_dir_all(&d).unwrap();
+    let ini = d.join("DATA.INI");
+    let original = b"[Data]\r\n1=cdata.grf\r\n2=data.grf\r\n";
+    std::fs::write(&ini, original).unwrap();
+    let link = d.join("linked.ini");
+    std::fs::hard_link(&ini, &link).unwrap();
+    let p = d.to_string_lossy().into_owned();
+
+    let o = rgrf(&[
+        "client",
+        "data-ini",
+        "add",
+        &p,
+        "odin.grf",
+        "--first",
+        "--dry-run",
+    ]);
+    assert!(o.status.success());
+    assert_eq!(std::fs::read(&ini).unwrap(), original);
+
+    let o = rgrf(&[
+        "--json", "client", "data-ini", "add", &p, "odin.grf", "--first",
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let v = json(&o);
+    assert_eq!(v["changed"], true);
+    assert_eq!(v["archives"][0]["name"], "odin.grf");
+    assert_eq!(v["not_found_next_to_data_ini"][0], "odin.grf");
+    assert_eq!(
+        std::fs::read(&ini).unwrap(),
+        b"[Data]\r\n1=odin.grf\r\n2=cdata.grf\r\n3=data.grf\r\n"
+    );
+    assert_eq!(
+        std::fs::read(&link).unwrap(),
+        original,
+        "the hard link still has the old content"
+    );
+    assert_eq!(std::fs::read(d.join("DATA.INI.bak")).unwrap(), original);
+
+    let o = rgrf(&["client", "data-ini", "remove", &p, "missing.grf"]);
+    assert_eq!(o.status.code(), Some(1));
+    let o = rgrf(&["client", "data-ini", "normalize", &p, "--start", "0"]);
+    assert!(o.status.success());
+    assert!(String::from_utf8_lossy(&o.stdout).starts_with("0=odin.grf\n1=cdata.grf"));
+    let o = rgrf(&["client", "data-ini", "show", &p]);
+    assert_eq!(o.status.code(), Some(0));
+    let _ = std::fs::remove_dir_all(&d);
+}

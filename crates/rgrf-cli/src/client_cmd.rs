@@ -165,14 +165,11 @@ pub fn check(dir: &Path, names: NameMode, json: bool, check_lua: bool) -> Result
             rep.add(
                 Level::Warn,
                 format!(
-                    "DATA.INI: index {} is used twice ({} and {}); which one wins is not measured",
+                    "DATA.INI: index {} is used twice ({} and {}); which one wins is not measured; `rgrf client data-ini normalize` renumbers",
                     w[0].index, w[0].file, w[1].file
                 ),
             );
         }
-    }
-    if ini.first().is_some_and(|e| e.index == 0) {
-        rep.add(Level::Info, "DATA.INI starts at index 0; whether the client reads index 0 is not measured (the tests used 1 and up)");
     }
 
     // Open the archives in priority order.
